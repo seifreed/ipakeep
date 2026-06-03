@@ -1,0 +1,88 @@
+[package]
+name = "ipakeep"
+version = "0.1.0"
+edition = "2024"
+description = "Download IPA files from the Apple App Store"
+license = "MIT"
+repository = "https://github.com/seifreed/ipakeep"
+
+[[bin]]
+name = "ipakeep"
+path = "src/main.rs"
+
+[lib]
+name = "ipakeep"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+async-trait = "0.1"
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "cookies", "json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+plist = "1"
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Progress
+indicatif = "0.17"
+
+# IPA manipulation
+zip = "2"
+
+# Interactive prompts
+dialoguer = "0.11"
+
+# Misc
+base64 = "0.22"
+mac_address = "1"
+dirs = "6"
+md5 = "0.7"
+hex = "0.4"
+
+# Cryptography (for GrandSlam SRP auth)
+srp = "0.6"
+num-bigint = "0.4"
+rand = "0.8"
+aes = "0.8"
+aes-gcm = "0.10.3"
+cbc = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+pbkdf2 = "0.12"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+objc = "0.2"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+assert_cmd = "2"
+predicates = "3"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+struct_excessive_bools = "allow"
