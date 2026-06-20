@@ -1,0 +1,21 @@
+# Anisette server for ipakeep on Windows / Linux.
+#
+# Usage:
+#   docker compose -f docker/anisette/docker-compose.yml up -d
+#   export IPAKEEP_ANISETTE_URL=http://localhost:6969   # tell ipakeep to use it
+#
+# When IPAKEEP_ANISETTE_URL is set, ipakeep talks to this server directly and
+# will NOT try to launch its own container.
+services:
+  anisette:
+    build: .
+    image: ipakeep-anisette
+    container_name: ipakeep-anisette
+    restart: unless-stopped
+    ports:
+      - "6969:6969"
+    volumes:
+      - anisette-data:/home/Alcoholic/.config/anisette-v3/lib/
+
+volumes:
+  anisette-data:

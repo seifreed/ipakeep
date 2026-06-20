@@ -1,0 +1,30 @@
+# cargo-deny configuration — supply-chain policy gate.
+# Run with: cargo deny check
+
+[advisories]
+version = 2
+
+[licenses]
+version = 2
+# Permissive licenses present in the dependency tree. All OR-expressions in the
+# graph are satisfied by one of these; the single AND-expression
+# "(MIT OR Apache-2.0) AND Unicode-3.0" is covered by MIT/Apache-2.0 + Unicode-3.0.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-3-Clause",
+    "0BSD",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

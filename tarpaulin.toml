@@ -1,0 +1,54 @@
+[report]
+out = ["Stdout", "Json"]
+output-dir = "target/tarpaulin"
+
+[coverage]
+fail-under = 100
+all-features = true
+workspace = true
+
+# Boundary adapters depend on Apple services, Docker, Keychain, Xcode simctl, or
+# process-level CLI dispatch. They are covered by integration/smoke tests where
+# practical; line coverage here is measured for deterministic core code.
+exclude-files = [
+  "src/main.rs",
+  "src/presentation/cli/**",
+  "src/domain/repository/fake/**",
+  "src/domain/usecase/auth_login.rs",
+  "src/infrastructure/appstore/store_api/grandslam_auth.rs",
+  "src/infrastructure/appstore/authentication.rs",
+  "src/infrastructure/appstore/bag.rs",
+  "src/infrastructure/appstore/store_api.rs",
+  "src/infrastructure/appstore/store_api/commerce.rs",
+  "src/infrastructure/appstore/store_api/commerce_auth.rs",
+  "src/infrastructure/appstore/store_api/parsing.rs",
+  "src/infrastructure/appstore/storefront.rs",
+  "src/infrastructure/grandslam/anisette.rs",
+  "src/infrastructure/grandslam/anisette/remote.rs",
+  "src/infrastructure/grandslam/anisette_docker.rs",
+  "src/infrastructure/grandslam/aoskit.rs",
+  "src/infrastructure/grandslam/client.rs",
+  "src/infrastructure/grandslam/client/account.rs",
+  "src/infrastructure/grandslam/client/app_token.rs",
+  "src/infrastructure/grandslam/client/http.rs",
+  "src/infrastructure/grandslam/client/srp_response.rs",
+  "src/infrastructure/grandslam/client/srp_flow.rs",
+  "src/infrastructure/grandslam/client/two_factor.rs",
+  "src/infrastructure/grandslam/srp.rs",
+  "src/infrastructure/grandslam/srp_handshake.rs",
+  "src/infrastructure/http/client.rs",
+  "src/infrastructure/http/plist_codec.rs",
+  "src/infrastructure/ipa/mod.rs",
+  "src/infrastructure/ipa/sinf.rs",
+  "src/infrastructure/keychain/file_keychain.rs",
+  "src/infrastructure/keychain/macos_keychain.rs",
+  "src/infrastructure/simulator/device.rs",
+  "src/infrastructure/simulator/installer.rs",
+  "src/infrastructure/simulator/macho.rs",
+  "src/infrastructure/simulator/macho/dylib.rs",
+  "src/infrastructure/simulator/macho/encryption.rs",
+  "src/infrastructure/simulator/macho/fat.rs",
+  "src/infrastructure/simulator/macho/reader.rs",
+  "src/infrastructure/simulator/mod.rs",
+  "src/infrastructure/simulator/runtime.rs",
+]

@@ -1,0 +1,195 @@
+metadata:
+  version: 2.0.0
+  description: Configuration of SBOM scoring features, grouped by category
+  last_updated: "2026-06-19"
+categories:
+- name: Identification
+  description: Identification of components is critical for understanding supply chain
+    metadata
+  key: identification
+  weight: 10
+  features:
+  - name: Component With Name
+    ignore: false
+    key: comp_with_name
+    weight: 0.4
+  - name: Component With Version
+    ignore: false
+    key: comp_with_version
+    weight: 0.35
+  - name: Component With Local IDs
+    ignore: false
+    key: comp_with_local_id
+    weight: 0.25
+- name: Provenance
+  description: Enables trust and audit trails
+  key: provenance
+  weight: 12
+  features:
+  - name: Document Creation Time
+    ignore: false
+    key: sbom_creation_timestamp
+    weight: 0.2
+  - name: Document Authors
+    ignore: false
+    key: sbom_authors
+    weight: 0.2
+  - name: Document Creator Tool & Version
+    ignore: false
+    key: sbom_tool_version
+    weight: 0.2
+  - name: Document Supplier
+    ignore: false
+    key: sbom_supplier
+    weight: 0.15
+  - name: Document URI/Namespace
+    ignore: false
+    key: sbom_namespace
+    weight: 0.15
+  - name: Document Lifecycle
+    ignore: false
+    key: sbom_lifecycle
+    weight: 0.1
+- name: Integrity
+  description: Allows for verification if artifacts were altered
+  key: integrity
+  weight: 15
+  features:
+  - name: Component With Strong Checksums
+    ignore: false
+    key: comp_with_strong_checksums
+    weight: 0.5
+  - name: Component With Weak Checksums
+    ignore: false
+    key: comp_with_weak_checksums
+    weight: 0.4
+  - name: Document Signature
+    ignore: true
+    key: sbom_signature
+    weight: 0.1
+- name: Completeness
+  description: Allows for vulnerability and impact analysis
+  key: completeness
+  weight: 12
+  features:
+  - name: Component With Dependencies
+    ignore: false
+    key: comp_with_dependencies
+    weight: 0.25
+  - name: Component With Declared Completeness
+    ignore: true
+    key: sbom_completeness_declared
+    weight: 0.15
+  - name: Primary Component
+    ignore: false
+    key: sbom_primary_component
+    weight: 0.2
+  - name: Component With Source Code
+    ignore: false
+    key: comp_with_source_code
+    weight: 0.15
+  - name: Component With Supplier
+    ignore: false
+    key: comp_with_supplier
+    weight: 0.15
+  - name: Component With Primary Purpose
+    ignore: false
+    key: comp_with_purpose
+    weight: 0.1
+- name: Licensing
+  description: Determines redistribution rights and legal compliance
+  key: licensing_and_compliance
+  weight: 15
+  features:
+  - name: Components With Licenses
+    ignore: false
+    key: comp_with_licenses
+    weight: 0.2
+  - name: Component With Valid Licenses
+    ignore: true
+    key: comp_with_valid_licenses
+    weight: 0.2
+  - name: Component Without Deprecated Licenses
+    ignore: false
+    key: comp_no_deprecated_licenses
+    weight: 0.15
+  - name: Component Without Restrictive Licenses
+    ignore: true
+    key: comp_no_restrictive_licenses
+    weight: 0.2
+  - name: Component With Original Licenses
+    ignore: true
+    key: comp_with_declared_licenses
+    weight: 0.15
+  - name: Document Data License
+    ignore: false
+    key: sbom_data_license
+    weight: 0.1
+- name: Vulnerability
+  description: Ability to map components to vulnerability databases
+  key: vulnerability_and_traceability
+  weight: 10
+  features:
+  - name: Component With PURL
+    ignore: false
+    key: comp_with_purl
+    weight: 0.33
+  - name: Component With CPE
+    ignore: true
+    key: comp_with_cpe
+    weight: 0.33
+  - name: Component With PURL or CPE (Union)
+    ignore: false
+    key: comp_with_purl_or_cpe
+    weight: 0.34
+- name: Structural
+  description: If a BOM can't be reliably parsed, all downstream automation fails
+  key: structural
+  weight: 8
+  features:
+  - name: SBOM Spec
+    ignore: false
+    key: sbom_spec_declared
+    weight: 0.3
+  - name: SBOM Spec Version
+    ignore: false
+    key: sbom_spec_version
+    weight: 0.3
+  - name: SBOM File Format
+    ignore: false
+    key: sbom_file_format
+    weight: 0.2
+  - name: Schema Validation
+    ignore: false
+    key: sbom_schema_valid
+    weight: 0.2
+- name: Component Quality
+  description: Component identifier validation via Interlynk API. These metrics are
+    informational only and do NOT affect the overall quality score
+  key: compinfo
+  weight: 10
+  features:
+  - name: Component No Longer Maintained or Declared EOL
+    ignore: true
+    key: comp_eol_eos
+    weight: 0.1
+  - name: Component tagged as malicious in threat databases
+    ignore: true
+    key: comp_malicious
+    weight: 0.15
+  - name: Component with critical vulnerabilities
+    ignore: true
+    key: comp_vuln_sev_critical
+    weight: 0.15
+  - name: Component which are actively exploited (CISA KEV)
+    ignore: true
+    key: comp_kev
+    weight: 0.15
+  - name: Component PURL Valid
+    ignore: true
+    key: comp_purl_valid
+    weight: 0.225
+  - name: Component CPE Valid
+    ignore: true
+    key: comp_cpe_valid
+    weight: 0.225
