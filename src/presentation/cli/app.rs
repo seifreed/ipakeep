@@ -236,7 +236,7 @@ pub enum DecryptCommands {
         output: Option<PathBuf>,
     },
 
-    /// Dump an iOS app running on this Apple Silicon Mac (no jailbreak).
+    /// Dump an iOS app on this Apple Silicon Mac (no jailbreak; needs SIP disabled).
     DumpMac {
         /// Mac bundle id of the iOS-on-Mac app.
         #[arg(value_parser = parse_non_empty)]

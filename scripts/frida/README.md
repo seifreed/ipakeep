@@ -57,11 +57,30 @@ The runner attaches the same way regardless of how `frida-server` got there:
 - **TrollStore**: install a Frida-server `.tipa`, or embed the Frida gadget.
 - **Rootless jailbreak** (Dopamine etc.): the rootless Frida package.
 
-`--device local` instead attaches to an iOS app running on an Apple Silicon Mac
-(what `ipakeep decrypt dump-mac` uses) — no device and no jailbreak at all.
+## Apple Silicon Mac route (`--device local` / `decrypt dump-mac`)
+
+An iOS App Store app installed on an M-series Mac ("iPhone & iPad Apps" tab) runs
+with its binary FairPlay-encrypted and decrypted in memory at launch — so it can
+be dumped with no iOS device and no jailbreak. **But it requires SIP disabled.**
+
+Why: Frida on macOS cannot instrument a process it did not spawn unless SIP is
+off. With SIP enabled, `task_for_pid` on another app is denied even to root
+(the app lacks `get-task-allow`, and Frida lacks Apple's private
+`com.apple.system-task-ports` entitlement). And iOS-on-Mac apps can't be spawned
+directly by Frida — launched outside their launchd container they exit instantly.
+
+So the Mac route needs, once:
+
+1. Disable SIP: reboot to Recovery → Terminal → `csrutil disable` → reboot.
+2. Launch the app normally (`open -b <bundle-id>`), then attach as root:
+   `sudo python3 ipakeep_dump.py --device local --out dump/ "<App Name or PID>"`.
+
+This is "no jailbreak" but not "no system changes" — SIP-off lowers the Mac's
+security globally; re-enable it (`csrutil enable`) when done. If you'd rather not
+touch SIP, use the USB-device route above (jailbreak / TrollStore / rootless).
 
 ## Requirements
 
-- A device with `frida-server` reachable over USB (any of the above), or an
-  Apple Silicon Mac running the iOS app for `--device local`.
+- A device with `frida-server` reachable over USB (any of the above) **or** an
+  Apple Silicon Mac with SIP disabled running the iOS app (`--device local`).
 - `pip install frida frida-tools`.

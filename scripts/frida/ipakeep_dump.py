@@ -52,11 +52,25 @@ def main() -> int:
     device = get_device(args.device)
 
     pid = None
-    if args.spawn:
-        pid = device.spawn([args.target])
-        session = device.attach(pid)
-    else:
-        session = device.attach(args.target)
+    try:
+        if args.spawn:
+            pid = device.spawn([args.target])
+            session = device.attach(pid)
+        else:
+            # Accept a numeric PID or a process/app name.
+            target = int(args.target) if args.target.isdigit() else args.target
+            session = device.attach(target)
+    except frida.PermissionDeniedError:
+        # macOS with SIP enabled won't let a normal user attach to another app
+        # (no get-task-allow). Re-run as root, or boot with SIP disabled.
+        print(
+            "permission denied attaching to the target.\n"
+            "On a SIP-enabled Mac, run this as root:\n"
+            f"    sudo {sys.executable} {os.path.abspath(__file__)} "
+            f"--device {args.device} --out {args.out} {args.target}",
+            file=sys.stderr,
+        )
+        return 2
 
     with open(os.path.join(HERE, "ipakeep_dump.js"), "r", encoding="utf-8") as handle:
         script = session.create_script(handle.read())
