@@ -93,10 +93,9 @@ pub fn inspect_ipa(ipa_bytes: &[u8]) -> Result<InspectReport, String> {
     let mut machos = Vec::new();
     let mut any_encrypted = false;
     for i in 0..archive.len() {
-        let (name, bytes) = read_entry_at(&mut archive, i)?;
-        if !macho::is_macho(&bytes) {
+        let Some((name, bytes)) = read_if_macho(&mut archive, i)? else {
             continue;
-        }
+        };
         let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
         let basename = entry_basename(&name);
         let slice_reports: Vec<SliceReport> = slices
@@ -163,10 +162,9 @@ pub fn patch_ipa_decrypted(ipa_bytes: &[u8], from_dir: &Path) -> Result<Vec<u8>,
     let mut patched: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
     for i in 0..scan.len() {
-        let (name, mut bytes) = read_entry_at(&mut scan, i)?;
-        if !macho::is_macho(&bytes) {
+        let Some((name, mut bytes)) = read_if_macho(&mut scan, i)? else {
             continue;
-        }
+        };
         let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
         let basename = entry_basename(&name);
         let mut touched = false;
@@ -308,18 +306,31 @@ fn open_archive(ipa_bytes: &[u8]) -> Result<zip::ZipArchive<Cursor<&[u8]>>, Stri
     zip::ZipArchive::new(Cursor::new(ipa_bytes)).map_err(|e| e.to_string())
 }
 
-fn read_entry_at<R: Read + Seek>(
+/// Read a zip entry in full only if its first bytes are a Mach-O/fat magic.
+///
+/// IPAs hold thousands of non-Mach-O assets; peeking 4 bytes and skipping them
+/// avoids decompressing/reading every one just to test the magic.
+fn read_if_macho<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     index: usize,
-) -> Result<(String, Vec<u8>), String> {
+) -> Result<Option<(String, Vec<u8>)>, String> {
     let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
     let name = file.name().to_string();
     if !file.is_file() {
-        return Ok((name, Vec::new()));
+        return Ok(None);
     }
-    let mut bytes = Vec::new();
+    let mut magic = [0_u8; 4];
+    match file.read_exact(&mut magic) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    }
+    if !macho::is_macho(&magic) {
+        return Ok(None);
+    }
+    let mut bytes = magic.to_vec();
     file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    Ok((name, bytes))
+    Ok(Some((name, bytes)))
 }
 
 fn read_app_info<R: Read + Seek>(
@@ -425,10 +436,9 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
     let mut ok = true;
 
     for i in 0..archive.len() {
-        let (name, bytes) = read_entry_at(&mut archive, i)?;
-        if !macho::is_macho(&bytes) {
+        let Some((name, bytes)) = read_if_macho(&mut archive, i)? else {
             continue;
-        }
+        };
         let Ok(slices) = macho::parse(&bytes) else {
             ok = false;
             machos.push(MachoVerify {
@@ -517,18 +527,16 @@ pub fn set_min_os(ipa_bytes: &[u8], version: &str) -> Result<Vec<u8>, String> {
     let mut patched: BTreeMap<String, Vec<u8>> = BTreeMap::new();
 
     for i in 0..archive.len() {
-        let (name, mut bytes) = read_entry_at(&mut archive, i)?;
-        if !macho::is_macho(&bytes) {
+        let Some((name, mut bytes)) = read_if_macho(&mut archive, i)? else {
             continue;
-        }
+        };
         let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
         let mut touched = false;
         for slice in &slices {
             let Some(build) = slice.build_version else {
                 continue;
             };
-            let at =
-                usize::try_from(build.command_offset + 12).map_err(|_| "minos offset overflow")?;
+            let at = usize::try_from(build.minos_offset).map_err(|_| "minos offset overflow")?;
             bytes
                 .get_mut(at..at + 4)
                 .ok_or("minos field out of bounds")?

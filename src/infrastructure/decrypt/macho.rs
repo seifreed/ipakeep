@@ -3,7 +3,8 @@
 //! Models the same byte layout the `simulator::macho` module reads from
 //! `fs::File`, but over an owned `&[u8]` (a zip entry held in memory) and
 //! exposing the extra fields the decrypt bridge needs: per-slice arch, the full
-//! `LC_ENCRYPTION_INFO(_64)` triple, and `LC_BUILD_VERSION` `minos`/`sdk`.
+//! `LC_ENCRYPTION_INFO(_64)` triple, and the minimum-OS version (from
+//! `LC_BUILD_VERSION` or an older `LC_VERSION_MIN_*`).
 //!
 //! `ponytail:` constants are duplicated from `simulator::macho` (well-known
 //! Mach-O magic numbers) to keep the two modules decoupled — promote to a shared
@@ -21,6 +22,12 @@ const CPU_SUBTYPE_ARM64E: u32 = 2;
 const LC_ENCRYPTION_INFO: u32 = 0x21;
 const LC_ENCRYPTION_INFO_64: u32 = 0x2c;
 const LC_BUILD_VERSION: u32 = 0x32;
+// Older `LC_VERSION_MIN_*` commands (macOS/iOS/tvOS/watchOS) carry `version` at
+// `+8`; many real frameworks still use these instead of `LC_BUILD_VERSION`.
+const LC_VERSION_MIN_MACOSX: u32 = 0x24;
+const LC_VERSION_MIN_IPHONEOS: u32 = 0x25;
+const LC_VERSION_MIN_TVOS: u32 = 0x2f;
+const LC_VERSION_MIN_WATCHOS: u32 = 0x30;
 
 const MACH_HEADER_64_LEN: u64 = 32;
 
@@ -39,13 +46,13 @@ pub(super) struct EncryptionInfo {
     pub(super) command_offset: u64,
 }
 
-/// `LC_BUILD_VERSION` `minos`/`sdk`, each a packed `xxxx.yy.zz` nibble version.
+/// Minimum-OS version (packed `xxxx.yy.zz`) from either `LC_BUILD_VERSION` or an
+/// older `LC_VERSION_MIN_*` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct BuildVersion {
     pub(super) minos: u32,
-    pub(super) sdk: u32,
-    /// Absolute offset of the load command; `minos` lives at `+12`.
-    pub(super) command_offset: u64,
+    /// Absolute offset of the `minos` field, so a patcher can rewrite it.
+    pub(super) minos_offset: u64,
 }
 
 /// One architecture slice of a thin or fat Mach-O.
@@ -115,7 +122,10 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
     let arch = arch_label(cputype, cpusubtype);
 
     let mut encryption = None;
+    // `LC_BUILD_VERSION` (modern) wins over `LC_VERSION_MIN_*` (older) if both
+    // appear; track them separately and combine at the end.
     let mut build_version = None;
+    let mut version_min = None;
 
     if read_le_u32(bytes, header) == Some(MH_MAGIC_64) {
         let ncmds = read_le_u32(bytes, header + 16).ok_or("truncated Mach-O header")?;
@@ -136,11 +146,21 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
                         command_offset: offset,
                     });
                 }
+                // `minos` at command +12.
                 LC_BUILD_VERSION => {
                     build_version = Some(BuildVersion {
                         minos: read_le_u32(bytes, cmd_at + 12).ok_or("truncated build version")?,
-                        sdk: read_le_u32(bytes, cmd_at + 16).ok_or("truncated build version")?,
-                        command_offset: offset,
+                        minos_offset: offset + 12,
+                    });
+                }
+                // `version` at command +8.
+                LC_VERSION_MIN_MACOSX
+                | LC_VERSION_MIN_IPHONEOS
+                | LC_VERSION_MIN_TVOS
+                | LC_VERSION_MIN_WATCHOS => {
+                    version_min = Some(BuildVersion {
+                        minos: read_le_u32(bytes, cmd_at + 8).ok_or("truncated version min")?,
+                        minos_offset: offset + 8,
                     });
                 }
                 _ => {}
@@ -153,7 +173,7 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
         arch,
         base,
         encryption,
-        build_version,
+        build_version: build_version.or(version_min),
     })
 }
 

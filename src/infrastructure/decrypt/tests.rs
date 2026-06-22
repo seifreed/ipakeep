@@ -294,3 +294,90 @@ fn parse_version_packs_and_validates() {
     assert!(parse_version("16.300").is_err());
     assert!(parse_version("x.y").is_err());
 }
+
+/// A thin arm64 Mach-O whose minimum OS comes from `LC_VERSION_MIN_IPHONEOS`
+/// (`version` at +8), not `LC_BUILD_VERSION` — as many real frameworks do.
+fn thin_macho_version_min(minos: u32) -> Vec<u8> {
+    const LC_VERSION_MIN_IPHONEOS: u32 = 0x25;
+    let mut bytes = Vec::new();
+    // header: ncmds=2, sizeofcmds = 24 (enc info) + 16 (version min)
+    for value in [MH_MAGIC_64, CPU_TYPE_ARM64, 0, 2, 2, 40, 0, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    for value in [LC_ENCRYPTION_INFO_64, 24, CRYPTOFF, CRYPTSIZE, 1, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    // LC_VERSION_MIN_IPHONEOS: cmd, cmdsize=16, version, sdk
+    for value in [LC_VERSION_MIN_IPHONEOS, 16, minos, minos] {
+        push_u32_le(&mut bytes, value);
+    }
+    bytes.resize(CRYPTOFF as usize, 0);
+    bytes.resize((CRYPTOFF + CRYPTSIZE) as usize, 0x11);
+    bytes
+}
+
+#[test]
+fn inspect_and_set_min_os_handle_version_min_command() {
+    // Regression for real frameworks (e.g. Agora) that carry only
+    // LC_VERSION_MIN_IPHONEOS: minos must be reported and patchable.
+    let ipa = build_ipa(&thin_macho_version_min(13 << 16));
+
+    let report = inspect_ipa(&ipa).unwrap();
+    let slice = &report
+        .machos
+        .iter()
+        .find(|m| m.entry.ends_with("TestExec"))
+        .unwrap()
+        .slices[0];
+    assert_eq!(slice.minimum_os.as_deref(), Some("13.0.0"));
+    assert!(!slice.dumpable_on.is_empty());
+
+    let patched = set_min_os(&ipa, "11.0").unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(patched)).unwrap();
+    let mut exec = Vec::new();
+    archive
+        .by_name("Payload/Test.app/TestExec")
+        .unwrap()
+        .read_to_end(&mut exec)
+        .unwrap();
+    assert_eq!(
+        macho::parse(&exec).unwrap()[0].build_version.unwrap().minos,
+        11 << 16
+    );
+}
+
+/// Opt-in end-to-end check against a real App Store IPA. Skipped unless
+/// `IPAKEEP_TEST_IPA` points to one (a 200+ MB copyrighted binary can't live in
+/// the repo). Run with: `IPAKEEP_TEST_IPA=ipas/<app>.ipa cargo test real_ipa`.
+#[test]
+fn real_ipa_inspect_patch_verify_roundtrip() {
+    let Ok(path) = std::env::var("IPAKEEP_TEST_IPA") else {
+        return;
+    };
+    let ipa = std::fs::read(&path).expect("read IPAKEEP_TEST_IPA");
+
+    let report = inspect_ipa(&ipa).expect("inspect");
+    assert!(report.minimum_os_version.is_some());
+    let encrypted: Vec<_> = report
+        .machos
+        .iter()
+        .flat_map(|m| m.slices.iter().filter(|s| s.encrypted))
+        .collect();
+    assert!(!encrypted.is_empty(), "expected encrypted slices");
+
+    // Fabricate plaintext of the real cryptsize for every encrypted slice.
+    let dir = tempfile::TempDir::new().unwrap();
+    for slice in &encrypted {
+        let name = slice.dump_filename.as_ref().unwrap();
+        let size = slice.cryptsize.unwrap() as usize;
+        std::fs::write(dir.path().join(name), vec![0x5A_u8; size]).unwrap();
+    }
+
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).expect("patch");
+    let verified = verify_ipa(&patched).expect("verify");
+    assert!(
+        verified.ok,
+        "still encrypted: {:?}",
+        verified.still_encrypted
+    );
+}
