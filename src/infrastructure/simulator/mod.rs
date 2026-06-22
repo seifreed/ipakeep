@@ -59,6 +59,20 @@ pub fn install_ipa(
     Ok(app)
 }
 
+/// Re-sign an extracted `.app` bundle (deep, inner code first) with `identity`,
+/// applying `entitlements` when provided. Used by the `decrypt resign` flow.
+///
+/// # Errors
+///
+/// Returns an error if `codesign` fails on any nested bundle or dylib.
+pub fn resign_bundle(
+    app: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> Result<(), String> {
+    installer::sign_app_bundle(app, identity, entitlements)
+}
+
 fn prepare_path_inner(path: &Path, converted: &mut Vec<PathBuf>) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if metadata.file_type().is_symlink() {
@@ -150,8 +164,8 @@ fn command_with_args(program: &str, args: &[&str]) -> Command {
     command
 }
 
-fn codesign_command(target: &Path, entitlements: Option<&Path>) -> Command {
-    let mut command = command_with_args("/usr/bin/codesign", &["-f", "-s", "-"]);
+fn codesign_command(target: &Path, identity: &str, entitlements: Option<&Path>) -> Command {
+    let mut command = command_with_args("/usr/bin/codesign", &["-f", "-s", identity]);
     if let Some(entitlements) = entitlements {
         command.arg("--entitlements").arg(entitlements);
     }

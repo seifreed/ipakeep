@@ -22,7 +22,7 @@ pub(super) fn install_ipa(
     reject_encrypted_app(&app)?;
 
     prepare_path(&app)?;
-    sign_app_bundle(&app, entitlements)?;
+    sign_app_bundle(&app, "-", entitlements)?;
     install_app(&app, target)?;
 
     if run_after_install {
@@ -64,12 +64,16 @@ fn reject_encrypted_app(app: &Path) -> Result<(), String> {
     ))
 }
 
-fn sign_app_bundle(app: &Path, entitlements: Option<&Path>) -> Result<(), String> {
+pub(super) fn sign_app_bundle(
+    app: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> Result<(), String> {
     let mut targets = Vec::new();
     collect_sign_targets(app, &mut targets)?;
     targets.sort_by_key(|path| path.components().count());
     for target in targets.iter().rev() {
-        run_checked(codesign_command(target, entitlements))?;
+        run_checked(codesign_command(target, identity, entitlements))?;
     }
     Ok(())
 }
@@ -124,6 +128,7 @@ mod tests {
     fn codesign_command_adds_entitlements_before_target() {
         let command = codesign_command(
             Path::new("/tmp/App.app"),
+            "-",
             Some(Path::new("/tmp/entitlements.plist")),
         );
 

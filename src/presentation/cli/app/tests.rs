@@ -267,3 +267,55 @@ fn simulator_unlock_runtime_accepts_missing_path() {
         }
     ));
 }
+
+#[test]
+fn decrypt_inspect_accepts_ipa_path() {
+    let cli = Cli::try_parse_from(["ipakeep", "decrypt", "inspect", "/tmp/app.ipa"])
+        .expect("decrypt inspect should parse");
+
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::Inspect { ipa }
+        } if ipa == *"/tmp/app.ipa"
+    ));
+}
+
+#[test]
+fn decrypt_patch_requires_from() {
+    assert!(Cli::try_parse_from(["ipakeep", "decrypt", "patch", "/tmp/app.ipa"]).is_err());
+
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "decrypt",
+        "patch",
+        "/tmp/app.ipa",
+        "--from",
+        "/tmp/dump",
+    ])
+    .expect("decrypt patch should parse with --from");
+
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::Patch { from, output: None, .. }
+        } if from == *"/tmp/dump"
+    ));
+}
+
+#[test]
+fn decrypt_resign_defaults_identity_to_none() {
+    let cli = Cli::try_parse_from(["ipakeep", "decrypt", "resign", "/tmp/App.app"])
+        .expect("decrypt resign should parse");
+
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::Resign {
+                identity: None,
+                entitlements: None,
+                ..
+            }
+        }
+    ));
+}

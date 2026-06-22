@@ -110,7 +110,7 @@ fn inject_sinfs<W: Write + Seek>(
     Ok(())
 }
 
-fn copy_zip_entry<W: Write + Seek, R: Read>(
+pub(crate) fn copy_zip_entry<W: Write + Seek, R: Read>(
     writer: &mut zip::ZipWriter<W>,
     mut file: zip::read::ZipFile<'_, R>,
 ) -> zip::result::ZipResult<()> {
@@ -131,7 +131,7 @@ fn copy_zip_entry<W: Write + Seek, R: Read>(
     writer.raw_copy_file(file)
 }
 
-fn entry_options<R: Read + ?Sized>(
+pub(crate) fn entry_options<R: Read + ?Sized>(
     file: &zip::read::ZipFile<'_, R>,
     default_permissions: u32,
 ) -> zip::write::SimpleFileOptions {

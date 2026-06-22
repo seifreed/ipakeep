@@ -1,11 +1,33 @@
 //! Test helpers for asserting `tracing` output.
 
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::fmt::MakeWriter;
 
 static LOG_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Pin tracing's global `MAX_LEVEL` at `TRACE` exactly once.
+///
+/// `install` only sets a *thread-local* subscriber, so without this the global
+/// `MAX_LEVEL` reflects the global default (`NoSubscriber` = `OFF`). An
+/// interest-cache rebuild — which any thread can trigger by hitting a new
+/// callsite — then recomputes that hint and the `debug!`/`info!` macro fast
+/// path (`level <= LevelFilter::current()`) silently drops events bound for the
+/// thread-local capture, intermittently. A permanent no-op global subscriber
+/// whose max-level hint is `TRACE` keeps the fast path open; the thread-local
+/// capture still takes precedence for events on the test's own thread.
+fn pin_global_max_level() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::TRACE)
+                .with_writer(io::sink)
+                .finish(),
+        );
+    });
+}
 
 /// In-memory sink for test log assertions.
 #[derive(Clone, Default)]
@@ -16,6 +38,7 @@ pub struct LogCapture {
 impl LogCapture {
     /// Install a debug-level subscriber writing into this capture.
     pub fn install(&self) -> LogCaptureGuard {
+        pin_global_max_level();
         let lock = match LOG_CAPTURE_LOCK.lock() {
             Ok(lock) => lock,
             Err(poisoned) => poisoned.into_inner(),

@@ -5,7 +5,9 @@ use ipakeep::domain::repository::CredentialRepository;
 use ipakeep::infrastructure::appstore::AppleAppStoreRepository;
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::keychain::FileKeychain;
-use ipakeep::presentation::cli::app::{AuthCommands, Cli, Commands, SimulatorCommands};
+use ipakeep::presentation::cli::app::{
+    AuthCommands, Cli, Commands, DecryptCommands, SimulatorCommands,
+};
 use ipakeep::presentation::cli::output::OutputFormat;
 use std::str::FromStr;
 
@@ -177,6 +179,22 @@ async fn dispatch_command(
             .await
         }
         Commands::Simulator { action } => dispatch_simulator(action),
+        Commands::Decrypt { action } => dispatch_decrypt(action, format),
+    }
+}
+
+fn dispatch_decrypt(action: DecryptCommands, format: &OutputFormat) -> Result<(), String> {
+    use ipakeep::presentation::cli::commands::decrypt;
+    match action {
+        DecryptCommands::Inspect { ipa } => decrypt::handle_inspect(&ipa, format),
+        DecryptCommands::Patch { ipa, from, output } => {
+            decrypt::handle_patch(&ipa, &from, output.as_deref())
+        }
+        DecryptCommands::Resign {
+            app,
+            identity,
+            entitlements,
+        } => decrypt::handle_resign(&app, identity.as_deref(), entitlements.as_deref()),
     }
 }
 

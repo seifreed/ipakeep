@@ -26,7 +26,7 @@ struct CodesignAdHocSigner<'a> {
 
 impl AdHocSigner for CodesignAdHocSigner<'_> {
     fn sign(&self, path: &Path) -> Result<(), String> {
-        run_checked(codesign_command(path, self.entitlements))
+        run_checked(codesign_command(path, "-", self.entitlements))
     }
 }
 

@@ -129,6 +129,51 @@ pub enum Commands {
         #[command(subcommand)]
         action: SimulatorCommands,
     },
+
+    /// Inspect, patch, and re-sign FairPlay-decrypted IPAs.
+    Decrypt {
+        /// The decrypt subcommand.
+        #[command(subcommand)]
+        action: DecryptCommands,
+    },
+}
+
+/// `FairPlay` decrypt subcommands.
+#[derive(Subcommand, Debug)]
+pub enum DecryptCommands {
+    /// Report each Mach-O's arch, encryption info, and dumpability.
+    Inspect {
+        /// Path to the IPA.
+        ipa: PathBuf,
+    },
+
+    /// Patch on-device-dumped plaintext slices back into an IPA.
+    Patch {
+        /// Path to the encrypted IPA.
+        ipa: PathBuf,
+
+        /// Directory of dumped slices (named as `inspect` reports).
+        #[arg(long)]
+        from: PathBuf,
+
+        /// Output IPA path (default: `<ipa-stem>-decrypted.ipa`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Re-sign an extracted .app bundle, preserving its entitlements.
+    Resign {
+        /// Path to the extracted .app bundle.
+        app: PathBuf,
+
+        /// Signing identity (default: `-`, ad-hoc).
+        #[arg(long, value_parser = parse_non_empty)]
+        identity: Option<String>,
+
+        /// Entitlements plist to apply instead of the binary's own.
+        #[arg(long)]
+        entitlements: Option<PathBuf>,
+    },
 }
 
 /// Auth subcommands.

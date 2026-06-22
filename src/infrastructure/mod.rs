@@ -5,6 +5,7 @@
 //! nothing in the domain layer depends on it.
 
 pub mod appstore;
+pub mod decrypt;
 pub mod grandslam;
 pub mod http;
 pub mod ipa;

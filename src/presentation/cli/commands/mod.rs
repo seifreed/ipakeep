@@ -1,6 +1,7 @@
 //! CLI command handlers — adapter layer between CLI input and use cases.
 
 pub mod auth;
+pub mod decrypt;
 pub mod download;
 pub mod list_versions;
 pub mod purchase;
