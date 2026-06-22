@@ -1,10 +1,12 @@
 //! Decrypt command handlers — inspect, patch, and re-sign.
 
+use crate::domain::repository::CredentialRepository;
 use crate::infrastructure::decrypt::{
     DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport,
     VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
     set_min_os, verify_ipa,
 };
+use crate::infrastructure::developer::{self, ProvisionRequest};
 use crate::presentation::cli::output::OutputFormat;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -190,6 +192,79 @@ pub fn handle_dump_mac(
         settle,
         output,
     })
+}
+
+/// Generate a development provisioning profile and embed it in the bundle.
+///
+/// # Errors
+///
+/// Returns an error if not logged in, provisioning fails, or files can't be written.
+pub async fn handle_provision<C: CredentialRepository>(
+    app: &Path,
+    device_udid: &str,
+    team: Option<&str>,
+    app_id_id: &str,
+    output: Option<&Path>,
+    credentials: C,
+) -> Result<(), String> {
+    let account = credentials
+        .load_account()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("not logged in — run `ipakeep auth login` first")?;
+
+    let result = developer::provision(&ProvisionRequest {
+        account: &account,
+        team_id: team,
+        device_udid,
+        device_name: "ipakeep",
+        app_id_id,
+    })
+    .await?;
+
+    let dir = output.map_or_else(|| PathBuf::from("ipakeep-provision"), Path::to_path_buf);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for (name, bytes) in [
+        ("embedded.mobileprovision", &result.mobileprovision),
+        ("key.pem", &result.key_pem),
+        ("certificate.der", &result.certificate_der),
+    ] {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    // Embed the profile so the bundle is ready to re-sign.
+    std::fs::write(
+        app.join("embedded.mobileprovision"),
+        &result.mobileprovision,
+    )
+    .map_err(|e| format!("embedding profile: {e}"))?;
+
+    println!(
+        "Provisioned team {} (cert {}). Artifacts in {}.",
+        result.team_id,
+        result.certificate_serial,
+        dir.display()
+    );
+    if let Ok(verdicts) = entitlements_report(app) {
+        let blocked: Vec<&str> = verdicts
+            .iter()
+            .filter(|v| v.risk == EntitlementRisk::CannotRegrant)
+            .map(|v| v.key.as_str())
+            .collect();
+        if !blocked.is_empty() {
+            eprintln!(
+                "WARNING: these entitlements cannot be granted even with a profile: {}",
+                blocked.join(", ")
+            );
+        }
+    }
+    println!(
+        "Next: import {}/key.pem + certificate.der into your keychain, then \
+         `ipakeep decrypt resign {} --identity \"<cert name>\"`.",
+        dir.display(),
+        app.display()
+    );
+    Ok(())
 }
 
 fn dump_output(ipa: Option<&Path>, bundle_id: &str) -> PathBuf {

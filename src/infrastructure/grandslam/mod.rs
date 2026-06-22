@@ -16,4 +16,5 @@ mod aoskit_fallback;
 
 mod anisette_docker;
 
+pub use anisette::{AnisetteData, resolve_anisette};
 pub use client::{GrandSlamClient, SrpCompleteResult, SrpInitResponse};

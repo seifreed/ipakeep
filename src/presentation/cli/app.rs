@@ -258,6 +258,32 @@ pub enum DecryptCommands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+
+    /// Generate a development provisioning profile for a decrypted app.
+    ///
+    /// Requires a logged-in account with a paid Apple Developer membership and a
+    /// device UDID to register. Writes the profile/key/cert and embeds the
+    /// profile into the bundle.
+    Provision {
+        /// Path to the extracted .app bundle.
+        app: PathBuf,
+
+        /// Device UDID to register the profile for.
+        #[arg(long, value_parser = parse_non_empty)]
+        device_udid: String,
+
+        /// Team id to use (default: the account's first development team).
+        #[arg(long, value_parser = parse_non_empty)]
+        team: Option<String>,
+
+        /// App ID identifier for the team profile.
+        #[arg(long, default_value = "*", value_parser = parse_non_empty)]
+        app_id_id: String,
+
+        /// Output directory for the profile, key, and certificate.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Auth subcommands.

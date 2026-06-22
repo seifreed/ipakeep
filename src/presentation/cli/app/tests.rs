@@ -353,6 +353,26 @@ fn decrypt_dump_defaults_to_builtin_usb() {
 }
 
 #[test]
+fn decrypt_provision_requires_device_udid() {
+    assert!(Cli::try_parse_from(["ipakeep", "decrypt", "provision", "/tmp/App.app"]).is_err());
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "decrypt",
+        "provision",
+        "/tmp/App.app",
+        "--device-udid",
+        "UDID-1",
+    ])
+    .expect("provision should parse with --device-udid");
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::Provision { device_udid, app_id_id, .. }
+        } if device_udid == "UDID-1" && app_id_id == "*"
+    ));
+}
+
+#[test]
 fn decrypt_dump_mac_requires_ipa() {
     assert!(Cli::try_parse_from(["ipakeep", "decrypt", "dump-mac", "com.example.App"]).is_err());
     let cli = Cli::try_parse_from([

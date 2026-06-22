@@ -43,6 +43,18 @@ pub(crate) fn run_inherit(mut command: Command) -> Result<(), String> {
     }
 }
 
+/// Run `command` capturing output; on failure return its trimmed stderr.
+pub(crate) fn run_quiet(mut command: Command) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|e| format!("failed to run {command:?}: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 /// Create a fresh, uniquely named working directory under the system temp dir.
 ///
 /// # Errors

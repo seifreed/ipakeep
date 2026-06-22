@@ -179,11 +179,15 @@ async fn dispatch_command(
             .await
         }
         Commands::Simulator { action } => dispatch_simulator(action),
-        Commands::Decrypt { action } => dispatch_decrypt(action, format),
+        Commands::Decrypt { action } => dispatch_decrypt(action, format, keychain).await,
     }
 }
 
-fn dispatch_decrypt(action: DecryptCommands, format: &OutputFormat) -> Result<(), String> {
+async fn dispatch_decrypt(
+    action: DecryptCommands,
+    format: &OutputFormat,
+    keychain: AnyKeychain,
+) -> Result<(), String> {
     use ipakeep::presentation::cli::commands::decrypt;
     match action {
         DecryptCommands::Inspect { ipa } => decrypt::handle_inspect(&ipa, format),
@@ -228,6 +232,23 @@ fn dispatch_decrypt(action: DecryptCommands, format: &OutputFormat) -> Result<()
             settle,
             output,
         } => decrypt::handle_dump_mac(&bundle_id, &ipa, &agent, settle, output.as_deref()),
+        DecryptCommands::Provision {
+            app,
+            device_udid,
+            team,
+            app_id_id,
+            output,
+        } => {
+            decrypt::handle_provision(
+                &app,
+                &device_udid,
+                team.as_deref(),
+                &app_id_id,
+                output.as_deref(),
+                keychain,
+            )
+            .await
+        }
     }
 }
 
