@@ -7,10 +7,11 @@ use crate::domain::entity::Account;
 use crate::domain::error::CredentialError;
 use crate::domain::repository::CredentialRepository;
 use async_trait::async_trait;
-use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
+
+/// `errSecItemNotFound` — no keychain item matched the query.
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 const DEFAULT_SERVICE: &str = "com.github.seifreed.ipakeep";
 const DEFAULT_ACCOUNT: &str = "default";
@@ -52,39 +53,31 @@ impl MacOSKeychain {
     }
 }
 
+/// Read the raw stored bytes via the Security framework.
+///
+/// Read through `security_framework`, not the `security` CLI: the CLI's `-w`
+/// flag hex-encodes any password containing non-printable bytes (newlines from
+/// pretty JSON, non-ASCII characters in names), which would otherwise be
+/// mis-parsed as JSON. A timeout guards against a locked keychain hanging.
 async fn find_generic_password(service: &str, account: &str) -> Result<Vec<u8>, CredentialError> {
-    let child = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
-        .kill_on_drop(true)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| CredentialError::LoadFailed(format!("failed to start security: {e}")))?;
+    let service = service.to_string();
+    let account = account.to_string();
+    let handle = tokio::task::spawn_blocking(move || {
+        security_framework::passwords::get_generic_password(&service, &account)
+    });
 
-    let output = timeout(KEYCHAIN_READ_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| {
-            CredentialError::LoadFailed(
-                "macOS Keychain did not respond within 5 seconds; unlock it or use --file-keychain"
-                    .into(),
-            )
-        })?
-        .map_err(|e| CredentialError::LoadFailed(format!("security failed: {e}")))?;
+    let joined = timeout(KEYCHAIN_READ_TIMEOUT, handle).await.map_err(|_| {
+        CredentialError::LoadFailed(
+            "macOS Keychain did not respond within 5 seconds; unlock it or use --file-keychain"
+                .into(),
+        )
+    })?;
 
-    if output.status.success() {
-        return Ok(output.stdout);
+    match joined.map_err(|e| CredentialError::LoadFailed(format!("task failed: {e}")))? {
+        Ok(bytes) => Ok(bytes),
+        Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Err(CredentialError::NotFound),
+        Err(e) => Err(CredentialError::LoadFailed(e.to_string())),
     }
-
-    Err(map_security_find_error(&output.stderr))
-}
-
-fn map_security_find_error(stderr: &[u8]) -> CredentialError {
-    let stderr = String::from_utf8_lossy(stderr);
-    if stderr.contains("could not be found") {
-        return CredentialError::NotFound;
-    }
-
-    CredentialError::LoadFailed(stderr.trim().to_string())
 }
 
 #[async_trait]
@@ -133,9 +126,7 @@ impl CredentialRepository for MacOSKeychain {
             move || {
                 security_framework::passwords::delete_generic_password(&service, &account).map_err(
                     |e| {
-                        let code = e.code();
-                        if code == -25300 {
-                            // errSecItemNotFound
+                        if e.code() == ERR_SEC_ITEM_NOT_FOUND {
                             CredentialError::NotFound
                         } else {
                             CredentialError::DeleteFailed(e.to_string())
@@ -252,21 +243,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn security_not_found_stderr_maps_to_not_found() {
-        let error = map_security_find_error(
-            b"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
-        );
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn save_then_load_roundtrips_multiline_and_non_ascii() {
+        // Regression: pretty JSON (newlines) and non-ASCII names must survive
+        // save → load. The old CLI `-w` reader hex-encoded such payloads, which
+        // then mis-parsed as the integer 7.
+        let keychain = test_keychain("save_then_load_roundtrips_multiline_and_non_ascii");
+        let mut account = test_account();
+        account.name = "Marc Rivero López".into();
 
-        assert!(matches!(error, CredentialError::NotFound));
-    }
+        keychain.save_account(&account).await.unwrap();
+        let loaded = match keychain.load_account().await {
+            Ok(loaded) => loaded,
+            Err(CredentialError::LoadFailed(message))
+                if message.contains("macOS Keychain did not respond") =>
+            {
+                let _ = keychain.delete_account().await;
+                return;
+            }
+            Err(e) => panic!("failed to load account: {e}"),
+        };
+        let _ = keychain.delete_account().await;
 
-    #[test]
-    fn security_other_stderr_maps_to_load_failed() {
-        let error = map_security_find_error(b"security: user interaction is not allowed\n");
-
-        assert!(
-            matches!(error, CredentialError::LoadFailed(message) if message == "security: user interaction is not allowed")
-        );
+        assert_eq!(loaded.unwrap().name, "Marc Rivero López");
     }
 }
