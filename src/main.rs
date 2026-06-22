@@ -202,6 +202,32 @@ fn dispatch_decrypt(action: DecryptCommands, format: &OutputFormat) -> Result<()
             version,
             output,
         } => decrypt::handle_set_min_os(&ipa, &version, output.as_deref()),
+        DecryptCommands::Dump {
+            bundle_id,
+            dumper,
+            ipa,
+            device,
+            agent,
+            spawn,
+            settle,
+            output,
+        } => decrypt::handle_dump(&decrypt::DumpArgs {
+            bundle_id: &bundle_id,
+            dumper: &dumper,
+            ipa: ipa.as_deref(),
+            device: &device,
+            agent: &agent,
+            spawn,
+            settle,
+            output: output.as_deref(),
+        }),
+        DecryptCommands::DumpMac {
+            bundle_id,
+            ipa,
+            agent,
+            settle,
+            output,
+        } => decrypt::handle_dump_mac(&bundle_id, &ipa, &agent, settle, output.as_deref()),
     }
 }
 

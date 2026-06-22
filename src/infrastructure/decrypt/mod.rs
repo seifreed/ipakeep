@@ -6,10 +6,12 @@
 //! back into the archive while zeroing `cryptid` ([`patch_ipa_decrypted`]), and
 //! re-signs a bundle preserving its entitlements ([`resign_app`]).
 
+pub mod dump;
 mod entitlements;
 mod ios;
 mod macho;
 
+pub use dump::{DumpDevice, DumpRequest, Dumper, run_dump};
 pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};

@@ -319,3 +319,55 @@ fn decrypt_resign_defaults_identity_to_none() {
         }
     ));
 }
+
+#[test]
+fn decrypt_set_min_os_requires_version() {
+    assert!(Cli::try_parse_from(["ipakeep", "decrypt", "set-min-os", "/tmp/a.ipa"]).is_err());
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "decrypt",
+        "set-min-os",
+        "/tmp/a.ipa",
+        "--version",
+        "16.0",
+    ])
+    .expect("set-min-os should parse with --version");
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::SetMinOs { version, .. }
+        } if version == "16.0"
+    ));
+}
+
+#[test]
+fn decrypt_dump_defaults_to_builtin_usb() {
+    let cli = Cli::try_parse_from(["ipakeep", "decrypt", "dump", "com.example.App"])
+        .expect("decrypt dump should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::Dump { bundle_id, dumper, device, .. }
+        } if bundle_id == "com.example.App" && dumper == "builtin" && device == "usb"
+    ));
+}
+
+#[test]
+fn decrypt_dump_mac_requires_ipa() {
+    assert!(Cli::try_parse_from(["ipakeep", "decrypt", "dump-mac", "com.example.App"]).is_err());
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "decrypt",
+        "dump-mac",
+        "com.example.App",
+        "--ipa",
+        "/tmp/a.ipa",
+    ])
+    .expect("dump-mac should parse with --ipa");
+    assert!(matches!(
+        cli.command,
+        Commands::Decrypt {
+            action: DecryptCommands::DumpMac { bundle_id, .. }
+        } if bundle_id == "com.example.App"
+    ));
+}

@@ -187,7 +187,7 @@ pub enum DecryptCommands {
         path: PathBuf,
     },
 
-    /// Lower `MinimumOSVersion` so the IPA installs on an older iOS (often crashes).
+    /// Lower the minimum iOS version so the IPA installs on older iOS (often crashes).
     SetMinOs {
         /// Path to the IPA.
         ipa: PathBuf,
@@ -197,6 +197,64 @@ pub enum DecryptCommands {
         version: String,
 
         /// Output IPA path (default: `<ipa-stem>-minos.ipa`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Drive a dumper (builtin/frida-ios-dump/bagbak/r2flutch) to decrypt an app.
+    Dump {
+        /// App bundle id to dump on the device.
+        #[arg(value_parser = parse_non_empty)]
+        bundle_id: String,
+
+        /// Dumper backend.
+        #[arg(long, default_value = "builtin", value_parser = parse_non_empty)]
+        dumper: String,
+
+        /// Encrypted IPA to patch (required by the builtin dumper).
+        #[arg(long)]
+        ipa: Option<PathBuf>,
+
+        /// Frida device: `usb` (device) or `local` (Mac).
+        #[arg(long, default_value = "usb")]
+        device: String,
+
+        /// Path to the builtin Frida runner.
+        #[arg(long, default_value = "scripts/frida/ipakeep_dump.py")]
+        agent: PathBuf,
+
+        /// Spawn the app instead of attaching (builtin).
+        #[arg(long)]
+        spawn: bool,
+
+        /// Seconds to wait for lazily-loaded frameworks (builtin).
+        #[arg(long, default_value = "5")]
+        settle: f64,
+
+        /// Output IPA path.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Dump an iOS app running on this Apple Silicon Mac (no jailbreak).
+    DumpMac {
+        /// Mac bundle id of the iOS-on-Mac app.
+        #[arg(value_parser = parse_non_empty)]
+        bundle_id: String,
+
+        /// Encrypted IPA to patch.
+        #[arg(long)]
+        ipa: PathBuf,
+
+        /// Path to the builtin Frida runner.
+        #[arg(long, default_value = "scripts/frida/ipakeep_dump.py")]
+        agent: PathBuf,
+
+        /// Seconds to wait for lazily-loaded frameworks.
+        #[arg(long, default_value = "5")]
+        settle: f64,
+
+        /// Output IPA path.
         #[arg(short, long)]
         output: Option<PathBuf>,
     },

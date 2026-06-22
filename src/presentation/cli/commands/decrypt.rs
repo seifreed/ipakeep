@@ -1,8 +1,9 @@
 //! Decrypt command handlers — inspect, patch, and re-sign.
 
 use crate::infrastructure::decrypt::{
-    EntitlementRisk, EntitlementVerdict, InspectReport, VerifyReport, entitlements_report,
-    inspect_ipa, patch_ipa_decrypted, resign_app, set_min_os, verify_ipa,
+    DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport,
+    VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
+    set_min_os, verify_ipa,
 };
 use crate::presentation::cli::output::OutputFormat;
 use std::fmt::Write as _;
@@ -116,6 +117,86 @@ pub fn handle_set_min_os(ipa: &Path, version: &str, output: Option<&Path>) -> Re
     );
     println!("Wrote min-os-patched IPA: {}", out.display());
     Ok(())
+}
+
+/// Parsed `decrypt dump` arguments.
+pub struct DumpArgs<'a> {
+    /// App bundle id.
+    pub bundle_id: &'a str,
+    /// Dumper backend name.
+    pub dumper: &'a str,
+    /// Encrypted IPA to patch (builtin).
+    pub ipa: Option<&'a Path>,
+    /// Frida device (`usb`/`local`).
+    pub device: &'a str,
+    /// Path to the builtin Frida runner.
+    pub agent: &'a Path,
+    /// Spawn rather than attach (builtin).
+    pub spawn: bool,
+    /// Settle seconds (builtin).
+    pub settle: f64,
+    /// Output IPA path.
+    pub output: Option<&'a Path>,
+}
+
+/// Drive a dumper to produce a decrypted IPA.
+///
+/// # Errors
+///
+/// Returns an error if the dumper/tool fails or the output cannot be written.
+pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
+    let device = match args.device {
+        "usb" => DumpDevice::Usb,
+        "local" => DumpDevice::Local,
+        other => return Err(format!("unknown device {other:?} (expected usb|local)")),
+    };
+    let req = DumpRequest {
+        dumper: Dumper::parse(args.dumper)?,
+        bundle_id: args.bundle_id,
+        ipa: args.ipa,
+        device,
+        agent: args.agent,
+        settle: args.settle,
+        spawn: args.spawn,
+    };
+    let bytes = run_dump(&req)?;
+    let out = args
+        .output
+        .map_or_else(|| dump_output(args.ipa, args.bundle_id), Path::to_path_buf);
+    std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("Wrote decrypted IPA: {}", out.display());
+    Ok(())
+}
+
+/// Dump an iOS app running on this Apple Silicon Mac (builtin dumper, local Frida).
+///
+/// # Errors
+///
+/// Returns an error if Frida/the app fails or the output cannot be written.
+pub fn handle_dump_mac(
+    bundle_id: &str,
+    ipa: &Path,
+    agent: &Path,
+    settle: f64,
+    output: Option<&Path>,
+) -> Result<(), String> {
+    handle_dump(&DumpArgs {
+        bundle_id,
+        dumper: "builtin",
+        ipa: Some(ipa),
+        device: "local",
+        agent,
+        spawn: true,
+        settle,
+        output,
+    })
+}
+
+fn dump_output(ipa: Option<&Path>, bundle_id: &str) -> PathBuf {
+    match ipa {
+        Some(ipa) => default_output(ipa),
+        None => PathBuf::from(format!("{bundle_id}-decrypted.ipa")),
+    }
 }
 
 fn default_output(ipa: &Path) -> PathBuf {

@@ -6,6 +6,7 @@
 
 pub mod appstore;
 pub mod decrypt;
+pub(crate) mod exec;
 pub mod grandslam;
 pub mod http;
 pub mod ipa;
