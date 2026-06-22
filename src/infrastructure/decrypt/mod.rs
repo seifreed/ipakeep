@@ -6,8 +6,11 @@
 //! back into the archive while zeroing `cryptid` ([`patch_ipa_decrypted`]), and
 //! re-signs a bundle preserving its entitlements ([`resign_app`]).
 
+mod entitlements;
 mod ios;
 mod macho;
+
+pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
 use macho::Slice;
@@ -367,6 +370,247 @@ fn format_version(packed: u32) -> String {
         (packed >> 8) & 0xff,
         packed & 0xff
     )
+}
+
+/// Verdict for one slice of a (supposedly) decrypted Mach-O.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SliceVerify {
+    /// Architecture label.
+    pub arch: String,
+    /// True when no `LC_ENCRYPTION_INFO` retains a non-zero `cryptid`.
+    pub cryptid_zero: bool,
+    /// True when the slice parsed as a structurally valid Mach-O.
+    pub valid: bool,
+    /// Heuristic: the formerly-encrypted region no longer looks like filler
+    /// (not all-zero, not a single repeated byte). `None` when not encrypted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub looks_decrypted: Option<bool>,
+}
+
+/// One Mach-O entry's verification result.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MachoVerify {
+    /// Zip entry path.
+    pub entry: String,
+    /// One verdict per slice.
+    pub slices: Vec<SliceVerify>,
+}
+
+/// Result of verifying a decrypted IPA.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VerifyReport {
+    /// True when every slice is valid and fully decrypted (`cryptid == 0`).
+    pub ok: bool,
+    /// Per Mach-O entry.
+    pub machos: Vec<MachoVerify>,
+    /// `entry[arch]` of every slice still carrying `cryptid != 0`.
+    pub still_encrypted: Vec<String>,
+}
+
+/// Verify that an IPA is fully decrypted: every slice has `cryptid == 0`, parses
+/// cleanly, and its formerly-encrypted region no longer looks like filler.
+///
+/// This is a structural check; confirming the binary actually *loads* requires a
+/// device or an Apple Silicon Mac.
+///
+/// # Errors
+///
+/// Returns an error if the archive cannot be read.
+pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
+    let mut archive = open_archive(ipa_bytes)?;
+    let mut machos = Vec::new();
+    let mut still_encrypted = Vec::new();
+    let mut ok = true;
+
+    for i in 0..archive.len() {
+        let (name, bytes) = read_entry_at(&mut archive, i)?;
+        if !macho::is_macho(&bytes) {
+            continue;
+        }
+        let Ok(slices) = macho::parse(&bytes) else {
+            ok = false;
+            machos.push(MachoVerify {
+                entry: name,
+                slices: Vec::new(),
+            });
+            continue;
+        };
+
+        let mut slice_reports = Vec::new();
+        for slice in &slices {
+            let cryptid_zero = slice.encryption.is_none_or(|e| e.cryptid == 0);
+            let looks_decrypted = slice.encryption.map(|_| {
+                slice
+                    .crypt_range()
+                    .is_some_and(|(s, e)| looks_decrypted(&bytes[s..e]))
+            });
+            if !cryptid_zero {
+                still_encrypted.push(format!("{name}[{}]", slice.arch));
+                ok = false;
+            }
+            slice_reports.push(SliceVerify {
+                arch: slice.arch.clone(),
+                cryptid_zero,
+                valid: true,
+                looks_decrypted,
+            });
+        }
+        machos.push(MachoVerify {
+            entry: name,
+            slices: slice_reports,
+        });
+    }
+
+    Ok(VerifyReport {
+        ok,
+        machos,
+        still_encrypted,
+    })
+}
+
+/// A region "looks decrypted" if it is neither empty, all-zero, nor a single
+/// repeated byte — a cheap guard against an unfilled / still-ciphered region.
+fn looks_decrypted(region: &[u8]) -> bool {
+    match region.first() {
+        None => false,
+        Some(&first) => region.iter().any(|&b| b != first),
+    }
+}
+
+/// Extract and classify a binary's (or bundle's) entitlements by re-sign risk.
+///
+/// # Errors
+///
+/// Returns an error if the executable cannot be located or `codesign` fails.
+pub fn entitlements_report(path: &Path) -> Result<Vec<EntitlementVerdict>, String> {
+    let binary = if path.extension().is_some_and(|e| e == "app") {
+        path.join(bundle_executable_on_disk(path)?)
+    } else {
+        path.to_path_buf()
+    };
+    let xml = extract_entitlements(&binary)?;
+    if xml.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let value = plist::Value::from_reader(Cursor::new(xml.into_bytes()))
+        .map_err(|e| format!("parsing entitlements: {e}"))?;
+    let dict = value
+        .as_dictionary()
+        .ok_or("entitlements are not a plist dictionary")?;
+    Ok(entitlements::classify(dict))
+}
+
+/// Patch every `LC_BUILD_VERSION.minos` and the app's `MinimumOSVersion` down to
+/// `version` (e.g. `"16.0"`), so the IPA *installs* on an older iOS.
+///
+/// Note: installing is not running — apps that call newer APIs crash. The CLI
+/// warns about this; this function only performs the patch.
+///
+/// # Errors
+///
+/// Returns an error if `version` is malformed or no patch target exists.
+pub fn set_min_os(ipa_bytes: &[u8], version: &str) -> Result<Vec<u8>, String> {
+    let packed = parse_version(version)?;
+    let mut archive = open_archive(ipa_bytes)?;
+    let mut patched: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+
+    for i in 0..archive.len() {
+        let (name, mut bytes) = read_entry_at(&mut archive, i)?;
+        if !macho::is_macho(&bytes) {
+            continue;
+        }
+        let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
+        let mut touched = false;
+        for slice in &slices {
+            let Some(build) = slice.build_version else {
+                continue;
+            };
+            let at =
+                usize::try_from(build.command_offset + 12).map_err(|_| "minos offset overflow")?;
+            bytes
+                .get_mut(at..at + 4)
+                .ok_or("minos field out of bounds")?
+                .copy_from_slice(&packed.to_le_bytes());
+            touched = true;
+        }
+        if touched {
+            patched.insert(name, bytes);
+        }
+    }
+
+    if let Some((info_name, info_bytes)) = patched_info_plist(&mut archive, version)? {
+        patched.insert(info_name, info_bytes);
+    }
+
+    if patched.is_empty() {
+        return Err("no LC_BUILD_VERSION or Info.plist found to patch".into());
+    }
+    repack(ipa_bytes, &patched)
+}
+
+/// Parse `"x"`, `"x.y"`, or `"x.y.z"` into a packed `LC_BUILD_VERSION` word.
+fn parse_version(version: &str) -> Result<u32, String> {
+    let mut parts = version.split('.');
+    let mut next = |what: &str| -> Result<u32, String> {
+        match parts.next() {
+            None => Ok(0),
+            Some(p) => p
+                .parse::<u32>()
+                .map_err(|_| format!("invalid {what} in version {version:?}")),
+        }
+    };
+    let major = next("major")?;
+    let minor = next("minor")?;
+    let patch = next("patch")?;
+    if major > 0xffff || minor > 0xff || patch > 0xff {
+        return Err(format!("version out of range: {version:?}"));
+    }
+    Ok((major << 16) | (minor << 8) | patch)
+}
+
+/// Re-serialize the app's `Info.plist` with `MinimumOSVersion = version`.
+fn patched_info_plist<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    version: &str,
+) -> Result<Option<(String, Vec<u8>)>, String> {
+    let Some(info_name) = find_info_plist_name(archive)? else {
+        return Ok(None);
+    };
+    let mut data = Vec::new();
+    archive
+        .by_name(&info_name)
+        .map_err(|e| e.to_string())?
+        .read_to_end(&mut data)
+        .map_err(|e| e.to_string())?;
+    let mut value = plist::Value::from_reader(Cursor::new(data)).map_err(|e| e.to_string())?;
+    let dict = value
+        .as_dictionary_mut()
+        .ok_or("Info.plist is not a dictionary")?;
+    dict.insert(
+        "MinimumOSVersion".to_string(),
+        plist::Value::String(version.to_string()),
+    );
+    let mut buf = Vec::new();
+    value
+        .to_writer_xml(&mut buf)
+        .map_err(|e| format!("re-encoding Info.plist: {e}"))?;
+    Ok(Some((info_name, buf)))
+}
+
+fn find_info_plist_name<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<Option<String>, String> {
+    for i in 0..archive.len() {
+        let name = archive
+            .by_index(i)
+            .map_err(|e| e.to_string())?
+            .name()
+            .to_string();
+        if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

@@ -1,6 +1,9 @@
 //! Decrypt command handlers — inspect, patch, and re-sign.
 
-use crate::infrastructure::decrypt::{InspectReport, inspect_ipa, patch_ipa_decrypted, resign_app};
+use crate::infrastructure::decrypt::{
+    EntitlementRisk, EntitlementVerdict, InspectReport, VerifyReport, entitlements_report,
+    inspect_ipa, patch_ipa_decrypted, resign_app, set_min_os, verify_ipa,
+};
 use crate::presentation::cli::output::OutputFormat;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -53,9 +56,123 @@ pub fn handle_resign(
     Ok(())
 }
 
+/// Verify a (decrypted) IPA structurally.
+///
+/// # Errors
+///
+/// Returns an error if the IPA cannot be read. Returns `Err` when any slice is
+/// still encrypted, so the process exits non-zero.
+pub fn handle_verify(ipa: &Path, format: &OutputFormat) -> Result<(), String> {
+    let bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    let report = verify_ipa(&bytes)?;
+    match format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| format!("serialize failed: {e}"))?
+        ),
+        OutputFormat::Text => print!("{}", render_verify(&report)),
+    }
+    if report.ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "still encrypted: {}",
+            report.still_encrypted.join(", ")
+        ))
+    }
+}
+
+/// Report which entitlements will break after re-signing.
+///
+/// # Errors
+///
+/// Returns an error if the executable cannot be located or `codesign` fails.
+pub fn handle_entitlements(path: &Path, format: &OutputFormat) -> Result<(), String> {
+    let verdicts = entitlements_report(path)?;
+    match format {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&verdicts)
+                .map_err(|e| format!("serialize failed: {e}"))?
+        ),
+        OutputFormat::Text => print!("{}", render_entitlements(&verdicts)),
+    }
+    Ok(())
+}
+
+/// Lower an IPA's `MinimumOSVersion` so it installs on an older iOS.
+///
+/// # Errors
+///
+/// Returns an error if the version is malformed or no patch target exists.
+pub fn handle_set_min_os(ipa: &Path, version: &str, output: Option<&Path>) -> Result<(), String> {
+    let bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    let patched = set_min_os(&bytes, version)?;
+    let out = output.map_or_else(|| min_os_output(ipa), Path::to_path_buf);
+    std::fs::write(&out, patched).map_err(|e| format!("{}: {e}", out.display()))?;
+    eprintln!(
+        "WARNING: lowering MinimumOSVersion lets the IPA INSTALL on iOS {version}, but apps that \
+         call newer APIs usually CRASH at launch. Downgrade rarely yields a runnable app."
+    );
+    println!("Wrote min-os-patched IPA: {}", out.display());
+    Ok(())
+}
+
 fn default_output(ipa: &Path) -> PathBuf {
     let stem = ipa.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
     ipa.with_file_name(format!("{stem}-decrypted.ipa"))
+}
+
+fn min_os_output(ipa: &Path) -> PathBuf {
+    let stem = ipa.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
+    ipa.with_file_name(format!("{stem}-minos.ipa"))
+}
+
+fn render_verify(report: &VerifyReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "Verified: {}", if report.ok { "OK" } else { "FAILED" });
+    for macho in &report.machos {
+        let _ = writeln!(out, "\n{}", macho.entry);
+        if macho.slices.is_empty() {
+            out.push_str("  [invalid Mach-O]\n");
+        }
+        for slice in &macho.slices {
+            let decrypted = match slice.looks_decrypted {
+                Some(true) => " looks-decrypted",
+                Some(false) => " WARNING:looks-filler",
+                None => "",
+            };
+            let _ = writeln!(
+                out,
+                "  [{}] cryptid_zero={} valid={}{decrypted}",
+                slice.arch, slice.cryptid_zero, slice.valid
+            );
+        }
+    }
+    if !report.still_encrypted.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nstill encrypted: {}",
+            report.still_encrypted.join(", ")
+        );
+    }
+    out
+}
+
+fn render_entitlements(verdicts: &[EntitlementVerdict]) -> String {
+    if verdicts.is_empty() {
+        return "No entitlements (or none readable).\n".to_string();
+    }
+    let mut out = String::new();
+    for v in verdicts {
+        let tag = match v.risk {
+            EntitlementRisk::Ok => "OK  ",
+            EntitlementRisk::NeedsProvisioning => "PROV",
+            EntitlementRisk::CannotRegrant => "FAIL",
+        };
+        let _ = writeln!(out, "[{tag}] {} — {}", v.key, v.note);
+    }
+    out
 }
 
 fn render_text(report: &InspectReport) -> String {

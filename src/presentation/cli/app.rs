@@ -174,6 +174,32 @@ pub enum DecryptCommands {
         #[arg(long)]
         entitlements: Option<PathBuf>,
     },
+
+    /// Verify a (decrypted) IPA: every slice has cryptid=0 and looks decrypted.
+    Verify {
+        /// Path to the IPA.
+        ipa: PathBuf,
+    },
+
+    /// Report which entitlements will break after re-signing.
+    Entitlements {
+        /// Path to an extracted .app bundle or a Mach-O binary.
+        path: PathBuf,
+    },
+
+    /// Lower `MinimumOSVersion` so the IPA installs on an older iOS (often crashes).
+    SetMinOs {
+        /// Path to the IPA.
+        ipa: PathBuf,
+
+        /// Target minimum iOS version, e.g. `16.0`.
+        #[arg(long, value_parser = parse_non_empty)]
+        version: String,
+
+        /// Output IPA path (default: `<ipa-stem>-minos.ipa`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Auth subcommands.

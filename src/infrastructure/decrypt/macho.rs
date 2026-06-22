@@ -44,6 +44,8 @@ pub(super) struct EncryptionInfo {
 pub(super) struct BuildVersion {
     pub(super) minos: u32,
     pub(super) sdk: u32,
+    /// Absolute offset of the load command; `minos` lives at `+12`.
+    pub(super) command_offset: u64,
 }
 
 /// One architecture slice of a thin or fat Mach-O.
@@ -138,6 +140,7 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
                     build_version = Some(BuildVersion {
                         minos: read_le_u32(bytes, cmd_at + 12).ok_or("truncated build version")?,
                         sdk: read_le_u32(bytes, cmd_at + 16).ok_or("truncated build version")?,
+                        command_offset: offset,
                     });
                 }
                 _ => {}

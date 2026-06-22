@@ -195,6 +195,13 @@ fn dispatch_decrypt(action: DecryptCommands, format: &OutputFormat) -> Result<()
             identity,
             entitlements,
         } => decrypt::handle_resign(&app, identity.as_deref(), entitlements.as_deref()),
+        DecryptCommands::Verify { ipa } => decrypt::handle_verify(&ipa, format),
+        DecryptCommands::Entitlements { path } => decrypt::handle_entitlements(&path, format),
+        DecryptCommands::SetMinOs {
+            ipa,
+            version,
+            output,
+        } => decrypt::handle_set_min_os(&ipa, &version, output.as_deref()),
     }
 }
 

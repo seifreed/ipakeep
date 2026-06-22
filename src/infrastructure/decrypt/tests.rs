@@ -204,3 +204,93 @@ fn patch_errors_on_size_mismatch() {
     let err = patch_ipa_decrypted(&ipa, dir.path()).unwrap_err();
     assert!(err.contains("cryptsize"), "{err}");
 }
+
+#[test]
+fn verify_flags_still_encrypted_and_passes_after_patch() {
+    let ipa = build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11));
+
+    let before = verify_ipa(&ipa).unwrap();
+    assert!(!before.ok);
+    assert!(
+        before
+            .still_encrypted
+            .iter()
+            .any(|s| s.contains("TestExec") && s.contains("arm64"))
+    );
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let plaintext: Vec<u8> = (0..CRYPTSIZE)
+        .map(|i| u8::try_from(i % 256).unwrap())
+        .collect();
+    std::fs::write(dir.path().join("TestExec.arm64.bin"), &plaintext).unwrap();
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).unwrap();
+
+    let after = verify_ipa(&patched).unwrap();
+    assert!(after.ok, "{:?}", after.still_encrypted);
+    let slice = &after
+        .machos
+        .iter()
+        .find(|m| m.entry.ends_with("TestExec"))
+        .unwrap()
+        .slices[0];
+    assert!(slice.cryptid_zero);
+    assert_eq!(slice.looks_decrypted, Some(true));
+}
+
+#[test]
+fn verify_warns_on_filler_region() {
+    // cryptid=0 but the region is a single repeated byte → looks like filler.
+    let mut macho = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x00);
+    // zero the cryptid (LC_ENCRYPTION_INFO_64 is the first command at offset 32).
+    let cryptid_at = 32 + 16;
+    macho[cryptid_at..cryptid_at + 4].copy_from_slice(&0_u32.to_le_bytes());
+    let report = verify_ipa(&build_ipa(&macho)).unwrap();
+    let slice = &report
+        .machos
+        .iter()
+        .find(|m| m.entry.ends_with("TestExec"))
+        .unwrap()
+        .slices[0];
+    assert!(slice.cryptid_zero);
+    assert_eq!(slice.looks_decrypted, Some(false));
+}
+
+#[test]
+fn set_min_os_patches_build_version_and_info_plist() {
+    let ipa = build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11));
+    let patched = set_min_os(&ipa, "12.0").unwrap();
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(patched)).unwrap();
+    let mut exec = Vec::new();
+    archive
+        .by_name("Payload/Test.app/TestExec")
+        .unwrap()
+        .read_to_end(&mut exec)
+        .unwrap();
+    let slice = &macho::parse(&exec).unwrap()[0];
+    assert_eq!(slice.build_version.unwrap().minos, 12 << 16);
+
+    let mut info = Vec::new();
+    archive
+        .by_name("Payload/Test.app/Info.plist")
+        .unwrap()
+        .read_to_end(&mut info)
+        .unwrap();
+    let plist = plist::Value::from_reader(Cursor::new(info)).unwrap();
+    assert_eq!(
+        plist
+            .as_dictionary()
+            .and_then(|d| d.get("MinimumOSVersion"))
+            .and_then(plist::Value::as_string),
+        Some("12.0")
+    );
+}
+
+#[test]
+fn parse_version_packs_and_validates() {
+    assert_eq!(parse_version("16").unwrap(), 16 << 16);
+    assert_eq!(parse_version("16.4").unwrap(), (16 << 16) | (4 << 8));
+    assert_eq!(parse_version("16.4.1").unwrap(), (16 << 16) | (4 << 8) | 1);
+    assert!(parse_version("16.300").is_err());
+    assert!(parse_version("x.y").is_err());
+}
