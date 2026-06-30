@@ -1,0 +1,4 @@
+interface:
+  display_name: "ipakeep CLI"
+  short_description: "Operate ipakeep App Store IPA workflows"
+  default_prompt: "Use $ipakeep-cli to install, authenticate, download, or decrypt IPAs with ipakeep."
