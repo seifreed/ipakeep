@@ -1,6 +1,6 @@
 [package]
 name = "ipakeep"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Download IPA files from the Apple App Store"
 license = "MIT"
