@@ -273,6 +273,7 @@ fn verify_warns_on_filler_region() {
         .slices[0];
     assert!(slice.cryptid_zero);
     assert_eq!(slice.looks_decrypted, Some(false));
+    assert!(!report.ok);
 }
 
 #[test]

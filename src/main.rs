@@ -6,7 +6,7 @@ use ipakeep::infrastructure::appstore::AppleAppStoreRepository;
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::keychain::FileKeychain;
 use ipakeep::presentation::cli::app::{
-    AuthCommands, Cli, Commands, DecryptCommands, SimulatorCommands,
+    AuthCommands, Cli, Commands, DecryptCommands, DeviceCommands, SimulatorCommands,
 };
 use ipakeep::presentation::cli::output::OutputFormat;
 use std::str::FromStr;
@@ -179,7 +179,29 @@ async fn dispatch_command(
             .await
         }
         Commands::Simulator { action } => dispatch_simulator(action),
+        Commands::Device { action } => dispatch_device(action),
         Commands::Decrypt { action } => dispatch_decrypt(action, format, keychain).await,
+    }
+}
+
+fn dispatch_device(action: DeviceCommands) -> Result<(), String> {
+    use ipakeep::presentation::cli::commands::device;
+    match action {
+        DeviceCommands::InstallIpa {
+            ipa,
+            device: device_id,
+            identity,
+            provisioning_profile,
+            entitlements,
+            run,
+        } => device::handle_install(
+            &ipa,
+            &device_id,
+            &identity,
+            &provisioning_profile,
+            entitlements.as_deref(),
+            run,
+        ),
     }
 }
 

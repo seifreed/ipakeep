@@ -269,6 +269,32 @@ fn simulator_unlock_runtime_accepts_missing_path() {
 }
 
 #[test]
+fn device_install_ipa_requires_signing_inputs() {
+    assert!(Cli::try_parse_from(["ipakeep", "device", "install-ipa", "/tmp/app.ipa"]).is_err());
+
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "device",
+        "install-ipa",
+        "/tmp/app.ipa",
+        "--device",
+        "UDID-1",
+        "--identity",
+        "Apple Development: Test",
+        "--provisioning-profile",
+        "/tmp/app.mobileprovision",
+        "--run",
+    ])
+    .expect("device install should parse");
+    assert!(matches!(
+        cli.command,
+        Commands::Device {
+            action: DeviceCommands::InstallIpa { device, run: true, .. }
+        } if device == "UDID-1"
+    ));
+}
+
+#[test]
 fn decrypt_inspect_accepts_ipa_path() {
     let cli = Cli::try_parse_from(["ipakeep", "decrypt", "inspect", "/tmp/app.ipa"])
         .expect("decrypt inspect should parse");

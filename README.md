@@ -145,6 +145,27 @@ not obvious filler. It cannot prove that the app will launch on another device.
 The resulting IPA still needs to be re-signed with a certificate and matching
 provisioning profile before installation on a non-jailbroken iPhone.
 
+### Install on a physical iPhone
+
+On macOS with Xcode and a paired device, `device install-ipa` verifies the IPA,
+embeds the supplied development profile in the app and extensions, re-signs
+nested code in dependency order, and installs through `devicectl`:
+
+```bash
+ipakeep device install-ipa MyApp-decrypted.ipa \
+  --device <device-udid> \
+  --identity "Apple Development: Your Name (TEAMID)" \
+  --provisioning-profile ./App.mobileprovision \
+  --run
+```
+
+If `--entitlements` is omitted, ipakeep derives the main-app entitlements from
+the provisioning profile. Nested bundles keep their own entitlement sets;
+Apple-private or profile-incompatible capabilities fail during signing instead
+of being silently dropped. A paid Apple Developer team and a registered device
+are required for this route. The command uses `/usr/bin/codesign` and
+`xcrun devicectl`, so it is intentionally a macOS/Xcode workflow.
+
 Lowering `MinimumOSVersion` with `decrypt set-min-os` may make installation
 possible on an older OS, but it does not backport APIs and commonly causes a
 launch crash. Prefer downloading an older App Store version when one exists.
@@ -279,6 +300,7 @@ ipakeep auth revoke
 | `ipakeep simulator run --bundle-id <id> [--inject-dylib <path>] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Launch an installed app on a selected booted Simulator, optionally injecting signed dylibs |
 | `ipakeep simulator install-ipa <ipa> [--run] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Extract, reject encrypted App Store IPAs, prepare, sign, install, and optionally launch a Simulator-compatible IPA. `--console` requires `--run` |
 | `ipakeep simulator unlock-runtime [path]` | Create a read-write overlay for a path inside an iOS `.simruntime`; defaults to the booted Simulator runtime root |
+| `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--run`) |
 
 ### Global Flags
 

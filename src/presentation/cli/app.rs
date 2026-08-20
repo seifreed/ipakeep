@@ -130,11 +130,48 @@ pub enum Commands {
         action: SimulatorCommands,
     },
 
+    /// Re-sign and install a decrypted IPA on a connected iOS device.
+    Device {
+        /// The physical-device subcommand.
+        #[command(subcommand)]
+        action: DeviceCommands,
+    },
+
     /// Inspect, patch, and re-sign FairPlay-decrypted IPAs.
     Decrypt {
         /// The decrypt subcommand.
         #[command(subcommand)]
         action: DecryptCommands,
+    },
+}
+
+/// Physical-device commands.
+#[derive(Subcommand, Debug)]
+pub enum DeviceCommands {
+    /// Sign and install a decrypted IPA with a development profile.
+    InstallIpa {
+        /// Path to a verified, FairPlay-decrypted IPA.
+        ipa: PathBuf,
+
+        /// Device UDID, name, or another `devicectl` identifier.
+        #[arg(long, value_parser = parse_non_empty)]
+        device: String,
+
+        /// Signing identity installed in the local keychain.
+        #[arg(long, value_parser = parse_non_empty)]
+        identity: String,
+
+        /// Development provisioning profile to embed in app and extensions.
+        #[arg(long)]
+        provisioning_profile: PathBuf,
+
+        /// Main-app entitlements; defaults to the profile's entitlements.
+        #[arg(long)]
+        entitlements: Option<PathBuf>,
+
+        /// Launch the app after installation.
+        #[arg(long)]
+        run: bool,
     },
 }
 

@@ -172,6 +172,21 @@ ipakeep decrypt provision Payload/App.app --device-udid <udid> --team <team-id>
 
 `decrypt provision` requires a logged-in account with a paid Apple Developer membership. It writes `embedded.mobileprovision`, `key.pem`, and `certificate.der`, and embeds the profile into the app bundle.
 
+Install a verified decrypted IPA on a paired physical device (macOS/Xcode):
+
+```bash
+ipakeep device install-ipa decrypted.ipa \
+  --device <device-udid> \
+  --identity "Apple Development: you" \
+  --provisioning-profile ./App.mobileprovision \
+  --run
+```
+
+The installer derives main-app entitlements from the profile when
+`--entitlements` is omitted, signs nested code in dependency order, and lets
+`codesign` reject profile-incompatible or Apple-private entitlements. It does
+not make a FairPlay IPA runnable without the preceding dump step.
+
 Lowering the minimum OS version only changes install eligibility and often still crashes at launch:
 
 ```bash
@@ -208,6 +223,10 @@ Decrypt commands:
 - `decrypt dump <bundle-id>`: `--dumper`, `--ipa`, `--device`, `--agent`, `--spawn`, `--settle`, `--output`.
 - `decrypt dump-mac <bundle-id>`: `--ipa`, `--agent`, `--settle`, `--output`.
 - `decrypt provision <app>`: `--device-udid`, `--team`, `--app-id-id`, `--output`.
+
+Physical-device commands:
+
+- `device install-ipa <ipa>`: `--device`, `--identity`, `--provisioning-profile`, optional `--entitlements`, optional `--run`.
 
 ## Troubleshooting
 

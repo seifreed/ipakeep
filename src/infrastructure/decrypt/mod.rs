@@ -460,6 +460,9 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
                 still_encrypted.push(format!("{name}[{}]", slice.arch));
                 ok = false;
             }
+            if looks_decrypted == Some(false) {
+                ok = false;
+            }
             slice_reports.push(SliceVerify {
                 arch: slice.arch.clone(),
                 cryptid_zero,
@@ -481,7 +484,7 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
 }
 
 /// Accept an IPA only when every Mach-O slice passes [`verify_ipa`].
-pub(super) fn ensure_decrypted(ipa_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+pub(crate) fn ensure_decrypted(ipa_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     let report = verify_ipa(&ipa_bytes)?;
     if report.ok {
         return Ok(ipa_bytes);
