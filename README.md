@@ -112,6 +112,43 @@ ipakeep download ludo-star --country es --output ./ipas/
 The downloaded `.ipa` is a ZIP archive with Apple IPA layout. ipakeep patches it
 with the account `sinf` blobs and `iTunesMetadata.plist`.
 
+This step does **not** decrypt FairPlay. The downloaded executable is still
+encrypted, because the App Store response does not contain the plaintext.
+
+### Decrypt a FairPlay IPA
+
+FairPlay decryption requires the app to run on a compatible target so its code
+is decrypted in memory. ipakeep coordinates that dump and patches the dumped
+bytes back into the IPA; it does not decrypt an IPA from the downloaded file
+alone.
+
+```bash
+# Inspect encrypted slices and the exact dump filenames.
+ipakeep decrypt inspect MyApp.ipa
+
+# Dump the running app through Frida, then patch the plaintext slices.
+ipakeep decrypt dump com.example.MyApp --ipa MyApp.ipa --spawn
+
+# Validate that every Mach-O slice is structurally decrypted.
+ipakeep decrypt verify MyApp-decrypted.ipa
+```
+
+The builtin dumper needs `frida-server` reachable over USB (jailbreak,
+TrollStore, or another supported Frida deployment) and
+`pip install frida frida-tools`. The app must be installed and runnable on the
+target; `decrypt inspect` reports which iOS majors satisfy each slice's minimum
+OS. `--dumper frida-ios-dump`, `bagbak`, and `r2flutch` can drive an installed
+third-party dumper instead.
+
+`decrypt verify` proves that `cryptid` is cleared and the dumped regions are
+not obvious filler. It cannot prove that the app will launch on another device.
+The resulting IPA still needs to be re-signed with a certificate and matching
+provisioning profile before installation on a non-jailbroken iPhone.
+
+Lowering `MinimumOSVersion` with `decrypt set-min-os` may make installation
+possible on an older OS, but it does not backport APIs and commonly causes a
+launch crash. Prefer downloading an older App Store version when one exists.
+
 ### Download a Specific Version
 
 ```bash

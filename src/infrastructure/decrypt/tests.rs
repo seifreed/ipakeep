@@ -238,6 +238,26 @@ fn verify_flags_still_encrypted_and_passes_after_patch() {
 }
 
 #[test]
+fn dump_output_is_rejected_until_every_slice_is_decrypted() {
+    let ipa = build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11));
+    let error = ensure_decrypted(ipa).unwrap_err();
+    assert!(error.contains("still encrypted"), "{error}");
+
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("TestExec.arm64.bin"),
+        (0..CRYPTSIZE).map(|value| value as u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let decrypted = patch_ipa_decrypted(
+        &build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11)),
+        dir.path(),
+    )
+    .unwrap();
+    assert!(ensure_decrypted(decrypted).is_ok());
+}
+
+#[test]
 fn verify_warns_on_filler_region() {
     // cryptid=0 but the region is a single repeated byte → looks like filler.
     let mut macho = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x00);

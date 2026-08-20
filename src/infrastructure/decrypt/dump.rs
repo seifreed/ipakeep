@@ -8,7 +8,7 @@
 //! The argv builders are pure and unit-tested; the actual execution needs a
 //! device (USB) or an Apple Silicon Mac (`Local`).
 
-use super::patch_ipa_decrypted;
+use super::{ensure_decrypted, patch_ipa_decrypted};
 use crate::infrastructure::exec::{newest_ipa, require_program, run_inherit, temp_dir};
 use std::path::Path;
 use std::process::Command;
@@ -115,7 +115,7 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     run_inherit(command)?;
 
     let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
-    patch_ipa_decrypted(&ipa_bytes, work)
+    ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
 }
 
 fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>, String> {
@@ -127,7 +127,8 @@ fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>,
 
     let produced = newest_ipa(work)
         .ok_or_else(|| format!("{program} produced no .ipa in {}", work.display()))?;
-    std::fs::read(&produced).map_err(|e| format!("{}: {e}", produced.display()))
+    let bytes = std::fs::read(&produced).map_err(|e| format!("{}: {e}", produced.display()))?;
+    ensure_decrypted(bytes)
 }
 
 /// Argv for the builtin Python runner. Pure for testing.

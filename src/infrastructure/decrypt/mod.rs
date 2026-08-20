@@ -480,6 +480,22 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
     })
 }
 
+/// Accept an IPA only when every Mach-O slice passes [`verify_ipa`].
+pub(super) fn ensure_decrypted(ipa_bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    let report = verify_ipa(&ipa_bytes)?;
+    if report.ok {
+        return Ok(ipa_bytes);
+    }
+
+    if report.still_encrypted.is_empty() {
+        return Err("dump output failed structural verification".into());
+    }
+    Err(format!(
+        "dump output is still encrypted: {}",
+        report.still_encrypted.join(", ")
+    ))
+}
+
 /// A region "looks decrypted" if it is neither empty, all-zero, nor a single
 /// repeated byte — a cheap guard against an unfilled / still-ciphered region.
 fn looks_decrypted(region: &[u8]) -> bool {
