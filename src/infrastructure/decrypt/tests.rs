@@ -246,7 +246,9 @@ fn dump_output_is_rejected_until_every_slice_is_decrypted() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         dir.path().join("TestExec.arm64.bin"),
-        (0..CRYPTSIZE).map(|value| value as u8).collect::<Vec<_>>(),
+        (0..CRYPTSIZE)
+            .map(|value| value.to_le_bytes()[0])
+            .collect::<Vec<_>>(),
     )
     .unwrap();
     let decrypted = patch_ipa_decrypted(

@@ -161,11 +161,11 @@ pub enum DeviceCommands {
         #[arg(long, value_parser = parse_non_empty)]
         identity: String,
 
-        /// Development provisioning profile to embed in app and extensions.
-        #[arg(long)]
-        provisioning_profile: PathBuf,
+        /// Profile for an app/extension; repeat for additional bundle IDs.
+        #[arg(long, required = true)]
+        provisioning_profile: Vec<PathBuf>,
 
-        /// Main-app entitlements; defaults to the profile's entitlements.
+        /// Main-app entitlements override; defaults to the original capabilities.
         #[arg(long)]
         entitlements: Option<PathBuf>,
 

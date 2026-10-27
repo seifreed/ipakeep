@@ -278,7 +278,7 @@ pub fn resign_app(
     result
 }
 
-fn extract_entitlements(executable: &Path) -> Result<String, String> {
+pub(crate) fn extract_entitlements(executable: &Path) -> Result<String, String> {
     let output = Command::new("/usr/bin/codesign")
         .args(["-d", "--entitlements", ":-", "--xml"])
         .arg(executable)

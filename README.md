@@ -25,7 +25,7 @@
 
 ## Overview
 
-**ipakeep** is a Rust toolkit to authenticate with Apple, search the App Store, acquire app licenses, and download IPA files — patched with their DRM `sinf` blobs and `iTunesMetadata.plist` so they are ready to use. It ships both a command-line tool and a library crate, and runs on macOS, Linux, and Windows.
+**ipakeep** is a Rust toolkit to authenticate with Apple, search the App Store, acquire app licenses, and download IPA files — patched with their DRM `sinf` blobs and `iTunesMetadata.plist` while retaining Apple’s FairPlay encryption. It ships both a command-line tool and a library crate, and runs on macOS, Linux, and Windows.
 
 ### Key Features
 
@@ -148,7 +148,7 @@ provisioning profile before installation on a non-jailbroken iPhone.
 ### Install on a physical iPhone
 
 On macOS with Xcode and a paired device, `device install-ipa` verifies the IPA,
-embeds the supplied development profile in the app and extensions, re-signs
+matches supplied development profiles to the app and each extension, re-signs
 nested code in dependency order, and installs through `devicectl`:
 
 ```bash
@@ -159,12 +159,24 @@ ipakeep device install-ipa MyApp-decrypted.ipa \
   --run
 ```
 
-If `--entitlements` is omitted, ipakeep derives the main-app entitlements from
-the provisioning profile. Nested bundles keep their own entitlement sets;
-Apple-private or profile-incompatible capabilities fail during signing instead
-of being silently dropped. A paid Apple Developer team and a registered device
-are required for this route. The command uses `/usr/bin/codesign` and
-`xcrun devicectl`, so it is intentionally a macOS/Xcode workflow.
+Repeat `--provisioning-profile` for extensions with different bundle IDs. An
+explicit App ID profile takes priority over a wildcard profile; missing or
+ambiguous matches fail before signing.
+
+Without `--entitlements`, ipakeep preserves each bundle's original capabilities
+and validates their values against its selected profile. It regenerates the
+application/team identity and the default app keychain group for the new team.
+Shared keychain groups, app groups, iCloud containers, and other custom values
+are preserved and must be authorized by the profile. Changing teams does not
+transfer access to the original team's data or services. A main-app
+`--entitlements` override is an explicit choice to change those capabilities.
+
+Apple-private or incompatible entitlements produce an error naming the key;
+ipakeep does not silently remove them. The device still validates certificates,
+profile expiry, device registration, and runtime compatibility. A valid signing
+identity, matching development profiles, and a registered device are required.
+The command uses `/usr/bin/codesign` and `xcrun devicectl`, so it requires
+macOS/Xcode. See Apple's [entitlements troubleshooting guide](https://developer.apple.com/library/archive/technotes/tn2415/).
 
 Lowering `MinimumOSVersion` with `decrypt set-min-os` may make installation
 possible on an older OS, but it does not backport APIs and commonly causes a

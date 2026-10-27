@@ -182,10 +182,12 @@ ipakeep device install-ipa decrypted.ipa \
   --run
 ```
 
-The installer derives main-app entitlements from the profile when
-`--entitlements` is omitted, signs nested code in dependency order, and lets
-`codesign` reject profile-incompatible or Apple-private entitlements. It does
-not make a FairPlay IPA runnable without the preceding dump step.
+The installer preserves each bundle's original capabilities, validates them
+against its selected profile, and signs nested code in dependency order.
+Repeat `--provisioning-profile` for additional bundle IDs. It regenerates app/team
+identity and the default app keychain group; shared/custom values must remain
+authorized. Incompatible entitlements fail before signing. It does not make a
+FairPlay IPA runnable without the preceding dump step.
 
 Lowering the minimum OS version only changes install eligibility and often still crashes at launch:
 

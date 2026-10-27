@@ -1,7 +1,7 @@
 //! Physical-device installation command handlers.
 
 use crate::infrastructure::device::{self, InstallRequest};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Install a decrypted IPA on a connected iOS device.
 ///
@@ -12,7 +12,7 @@ pub fn handle_install(
     ipa: &Path,
     device_id: &str,
     identity: &str,
-    provisioning_profile: &Path,
+    provisioning_profiles: &[PathBuf],
     entitlements: Option<&Path>,
     launch: bool,
 ) -> Result<(), String> {
@@ -20,7 +20,7 @@ pub fn handle_install(
         ipa,
         device: device_id,
         identity,
-        provisioning_profile,
+        provisioning_profiles,
         entitlements,
         launch,
     })?;

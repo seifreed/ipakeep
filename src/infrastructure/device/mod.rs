@@ -3,9 +3,10 @@
 use crate::infrastructure::decrypt::ensure_decrypted;
 use crate::infrastructure::exec::{require_program, run_inherit, temp_dir};
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+mod signing;
 
 /// Inputs for installing a decrypted IPA on a physical device.
 pub struct InstallRequest<'a> {
@@ -15,9 +16,9 @@ pub struct InstallRequest<'a> {
     pub device: &'a str,
     /// Signing identity installed in the local keychain.
     pub identity: &'a str,
-    /// Development provisioning profile for the app/team.
-    pub provisioning_profile: &'a Path,
-    /// Main-app entitlements. When omitted, they are read from the profile.
+    /// Development profiles matched to the app and nested bundle identifiers.
+    pub provisioning_profiles: &'a [PathBuf],
+    /// Main-app entitlements override. Otherwise preserve the original capabilities.
     pub entitlements: Option<&'a Path>,
     /// Launch the app after installation.
     pub launch: bool,
@@ -25,8 +26,8 @@ pub struct InstallRequest<'a> {
 
 /// Re-sign and install a decrypted IPA with Apple's native `devicectl`.
 ///
-/// Nested bundles retain their own entitlement sets. A profile or entitlement
-/// mismatch is returned by `codesign` instead of being hidden by a deep sign.
+/// Each app/extension uses a matching profile and its own entitlements.
+/// Profile-incompatible capabilities are rejected before installation.
 ///
 /// # Errors
 ///
@@ -47,17 +48,7 @@ pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
 fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
     let app = find_app(workdir)?;
-    embed_profiles(&app, request.provisioning_profile)?;
-    let generated = request
-        .entitlements
-        .is_none()
-        .then(|| profile_entitlements(request.provisioning_profile, workdir))
-        .transpose()?;
-    sign_bundle(
-        &app,
-        request.identity,
-        request.entitlements.or(generated.as_deref()),
-    )?;
+    signing::sign_bundle(&app, request, workdir)?;
     install_app(&app, request.device)?;
     if request.launch {
         launch_app(&app, request.device)?;
@@ -87,48 +78,6 @@ fn find_app(workdir: &Path) -> Result<PathBuf, String> {
     Err("IPA did not contain Payload/*.app".into())
 }
 
-fn embed_profiles(path: &Path, profile: &Path) -> Result<(), String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_dir()
-        && path
-            .extension()
-            .is_some_and(|ext| ext == "app" || ext == "appex")
-    {
-        fs::copy(profile, path.join("embedded.mobileprovision"))
-            .map_err(|error| format!("embedding profile in {}: {error}", path.display()))?;
-    }
-    if metadata.is_dir() {
-        for entry in fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))? {
-            embed_profiles(&entry.map_err(|error| error.to_string())?.path(), profile)?;
-        }
-    }
-    Ok(())
-}
-
-fn sign_bundle(app: &Path, identity: &str, main_entitlements: Option<&Path>) -> Result<(), String> {
-    let mut targets = Vec::new();
-    collect_sign_targets(app, &mut targets)?;
-    targets.sort_by_key(|path| path.components().count());
-    for target in targets.iter().rev() {
-        let mut command = Command::new("/usr/bin/codesign");
-        command.args(["--force", "--sign", identity]);
-        if target == app {
-            if let Some(entitlements) = main_entitlements {
-                command.args(["--entitlements", &entitlements.to_string_lossy()]);
-            }
-        } else {
-            command.arg("--preserve-metadata=identifier,requirements,flags,entitlements");
-        }
-        command.arg(target);
-        run_inherit(command)?;
-    }
-    Ok(())
-}
-
 fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), String> {
     let metadata =
         fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -151,30 +100,6 @@ fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), S
         collect_sign_targets(&entry.map_err(|error| error.to_string())?.path(), targets)?;
     }
     Ok(())
-}
-
-fn profile_entitlements(profile: &Path, workdir: &Path) -> Result<PathBuf, String> {
-    let output = Command::new("/usr/bin/security")
-        .args(["cms", "-D", "-i"])
-        .arg(profile)
-        .output()
-        .map_err(|error| format!("failed to decode provisioning profile: {error}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    let value = plist::Value::from_reader(Cursor::new(output.stdout))
-        .map_err(|error| format!("invalid provisioning profile: {error}"))?;
-    let entitlements = value
-        .as_dictionary()
-        .and_then(|dict| dict.get("Entitlements"))
-        .ok_or("provisioning profile has no Entitlements dictionary")?;
-    let path = workdir.join("profile-entitlements.plist");
-    let mut file =
-        fs::File::create(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    entitlements
-        .to_writer_xml(&mut file)
-        .map_err(|error| format!("writing {}: {error}", path.display()))?;
-    Ok(path)
 }
 
 fn install_app(app: &Path, device: &str) -> Result<(), String> {
@@ -213,6 +138,17 @@ fn bundle_identifier(app: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_profile_before_embedding_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let app = dir.path().join("App.app");
+        fs::create_dir(&app).unwrap();
+        let profile = dir.path().join("invalid.mobileprovision");
+        fs::write(&profile, b"not a provisioning profile").unwrap();
+        assert!(signing::Profile::read(&profile).is_err());
+        assert!(!app.join("embedded.mobileprovision").exists());
+    }
 
     #[test]
     fn collect_sign_targets_places_nested_code_before_app() {

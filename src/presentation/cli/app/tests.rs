@@ -295,6 +295,28 @@ fn device_install_ipa_requires_signing_inputs() {
 }
 
 #[test]
+fn device_install_accepts_multiple_profiles() {
+    let cli = Cli::try_parse_from([
+        "ipakeep",
+        "device",
+        "install-ipa",
+        "app.ipa",
+        "--device",
+        "UDID",
+        "--identity",
+        "Test",
+        "--provisioning-profile",
+        "app.mobileprovision",
+        "--provisioning-profile",
+        "widget.mobileprovision",
+    ])
+    .unwrap();
+    assert!(matches!(cli.command, Commands::Device {
+        action: DeviceCommands::InstallIpa { provisioning_profile, .. }
+    } if provisioning_profile.len() == 2));
+}
+
+#[test]
 fn decrypt_inspect_accepts_ipa_path() {
     let cli = Cli::try_parse_from(["ipakeep", "decrypt", "inspect", "/tmp/app.ipa"])
         .expect("decrypt inspect should parse");
