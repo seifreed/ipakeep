@@ -404,3 +404,17 @@ fn real_ipa_inspect_patch_verify_roundtrip() {
         verified.still_encrypted
     );
 }
+
+#[test]
+fn verify_rejects_archive_without_macho_code() {
+    let ipa = build_ipa(b"not executable code");
+    assert!(!verify_ipa(&ipa).unwrap().ok);
+    assert!(ensure_decrypted(ipa).is_err());
+}
+
+#[test]
+fn verify_rejects_fat_binary_without_slices() {
+    let ipa = build_ipa(&fat_macho(&[]));
+    assert!(!verify_ipa(&ipa).unwrap().ok);
+    assert!(ensure_decrypted(ipa).is_err());
+}

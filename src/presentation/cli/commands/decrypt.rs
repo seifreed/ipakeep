@@ -77,6 +77,8 @@ pub fn handle_verify(ipa: &Path, format: &OutputFormat) -> Result<(), String> {
     }
     if report.ok {
         Ok(())
+    } else if report.still_encrypted.is_empty() {
+        Err("IPA failed structural verification (missing, malformed, or filler Mach-O code)".into())
     } else {
         Err(format!(
             "still encrypted: {}",

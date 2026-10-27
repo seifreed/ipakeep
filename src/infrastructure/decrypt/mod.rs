@@ -448,6 +448,7 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
             continue;
         };
 
+        ok &= !slices.is_empty();
         let mut slice_reports = Vec::new();
         for slice in &slices {
             let cryptid_zero = slice.encryption.is_none_or(|e| e.cryptid == 0);
@@ -477,7 +478,7 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
     }
 
     Ok(VerifyReport {
-        ok,
+        ok: ok && !machos.is_empty(),
         machos,
         still_encrypted,
     })
