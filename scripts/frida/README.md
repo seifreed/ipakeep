@@ -42,19 +42,31 @@ For every encrypted slice, `inspect` prints `dump as: <module-basename>.<arch>.b
 matches them back by basename + arch and verifies each file is exactly `cryptsize`
 bytes before overlaying `[cryptoff, cryptoff+cryptsize)`.
 
-## iOS support (June 2026)
+## Minimum iOS versions and device requirements
 
-Targets the three live majors: **iOS 18, 26, 27**. `inspect` reports each slice's
-`MinimumOSVersion` and a per-major dumpable matrix — an app only dumps on a device
-whose iOS major is ≥ the app's minimum. arm64e (PAC) is handled: PAC signs code
-pointers, not data, so reading the mapped `__TEXT` region is unaffected.
+`inspect` displays the declared minimum OS for each slice and a coarse matrix
+for majors 18, 26, and 27. These columns are **version comparisons, not a tested
+support matrix**. Check the full version, including minor and patch, against
+the device. Loading also depends on architecture, APIs, entitlements, and the
+availability of Frida with sufficient access on that device.
+
+Lowering `MinimumOSVersion` does not backport APIs or grant capabilities. Use a
+compatible device or an older app version instead. The host must run the same
+app build as the IPA being patched; equal dump sizes alone do not prove this.
+
+Only code loaded in the attached process is dumped. To include an app extension,
+activate it and attach the runner to its process/PID using the same `--out`
+directory. Repeat for separately running components before `decrypt patch`.
+Missing encrypted slices cause patching to fail. `decrypt verify` is structural
+validation; test the resulting app on the intended target after re-signing.
 
 ## Getting frida-server onto the device (no full jailbreak needed)
 
 The runner attaches the same way regardless of how `frida-server` got there:
 
 - **Jailbroken**: install the Frida package from the Cydia/Sileo repo.
-- **TrollStore**: install a Frida-server `.tipa`, or embed the Frida gadget.
+- **TrollStore**: a deployment that actually grants Frida access to the target
+  process is required; installing Gadget in another app is not sufficient.
 - **Rootless jailbreak** (Dopamine etc.): the rootless Frida package.
 
 ## Apple Silicon Mac route (`--device local` / `decrypt dump-mac`)
@@ -84,3 +96,8 @@ touch SIP, use the USB-device route above (jailbreak / TrollStore / rootless).
 - A device with `frida-server` reachable over USB (any of the above) **or** an
   Apple Silicon Mac with SIP disabled running the iOS app (`--device local`).
 - `pip install frida frida-tools`.
+
+A stock iPhone with Developer Mode supports Frida instrumentation of debuggable
+apps, not arbitrary encrypted App Store processes. See the official
+[Frida iOS documentation](https://frida.re/docs/ios/). Re-signing a decrypted IPA
+for a stock phone is a separate operation from obtaining the plaintext.

@@ -37,6 +37,8 @@
 | **Search & lookup** | Public iTunes Search/Lookup by term or bundle identifier |
 | **Purchase** | Acquire a free-app license via `buyProduct` |
 | **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist` |
+| **Device decryption** | Builtin Frida dump orchestration, patching, and structural verification; requires access to the running app |
+| **Physical-device install** | Match provisioning profiles per bundle, preserve authorized capabilities, sign and install decrypted IPAs |
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
@@ -141,6 +143,25 @@ builds; `--agent` overrides the runner. The app must be installed and runnable o
 target; `decrypt inspect` reports which iOS majors satisfy each slice's minimum
 OS. `--dumper frida-ios-dump`, `bagbak`, and `r2flutch` can drive an installed
 third-party dumper instead.
+
+A normal, non-jailbroken iPhone can install a properly re-signed **decrypted**
+IPA, but pairing it or enabling Developer Mode does not grant access to an
+App Store app's decrypted memory. Frida's stock-device mode is for debuggable
+apps; it is not a general FairPlay decryption route. See the
+[Frida iOS requirements](https://frida.re/docs/ios/).
+
+The iOS-major matrix in `inspect` only compares declared minimum versions at
+major-version granularity. Compare the full `minimum_os` (including minor/patch)
+with the target OS as well. It does not establish Frida availability, entitlement
+compatibility, or that the app will launch. Changing the minimum version cannot
+supply missing APIs or grant entitlements.
+
+The dumper reads code loaded in the selected process. Extensions run separately,
+and unloaded frameworks cannot be recovered by waiting alone. If encrypted
+slices remain, the command fails rather than publishing an incomplete IPA.
+For such apps, collect the additional process dumps into the same directory
+with the [Frida bridge](scripts/frida/README.md), then use `decrypt patch` and
+`decrypt verify`.
 
 `decrypt verify` proves that `cryptid` is cleared and the dumped regions are
 not obvious filler. It cannot prove that the app will launch on another device.
