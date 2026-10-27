@@ -189,6 +189,11 @@ identity and the default app keychain group; shared/custom values must remain
 authorized. Incompatible entitlements fail before signing. It does not make a
 FairPlay IPA runnable without the preceding dump step.
 
+For iOS 16, use `device install-ipa --legacy-device` with a USB UDID and
+`ideviceinstaller` 1.2+ installed. `--run` also requires `idevicedebug`, a mounted
+compatible Developer Disk Image, and a debuggable signature. This route keeps
+the same IPA, profile, and entitlement validation as the default installer.
+
 Lowering the minimum OS version only changes install eligibility and often still crashes at launch:
 
 ```bash
@@ -228,7 +233,7 @@ Decrypt commands:
 
 Physical-device commands:
 
-- `device install-ipa <ipa>`: `--device`, `--identity`, `--provisioning-profile`, optional `--entitlements`, optional `--run`.
+- `device install-ipa <ipa>`: `--device`, `--identity`, `--provisioning-profile`, optional `--entitlements`, optional `--run`, `--legacy-device` for iOS 16.
 
 ## Troubleshooting
 

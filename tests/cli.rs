@@ -125,3 +125,23 @@ fn builtin_dump_runner_is_available_outside_the_repository() {
         .failure()
         .stderr(contains("bundled-runner-found"));
 }
+
+#[test]
+fn legacy_device_install_checks_tools_before_signing() {
+    let mut cmd = Command::cargo_bin("ipakeep").unwrap();
+    cmd.env("PATH", "").args([
+        "device",
+        "install-ipa",
+        "test.ipa",
+        "--device",
+        "UDID",
+        "--identity",
+        "Test",
+        "--provisioning-profile",
+        "test.mobileprovision",
+        "--legacy-device",
+    ]);
+    cmd.assert()
+        .failure()
+        .stderr(contains("`ideviceinstaller` not found on PATH"));
+}

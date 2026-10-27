@@ -1,29 +1,18 @@
 //! Physical-device installation command handlers.
 
 use crate::infrastructure::device::{self, InstallRequest};
-use std::path::{Path, PathBuf};
 
 /// Install a decrypted IPA on a connected iOS device.
 ///
 /// # Errors
 ///
-/// Returns an error if verification, signing, or `devicectl` fails.
-pub fn handle_install(
-    ipa: &Path,
-    device_id: &str,
-    identity: &str,
-    provisioning_profiles: &[PathBuf],
-    entitlements: Option<&Path>,
-    launch: bool,
-) -> Result<(), String> {
-    device::install_ipa(&InstallRequest {
-        ipa,
-        device: device_id,
-        identity,
-        provisioning_profiles,
-        entitlements,
-        launch,
-    })?;
-    println!("Installed on device {device_id}: {}", ipa.display());
+/// Returns an error if verification, signing, or the device tools fail.
+pub fn handle_install(request: &InstallRequest<'_>) -> Result<(), String> {
+    device::install_ipa(request)?;
+    println!(
+        "Installed on device {}: {}",
+        request.device,
+        request.ipa.display()
+    );
     Ok(())
 }

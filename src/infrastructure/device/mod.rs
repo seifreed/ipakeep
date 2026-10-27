@@ -12,7 +12,7 @@ mod signing;
 pub struct InstallRequest<'a> {
     /// IPA whose Mach-O slices must already be decrypted.
     pub ipa: &'a Path,
-    /// Connected device identifier accepted by `devicectl`.
+    /// Device identifier; a USB UDID is required for legacy devices.
     pub device: &'a str,
     /// Signing identity installed in the local keychain.
     pub identity: &'a str,
@@ -22,9 +22,11 @@ pub struct InstallRequest<'a> {
     pub entitlements: Option<&'a Path>,
     /// Launch the app after installation.
     pub launch: bool,
+    /// Use libimobiledevice for devices not supported by `devicectl` (iOS 16).
+    pub legacy_device: bool,
 }
 
-/// Re-sign and install a decrypted IPA with Apple's native `devicectl`.
+/// Re-sign and install a decrypted IPA through the selected device tools.
 ///
 /// Each app/extension uses a matching profile and its own entitlements.
 /// Profile-incompatible capabilities are rejected before installation.
@@ -34,7 +36,14 @@ pub struct InstallRequest<'a> {
 /// Returns an error when the IPA is encrypted, signing fails, or the device
 /// tools reject the installation.
 pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
-    require_program("xcrun")?;
+    require_program(if request.legacy_device {
+        "ideviceinstaller"
+    } else {
+        "xcrun"
+    })?;
+    if request.legacy_device && request.launch {
+        require_program("idevicedebug")?;
+    }
     let ipa_bytes =
         fs::read(request.ipa).map_err(|error| format!("{}: {error}", request.ipa.display()))?;
     ensure_decrypted(ipa_bytes)?;
@@ -49,9 +58,13 @@ fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<()
     extract_ipa(request.ipa, workdir)?;
     let app = find_app(workdir)?;
     signing::sign_bundle(&app, request, workdir)?;
-    install_app(&app, request.device)?;
+    run_inherit(install_command(&app, request.device, request.legacy_device))?;
     if request.launch {
-        launch_app(&app, request.device)?;
+        run_inherit(launch_command(
+            &bundle_identifier(&app)?,
+            request.device,
+            request.legacy_device,
+        ))?;
     }
     Ok(())
 }
@@ -102,26 +115,39 @@ fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), S
     Ok(())
 }
 
-fn install_app(app: &Path, device: &str) -> Result<(), String> {
-    let mut command = Command::new("/usr/bin/xcrun");
-    command.args(["devicectl", "device", "install", "app", "--device", device]);
+fn install_command(app: &Path, device: &str, legacy: bool) -> Command {
+    let mut command = if legacy {
+        let mut command = Command::new("ideviceinstaller");
+        command.args(["--udid", device, "install"]);
+        command
+    } else {
+        let mut command = Command::new("/usr/bin/xcrun");
+        command.args(["devicectl", "device", "install", "app", "--device", device]);
+        command
+    };
     command.arg(app);
-    run_inherit(command)
+    command
 }
 
-fn launch_app(app: &Path, device: &str) -> Result<(), String> {
-    let bundle_id = bundle_identifier(app)?;
-    let mut command = Command::new("/usr/bin/xcrun");
-    command.args([
-        "devicectl",
-        "device",
-        "process",
-        "launch",
-        "--device",
-        device,
-    ]);
+fn launch_command(bundle_id: &str, device: &str, legacy: bool) -> Command {
+    let mut command = if legacy {
+        let mut command = Command::new("idevicedebug");
+        command.args(["--udid", device, "--detach", "run"]);
+        command
+    } else {
+        let mut command = Command::new("/usr/bin/xcrun");
+        command.args([
+            "devicectl",
+            "device",
+            "process",
+            "launch",
+            "--device",
+            device,
+        ]);
+        command
+    };
     command.arg(bundle_id);
-    run_inherit(command)
+    command
 }
 
 fn bundle_identifier(app: &Path) -> Result<String, String> {
@@ -181,5 +207,54 @@ mod tests {
         .unwrap();
         fs::write(app.join("Info.plist"), info).unwrap();
         assert_eq!(bundle_identifier(&app).unwrap(), "com.example.app");
+    }
+
+    #[test]
+    fn install_commands_preserve_device_and_bundle_paths() {
+        let app = Path::new("/tmp/My App.app");
+        let legacy = install_command(app, "USB-UDID", true);
+        assert_eq!(legacy.get_program(), "ideviceinstaller");
+        assert_eq!(
+            legacy.get_args().collect::<Vec<_>>(),
+            ["--udid", "USB-UDID", "install", "/tmp/My App.app"]
+        );
+        let native = install_command(app, "iPhone Name", false);
+        assert_eq!(native.get_program(), "/usr/bin/xcrun");
+        assert_eq!(
+            native.get_args().collect::<Vec<_>>(),
+            [
+                "devicectl",
+                "device",
+                "install",
+                "app",
+                "--device",
+                "iPhone Name",
+                "/tmp/My App.app"
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_launch_detaches_while_native_launch_uses_devicectl() {
+        let legacy = launch_command("com.example.test", "USB-UDID", true);
+        assert_eq!(legacy.get_program(), "idevicedebug");
+        assert_eq!(
+            legacy.get_args().collect::<Vec<_>>(),
+            ["--udid", "USB-UDID", "--detach", "run", "com.example.test"]
+        );
+        let native = launch_command("com.example.test", "iPhone Name", false);
+        assert_eq!(native.get_program(), "/usr/bin/xcrun");
+        assert_eq!(
+            native.get_args().collect::<Vec<_>>(),
+            [
+                "devicectl",
+                "device",
+                "process",
+                "launch",
+                "--device",
+                "iPhone Name",
+                "com.example.test"
+            ]
+        );
     }
 }

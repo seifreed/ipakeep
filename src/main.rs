@@ -185,6 +185,7 @@ async fn dispatch_command(
 }
 
 fn dispatch_device(action: DeviceCommands) -> Result<(), String> {
+    use ipakeep::infrastructure::device::InstallRequest;
     use ipakeep::presentation::cli::commands::device;
     match action {
         DeviceCommands::InstallIpa {
@@ -194,14 +195,16 @@ fn dispatch_device(action: DeviceCommands) -> Result<(), String> {
             provisioning_profile,
             entitlements,
             run,
-        } => device::handle_install(
-            &ipa,
-            &device_id,
-            &identity,
-            &provisioning_profile,
-            entitlements.as_deref(),
-            run,
-        ),
+            legacy_device,
+        } => device::handle_install(&InstallRequest {
+            ipa: &ipa,
+            device: &device_id,
+            identity: &identity,
+            provisioning_profiles: &provisioning_profile,
+            entitlements: entitlements.as_deref(),
+            launch: run,
+            legacy_device,
+        }),
     }
 }
 

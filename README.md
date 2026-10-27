@@ -182,6 +182,22 @@ ipakeep device install-ipa MyApp-decrypted.ipa \
   --run
 ```
 
+For iOS 16 devices that `devicectl` cannot address, add `--legacy-device`
+and use the USB UDID reported by `idevice_id -l`:
+
+```bash
+brew install ideviceinstaller libimobiledevice
+ipakeep device install-ipa MyApp-decrypted.ipa \
+  --legacy-device --device <usb-udid> \
+  --identity "Apple Development: Your Name (TEAMID)" \
+  --provisioning-profile ./App.mobileprovision
+```
+
+This route uses `ideviceinstaller` 1.2+ for installation and, when `--run` is
+requested, `idevicedebug --detach` for launch. Launch requires a compatible
+Developer Disk Image mounted on the device and a debuggable development
+signature. Signing and entitlement checks are the same as the default route.
+
 Repeat `--provisioning-profile` for extensions with different bundle IDs. An
 explicit App ID profile takes priority over a wildcard profile; missing or
 ambiguous matches fail before signing.
@@ -335,7 +351,7 @@ ipakeep auth revoke
 | `ipakeep simulator run --bundle-id <id> [--inject-dylib <path>] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Launch an installed app on a selected booted Simulator, optionally injecting signed dylibs |
 | `ipakeep simulator install-ipa <ipa> [--run] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Extract, reject encrypted App Store IPAs, prepare, sign, install, and optionally launch a Simulator-compatible IPA. `--console` requires `--run` |
 | `ipakeep simulator unlock-runtime [path]` | Create a read-write overlay for a path inside an iOS `.simruntime`; defaults to the booted Simulator runtime root |
-| `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--run`) |
+| `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--legacy-device`, `--run`) |
 
 ### Global Flags
 

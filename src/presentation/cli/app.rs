@@ -172,6 +172,10 @@ pub enum DeviceCommands {
         /// Launch the app after installation.
         #[arg(long)]
         run: bool,
+
+        /// Use libimobiledevice for iOS 16; --device must be a USB UDID.
+        #[arg(long)]
+        legacy_device: bool,
     },
 }
 
