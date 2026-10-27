@@ -131,8 +131,8 @@ pub struct DumpArgs<'a> {
     pub ipa: Option<&'a Path>,
     /// Frida device (`usb`/`local`).
     pub device: &'a str,
-    /// Path to the builtin Frida runner.
-    pub agent: &'a Path,
+    /// Custom Frida runner; `None` uses the bundled scripts.
+    pub agent: Option<&'a Path>,
     /// Spawn rather than attach (builtin).
     pub spawn: bool,
     /// Settle seconds (builtin).
@@ -178,7 +178,7 @@ pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
 pub fn handle_dump_mac(
     bundle_id: &str,
     ipa: &Path,
-    agent: &Path,
+    agent: Option<&Path>,
     settle: f64,
     output: Option<&Path>,
 ) -> Result<(), String> {

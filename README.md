@@ -135,7 +135,9 @@ ipakeep decrypt verify MyApp-decrypted.ipa
 
 The builtin dumper needs `frida-server` reachable over USB (jailbreak,
 TrollStore, or another supported Frida deployment) and
-`pip install frida frida-tools`. The app must be installed and runnable on the
+`python3 -m pip install frida frida-tools` for the Python on your PATH. The
+runner and JavaScript agent are bundled in the binary, including `cargo install`
+builds; `--agent` overrides the runner. The app must be installed and runnable on the
 target; `decrypt inspect` reports which iOS majors satisfy each slice's minimum
 OS. `--dumper frida-ios-dump`, `bagbak`, and `r2flutch` can drive an installed
 third-party dumper instead.

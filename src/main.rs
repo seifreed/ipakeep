@@ -242,7 +242,7 @@ async fn dispatch_decrypt(
             dumper: &dumper,
             ipa: ipa.as_deref(),
             device: &device,
-            agent: &agent,
+            agent: agent.as_deref(),
             spawn,
             settle,
             output: output.as_deref(),
@@ -253,7 +253,13 @@ async fn dispatch_decrypt(
             agent,
             settle,
             output,
-        } => decrypt::handle_dump_mac(&bundle_id, &ipa, &agent, settle, output.as_deref()),
+        } => decrypt::handle_dump_mac(
+            &bundle_id,
+            &ipa,
+            agent.as_deref(),
+            settle,
+            output.as_deref(),
+        ),
         DecryptCommands::Provision {
             app,
             device_udid,

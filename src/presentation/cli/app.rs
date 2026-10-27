@@ -256,9 +256,9 @@ pub enum DecryptCommands {
         #[arg(long, default_value = "usb")]
         device: String,
 
-        /// Path to the builtin Frida runner.
-        #[arg(long, default_value = "scripts/frida/ipakeep_dump.py")]
-        agent: PathBuf,
+        /// Custom Frida runner; defaults to the scripts bundled in ipakeep.
+        #[arg(long)]
+        agent: Option<PathBuf>,
 
         /// Spawn the app instead of attaching (builtin).
         #[arg(long)]
@@ -283,9 +283,9 @@ pub enum DecryptCommands {
         #[arg(long)]
         ipa: PathBuf,
 
-        /// Path to the builtin Frida runner.
-        #[arg(long, default_value = "scripts/frida/ipakeep_dump.py")]
-        agent: PathBuf,
+        /// Custom Frida runner; defaults to the scripts bundled in ipakeep.
+        #[arg(long)]
+        agent: Option<PathBuf>,
 
         /// Seconds to wait for lazily-loaded frameworks.
         #[arg(long, default_value = "5")]

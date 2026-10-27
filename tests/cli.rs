@@ -95,3 +95,33 @@ fn list_versions_requires_app_reference() {
     cmd.arg("list-versions");
     cmd.assert().failure().stderr(contains("required"));
 }
+
+#[cfg(unix)]
+#[test]
+fn builtin_dump_runner_is_available_outside_the_repository() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new().unwrap();
+    let python = dir.path().join("python3");
+    std::fs::write(
+        &python,
+        concat!(
+            "#!/bin/sh\n",
+            "test -f \"$1\" || exit 91\n",
+            "test -f \"$(dirname \"$1\")/ipakeep_dump.js\" || exit 92\n",
+            "echo bundled-runner-found >&2\nexit 93\n",
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut paths = vec![dir.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let mut cmd = Command::cargo_bin("ipakeep").unwrap();
+    cmd.current_dir(dir.path())
+        .env("PATH", std::env::join_paths(paths).unwrap())
+        .args(["decrypt", "dump", "com.example.test", "--ipa", "test.ipa"]);
+    cmd.assert()
+        .failure()
+        .stderr(contains("bundled-runner-found"));
+}

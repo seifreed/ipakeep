@@ -10,7 +10,7 @@
 
 use super::{ensure_decrypted, patch_ipa_decrypted};
 use crate::infrastructure::exec::{newest_ipa, require_program, run_inherit, temp_dir};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Which dumper backend to drive.
@@ -73,8 +73,8 @@ pub struct DumpRequest<'a> {
     pub ipa: Option<&'a Path>,
     /// Frida device for the builtin backend.
     pub device: DumpDevice,
-    /// Path to `ipakeep_dump.py` for the builtin backend.
-    pub agent: &'a Path,
+    /// Custom runner for the builtin backend; `None` uses bundled scripts.
+    pub agent: Option<&'a Path>,
     /// Seconds to wait for lazily-loaded frameworks (builtin).
     pub settle: f64,
     /// Spawn the app rather than attach (builtin).
@@ -102,8 +102,9 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
         .ipa
         .ok_or("builtin dumper needs --ipa <encrypted.ipa> to patch")?;
     require_program("python3")?;
+    let agent = prepare_agent(req.agent, work)?;
     let (program, args) = builtin_argv(
-        req.agent,
+        &agent,
         req.bundle_id,
         req.device,
         work,
@@ -116,6 +117,27 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
 
     let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
+}
+
+fn prepare_agent(override_path: Option<&Path>, work: &Path) -> Result<PathBuf, String> {
+    if let Some(path) = override_path {
+        return Ok(path.to_path_buf());
+    }
+    let directory = work.join("agent");
+    std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
+    for (name, contents) in [
+        (
+            "ipakeep_dump.py",
+            include_str!("../../../scripts/frida/ipakeep_dump.py"),
+        ),
+        (
+            "ipakeep_dump.js",
+            include_str!("../../../scripts/frida/ipakeep_dump.js"),
+        ),
+    ] {
+        std::fs::write(directory.join(name), contents).map_err(|error| error.to_string())?;
+    }
+    Ok(directory.join("ipakeep_dump.py"))
 }
 
 fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>, String> {
