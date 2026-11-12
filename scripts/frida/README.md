@@ -13,10 +13,11 @@ reference implementation.
 ipakeep decrypt inspect MyApp.ipa
 
 # 2. On a device with the app installed, dump the decrypted slices.
-python scripts/frida/ipakeep_dump.py --out dump/ --spawn com.example.MyApp
+python scripts/frida/ipakeep_dump.py --out dump/ --ipa MyApp.ipa --spawn com.example.MyApp
 #   --spawn launches the app; the agent hooks dlopen so lazily-loaded
-#   frameworks are dumped too. --settle <sec> waits for them before the final
-#   sweep. Only the app bundle's own Mach-Os are dumped.
+#   frameworks are dumped too. During --settle <sec>, the runner also watches
+#   for extension executables listed in MyApp.ipa and attaches when iOS runs
+#   them. Only the app bundle's own Mach-Os are dumped.
 
 # 3. Patch the dumped plaintext back in (cryptid -> 0, region replaced).
 ipakeep decrypt patch MyApp.ipa --from dump/ -o MyApp-decrypted.ipa
@@ -33,7 +34,7 @@ ipakeep decrypt resign Payload/MyApp.app --identity "Apple Development: you"
 ```
 
 The agent exposes two RPC calls the runner drives: `arm()` installs the dlopen
-hook and does the initial sweep; `sweep()` is the final pass after `--settle`.
+hook and does the initial sweep; `sweep()` runs during and after `--settle`.
 
 ## Filename convention
 
@@ -85,7 +86,7 @@ So the Mac route needs, once:
 
 1. Disable SIP: reboot to Recovery → Terminal → `csrutil disable` → reboot.
 2. Launch the app normally (`open -b <bundle-id>`), then attach as root:
-   `sudo python3 ipakeep_dump.py --device local --out dump/ "<App Name or PID>"`.
+   `sudo python3 ipakeep_dump.py --ipa MyApp.ipa --device local --out dump/ "<App Name or PID>"`.
 
 This is "no jailbreak" but not "no system changes" — SIP-off lowers the Mac's
 security globally; re-enable it (`csrutil enable`) when done. If you'd rather not

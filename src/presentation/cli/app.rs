@@ -268,7 +268,7 @@ pub enum DecryptCommands {
         #[arg(long)]
         spawn: bool,
 
-        /// Seconds to wait for lazily-loaded frameworks (builtin).
+        /// Seconds to wait for lazily-loaded frameworks and extension processes (builtin).
         #[arg(long, default_value = "5")]
         settle: f64,
 

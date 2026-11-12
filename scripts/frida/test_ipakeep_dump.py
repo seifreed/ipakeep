@@ -3,12 +3,20 @@
 import shutil
 import subprocess
 import sys
+import plistlib
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 sys.modules["frida"] = ModuleType("frida")
-from ipakeep_dump import attach_target
+from ipakeep_dump import (
+    attach_target,
+    extension_executables,
+    is_extension_process,
+    watch_extensions,
+)
 
 
 class FakeDevice:
@@ -17,6 +25,47 @@ class FakeDevice:
 
     def enumerate_applications(self):
         return self.applications
+
+
+class FakeScript:
+    def __init__(self):
+        self.sweeps = 0
+        self.exports_sync = SimpleNamespace(arm=lambda: "bundle-root", sweep=self.sweep)
+
+    def on(self, _event, _callback):
+        pass
+
+    def load(self):
+        pass
+
+    def sweep(self):
+        self.sweeps += 1
+
+
+class FakeSession:
+    def __init__(self):
+        self.script = FakeScript()
+        self.detached = False
+
+    def create_script(self, _source):
+        return self.script
+
+    def detach(self):
+        self.detached = True
+
+
+class FakeProcessDevice:
+    def __init__(self):
+        self.processes = [SimpleNamespace(pid=42, name="Notify")]
+        self.session = FakeSession()
+        self.attached = []
+
+    def enumerate_processes(self):
+        return self.processes
+
+    def attach(self, pid):
+        self.attached.append(pid)
+        return self.session
 
 
 class AttachTargetTests(unittest.TestCase):
@@ -37,6 +86,54 @@ class AttachTargetTests(unittest.TestCase):
         device = FakeDevice([])
         self.assertEqual(attach_target(device, "Example"), "Example")
         self.assertEqual(attach_target(device, "1234"), 1234)
+
+    def test_ipa_extension_executables_are_discovered(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_path = Path(temp_dir) / "app.ipa"
+            with zipfile.ZipFile(ipa_path, "w") as ipa:
+                ipa.writestr(
+                    "Payload/Example.app/PlugIns/Notify.appex/Info.plist",
+                    plistlib.dumps({"CFBundleExecutable": "NotificationService"}),
+                )
+                ipa.writestr(
+                    "Payload/Example.app/Info.plist",
+                    plistlib.dumps({"CFBundleExecutable": "Example"}),
+                )
+
+            self.assertEqual(extension_executables(str(ipa_path)), {"NotificationService"})
+
+    def test_extension_process_matches_executable_or_qualified_name(self):
+        executables = {"NotificationService"}
+        self.assertTrue(is_extension_process("NotificationService", executables))
+        self.assertTrue(is_extension_process("com.example.NotificationService", executables))
+        self.assertFalse(is_extension_process("Example", executables))
+
+    def test_invalid_extension_plist_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_path = Path(temp_dir) / "app.ipa"
+            with zipfile.ZipFile(ipa_path, "w") as ipa:
+                ipa.writestr(
+                    "Payload/Example.app/PlugIns/Notify.appex/Info.plist", "not a plist"
+                )
+
+            with self.assertRaisesRegex(ValueError, "invalid extension plist"):
+                extension_executables(str(ipa_path))
+
+    def test_running_extension_process_is_attached_and_swept(self):
+        device = FakeProcessDevice()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            watch_extensions(
+                device,
+                {"Notify"},
+                str(Path(__file__).with_name("ipakeep_dump.js")),
+                temp_dir,
+                [],
+                0.01,
+            )
+
+        self.assertEqual(device.attached, [42])
+        self.assertTrue(device.session.script.sweeps >= 1)
+        self.assertTrue(device.session.detached)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not installed")
     def test_agent_dumps_regions_after_ios_clears_cryptid(self):

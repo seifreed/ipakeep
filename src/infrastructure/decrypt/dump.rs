@@ -77,7 +77,7 @@ pub struct DumpRequest<'a> {
     pub device: DumpDevice,
     /// Custom runner for the builtin backend; `None` uses bundled scripts.
     pub agent: Option<&'a Path>,
-    /// Seconds to wait for lazily-loaded frameworks (builtin).
+    /// Seconds to wait for lazily-loaded frameworks and extension processes (builtin).
     pub settle: f64,
     /// Spawn the app rather than attach (builtin).
     pub spawn: bool,
@@ -105,15 +105,16 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
         .ok_or("builtin dumper needs --ipa <encrypted.ipa> to patch")?;
     let python = python_with_frida()?;
     let agent = prepare_agent(req.agent, work)?;
-    let (program, args) = builtin_argv(
-        &python,
-        &agent,
-        req.bundle_id,
-        req.device,
-        work,
-        req.settle,
-        req.spawn,
-    );
+    let (program, args) = builtin_argv(BuiltinArgv {
+        python: &python,
+        agent: &agent,
+        bundle_id: req.bundle_id,
+        ipa,
+        device: req.device,
+        out_dir: work,
+        settle: req.settle,
+        spawn: req.spawn,
+    });
     let mut command = Command::new(program);
     command.args(&args);
     run_inherit(command)?;
@@ -188,29 +189,35 @@ fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>,
 }
 
 /// Argv for the builtin Python runner. Pure for testing.
-pub(super) fn builtin_argv(
-    python: &str,
-    agent: &Path,
-    bundle_id: &str,
+#[derive(Clone, Copy)]
+struct BuiltinArgv<'a> {
+    python: &'a str,
+    agent: &'a Path,
+    bundle_id: &'a str,
+    ipa: &'a Path,
     device: DumpDevice,
-    out_dir: &Path,
+    out_dir: &'a Path,
     settle: f64,
     spawn: bool,
-) -> (String, Vec<String>) {
+}
+
+fn builtin_argv(request: BuiltinArgv<'_>) -> (String, Vec<String>) {
     let mut args = vec![
-        agent.to_string_lossy().into_owned(),
+        request.agent.to_string_lossy().into_owned(),
         "--out".into(),
-        out_dir.to_string_lossy().into_owned(),
+        request.out_dir.to_string_lossy().into_owned(),
         "--device".into(),
-        device.as_arg().into(),
+        request.device.as_arg().into(),
+        "--ipa".into(),
+        request.ipa.to_string_lossy().into_owned(),
         "--settle".into(),
-        format!("{settle}"),
+        format!("{}", request.settle),
     ];
-    if spawn {
+    if request.spawn {
         args.push("--spawn".into());
     }
-    args.push(bundle_id.to_string());
-    (python.into(), args)
+    args.push(request.bundle_id.to_string());
+    (request.python.into(), args)
 }
 
 /// Argv for an external dumper writing its decrypted IPA into `out_dir`.
@@ -263,18 +270,20 @@ mod tests {
 
     #[test]
     fn builtin_argv_threads_device_settle_and_spawn() {
-        let (program, args) = builtin_argv(
-            "python3.14",
-            Path::new("/x/ipakeep_dump.py"),
-            "com.example.App",
-            DumpDevice::Local,
-            Path::new("/tmp/out"),
-            7.5,
-            true,
-        );
+        let (program, args) = builtin_argv(BuiltinArgv {
+            python: "python3.14",
+            agent: Path::new("/x/ipakeep_dump.py"),
+            bundle_id: "com.example.App",
+            ipa: Path::new("/tmp/App.ipa"),
+            device: DumpDevice::Local,
+            out_dir: Path::new("/tmp/out"),
+            settle: 7.5,
+            spawn: true,
+        });
         assert_eq!(program, "python3.14");
         assert_eq!(args[0], "/x/ipakeep_dump.py");
         assert!(args.windows(2).any(|w| w == ["--device", "local"]));
+        assert!(args.windows(2).any(|w| w == ["--ipa", "/tmp/App.ipa"]));
         assert!(args.windows(2).any(|w| w == ["--settle", "7.5"]));
         assert!(args.contains(&"--spawn".to_string()));
         assert_eq!(args.last().unwrap(), "com.example.App");

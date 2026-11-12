@@ -162,11 +162,14 @@ with the target OS as well. It does not establish Frida availability, entitlemen
 compatibility, or that the app will launch. Changing the minimum version cannot
 supply missing APIs or grant entitlements.
 
-The dumper reads code loaded in the selected process. Extensions run separately,
-and unloaded frameworks cannot be recovered by waiting alone. If encrypted
-slices remain, the command fails rather than publishing an incomplete IPA.
-For such apps, collect the additional process dumps into the same directory
-with the [Frida bridge](scripts/frida/README.md), then use `decrypt patch` and
+The dumper reads code loaded in the selected process. During `--settle`, the
+builtin dumper also watches for extension executables found in the supplied IPA
+and attaches when iOS runs them. Trigger the extension's normal action during
+that window (for example, deliver a notification push). Unloaded frameworks and
+extensions that never run cannot be recovered by waiting alone. If encrypted
+slices remain, the command fails rather than publishing an incomplete IPA. For
+those slices, collect additional process dumps into the same directory with the
+[Frida bridge](scripts/frida/README.md), then use `decrypt patch` and
 `decrypt verify`.
 
 `decrypt verify` proves that `cryptid` is cleared and the dumped regions are
