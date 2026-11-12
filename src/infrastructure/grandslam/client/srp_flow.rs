@@ -38,12 +38,19 @@ pub(super) async fn init(
     let inner = extract_response(&response)?;
     let ec = check_grandslam_status(inner, "SRP init")?;
     if ec != 0 {
-        return Err(AppStoreError::AuthenticationFailed(format!(
-            "SRP init failed with error code {ec}"
-        )));
+        return Err(srp_init_error(ec));
     }
 
     parse_srp_init_response(inner, a)
+}
+
+fn srp_init_error(ec: i64) -> AppStoreError {
+    if ec == -80045 {
+        return AppStoreError::AuthenticationFailed(format!(
+            "SRP init failed with error code {ec}: Apple rejected the Anisette identity before validating credentials; check IPAKEEP_ANISETTE_URL"
+        ));
+    }
+    AppStoreError::AuthenticationFailed(format!("SRP init failed with error code {ec}"))
 }
 
 pub(super) async fn complete(
@@ -122,4 +129,21 @@ pub enum SrpCompleteResult {
         /// IDMS token.
         idms_token: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::srp_init_error;
+
+    #[test]
+    fn anisette_rejection_does_not_look_like_a_password_error() {
+        let message = srp_init_error(-80045).to_string();
+        assert!(message.contains("before validating credentials"));
+        assert!(message.contains("IPAKEEP_ANISETTE_URL"));
+    }
+
+    #[test]
+    fn other_init_errors_keep_their_code() {
+        assert!(srp_init_error(-20970).to_string().contains("-20970"));
+    }
 }
