@@ -144,6 +144,12 @@ target; `decrypt inspect` reports which iOS majors satisfy each slice's minimum
 OS. `--dumper frida-ios-dump`, `bagbak`, and `r2flutch` can drive an installed
 third-party dumper instead.
 
+Pass `decrypt dump` the encrypted IPA for the exact app version installed on
+the target. A matching bundle ID is not enough: releases can have different
+encrypted slice sizes, which ipakeep checks before writing output. Use
+`list-versions` and `download --external-version-id` to select the matching
+App Store version.
+
 A normal, non-jailbroken iPhone can install a properly re-signed **decrypted**
 IPA, but pairing it or enabling Developer Mode does not grant access to an
 App Store app's decrypted memory. Frida's stock-device mode is for debuggable
