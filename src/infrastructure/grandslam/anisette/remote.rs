@@ -29,20 +29,56 @@ pub(super) async fn fetch_remote(
     })?;
 
     let fields = AnisetteFields::from_remote(obj)?;
+    let mut headers = build_headers(&fields);
+    if let Some(user_agent) = fetch_remote_user_agent(client, &url, &fields.client_info).await? {
+        headers.insert("User-Agent".into(), user_agent);
+    }
     Ok(AnisetteData {
-        headers: build_headers(&fields),
+        headers,
         cpd: build_cpd(&fields),
     })
+}
+
+async fn fetch_remote_user_agent(
+    client: &reqwest::Client,
+    base_url: &str,
+    client_info: &str,
+) -> Result<Option<String>, AppStoreError> {
+    let url = format!("{base_url}/v3/client_info");
+    let response = client.get(&url).send().await.map_err(|e| {
+        AppStoreError::NetworkError(format!("anisette client info request to {url} failed: {e}"))
+    })?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let response = response.error_for_status().map_err(|e| {
+        AppStoreError::NetworkError(format!("anisette client info request failed: {e}"))
+    })?;
+    let body: JsonValue = response.json().await.map_err(|e| {
+        AppStoreError::NetworkError(format!("anisette client info decode failed: {e}"))
+    })?;
+    let info = body.get("client_info").and_then(JsonValue::as_str);
+    let user_agent = body.get("user_agent").and_then(JsonValue::as_str);
+    match (info, user_agent) {
+        (Some(info), Some(user_agent)) if info == client_info && !user_agent.is_empty() => {
+            Ok(Some(user_agent.to_string()))
+        }
+        _ => Err(AppStoreError::AuthenticationFailed(
+            "anisette client info endpoint returned incomplete or inconsistent data".into(),
+        )),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
 
     #[tokio::test]
     async fn fetch_remote_maps_server_headers() {
         let server = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
+        wiremock::Mock::given(method("GET"))
+            .and(path("/"))
             .respond_with(
                 wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "X-Apple-I-MD": "remote-md",
@@ -55,6 +91,16 @@ mod tests {
                     "X-Apple-I-TimeZone": "UTC",
                     "X-Apple-Locale": "es_ES",
                     "X-MMe-Client-Info": "REMOTE-CLIENT-INFO",
+                })),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/v3/client_info"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "client_info": "REMOTE-CLIENT-INFO",
+                    "user_agent": "REMOTE-USER-AGENT",
                 })),
             )
             .mount(&server)
@@ -80,6 +126,7 @@ mod tests {
             data.headers.get("X-MMe-Client-Info").unwrap(),
             "REMOTE-CLIENT-INFO"
         );
+        assert_eq!(data.headers.get("User-Agent").unwrap(), "REMOTE-USER-AGENT");
         assert_eq!(data.cpd["X-MMe-Client-Info"], "REMOTE-CLIENT-INFO");
         assert_eq!(data.headers.get("X-Apple-I-MD-RINFO").unwrap(), "50660608");
 
@@ -104,6 +151,40 @@ mod tests {
 
         let client = reqwest::Client::new();
         let result = fetch_remote(&client, &server.uri()).await;
+        assert!(matches!(
+            result,
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_user_agent_allows_legacy_server() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/v3/client_info"))
+            .respond_with(wiremock::ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let result = fetch_remote_user_agent(&reqwest::Client::new(), &server.uri(), "info").await;
+        assert!(matches!(result, Ok(None)));
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_user_agent_rejects_mismatched_client_info() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(method("GET"))
+            .and(path("/v3/client_info"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "client_info": "OTHER-CLIENT-INFO",
+                    "user_agent": "REMOTE-USER-AGENT",
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let result = fetch_remote_user_agent(&reqwest::Client::new(), &server.uri(), "info").await;
         assert!(matches!(
             result,
             Err(AppStoreError::AuthenticationFailed(_))
