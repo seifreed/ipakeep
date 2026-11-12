@@ -13,7 +13,7 @@ services:
     container_name: ipakeep-anisette
     restart: unless-stopped
     ports:
-      - "6969:6969"
+      - "127.0.0.1:6969:6969"
     volumes:
       - anisette-data:/home/Alcoholic/.config/anisette-v3/lib/
 

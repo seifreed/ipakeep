@@ -13,6 +13,8 @@ use tokio::process::Command;
 const ANISETTE_URL: &str = "http://127.0.0.1:6969";
 /// Name of the managed container.
 const CONTAINER_NAME: &str = "ipakeep-anisette";
+/// Publish the Anisette API only to the local machine.
+const PORT_BINDING: &str = "127.0.0.1:6969:6969";
 /// Default image (auto-built locally; overridable via `IPAKEEP_ANISETTE_IMAGE`).
 const DEFAULT_IMAGE: &str = "ipakeep-anisette:bundled";
 /// Upstream anisette server our default image is built on top of.
@@ -178,7 +180,7 @@ async fn run_new_container(image: &str) -> Result<(), AppStoreError> {
             "--restart",
             "unless-stopped",
             "-p",
-            "6969:6969",
+            PORT_BINDING,
             "-v",
             &volume_mount,
             image,
@@ -251,4 +253,14 @@ async fn wait_until_ready(client: &reqwest::Client) -> Result<(), AppStoreError>
     Err(AppStoreError::NetworkError(format!(
         "anisette server did not become ready within {READINESS_TIMEOUT_SECS}s"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PORT_BINDING;
+
+    #[test]
+    fn anisette_port_is_local_only() {
+        assert_eq!(PORT_BINDING, "127.0.0.1:6969:6969");
+    }
 }

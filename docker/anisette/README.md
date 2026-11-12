@@ -35,7 +35,7 @@ Build and run this repo's image:
 
 ```bash
 docker build -t ipakeep-anisette docker/anisette
-docker run -d --name ipakeep-anisette -p 6969:6969 \
+docker run -d --name ipakeep-anisette -p 127.0.0.1:6969:6969 \
     -v ipakeep-anisette-data:/home/Alcoholic/.config/anisette-v3/lib/ \
     ipakeep-anisette
 ```
