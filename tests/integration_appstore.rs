@@ -390,6 +390,38 @@ async fn authenticate_success() {
 }
 
 #[tokio::test]
+async fn authenticate_http_204_does_not_report_a_password_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/bag.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "urlBag": {
+                "authenticateAccount": format!("{}/authenticate", server.uri())
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/authenticate"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let app_store = repo(client, test_config(&server));
+    let result = app_store
+        .authenticate("test@example.com", "password", "guid")
+        .await;
+
+    let Err(AppStoreError::NetworkError(message)) = result else {
+        panic!("expected an empty-response network error");
+    };
+    assert!(message.contains("HTTP 204"));
+    assert!(message.contains("does not confirm whether the password is correct"));
+}
+
+#[tokio::test]
 async fn authenticate_rejects_empty_password_token() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

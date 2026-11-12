@@ -221,6 +221,14 @@ impl AppleHttpClient {
 
         ensure_success_status("POST plist", status, &body_bytes)?;
 
+        if status == reqwest::StatusCode::NO_CONTENT && body_bytes.is_empty() {
+            return Ok(HttpResponse {
+                status,
+                headers: resp_headers,
+                body: serde_json::Value::Null,
+            });
+        }
+
         let content_type = resp_headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())

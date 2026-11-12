@@ -73,6 +73,12 @@ async fn authenticate_with_attempt(
             .await
             .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
 
+        if response.status == reqwest::StatusCode::NO_CONTENT && response.body.is_null() {
+            return Err(AppStoreError::NetworkError(
+                "Apple returned HTTP 204 without authentication data; this does not confirm whether the password is correct".into(),
+            ));
+        }
+
         let failure_type = response
             .body
             .get("failureType")
