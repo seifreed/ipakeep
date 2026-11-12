@@ -6,6 +6,8 @@ use ipakeep::domain::repository::AppStoreRepository;
 use ipakeep::infrastructure::appstore::{AppleApiConfig, AppleAppStoreRepository};
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::http::plist_codec::encode_plist;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_string_contains, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -419,6 +421,49 @@ async fn authenticate_http_204_does_not_report_a_password_failure() {
     };
     assert!(message.contains("HTTP 204"));
     assert!(message.contains("does not confirm whether the password is correct"));
+}
+
+#[tokio::test]
+async fn authenticate_with_2fa_retries_empty_http_204_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/bag.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "urlBag": {
+                "authenticateAccount": format!("{}/authenticate", server.uri())
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let requests = Arc::new(AtomicUsize::new(0));
+    let request_count = Arc::clone(&requests);
+    Mock::given(method("POST"))
+        .and(path("/authenticate"))
+        .and(body_string_contains("<string>password123456</string>"))
+        .respond_with(move |_request: &wiremock::Request| {
+            if request_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(204)
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "passwordToken": "ptok",
+                    "dsPersonId": "dsid",
+                    "accountInfo": {"appleId": "test@example.com"}
+                }))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let app_store = repo(client, test_config(&server));
+    let account = app_store
+        .authenticate_with_2fa("test@example.com", "password", "123456", "guid")
+        .await
+        .unwrap();
+
+    assert_eq!(account.email, "test@example.com");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
