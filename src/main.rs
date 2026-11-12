@@ -111,7 +111,7 @@ async fn dispatch_command(
     format: &OutputFormat,
 ) -> Result<(), String> {
     let non_interactive = cli.non_interactive;
-    let grandslam = cli.grandslam && !cli.legacy;
+    let grandslam = use_grandslam(&cli);
     match cli.command {
         Commands::Auth { action } => {
             dispatch_auth(
@@ -365,6 +365,10 @@ fn default_log_filter(verbose: bool) -> &'static str {
     if verbose { "debug" } else { "warn" }
 }
 
+fn use_grandslam(cli: &Cli) -> bool {
+    cli.grandslam || (cfg!(ipakeep_modern_adi) && !cli.legacy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +377,27 @@ mod tests {
     fn verbose_switches_default_log_filter_to_debug() {
         assert_eq!(default_log_filter(false), "warn");
         assert_eq!(default_log_filter(true), "debug");
+    }
+
+    #[cfg(ipakeep_modern_adi)]
+    #[test]
+    fn modern_macos_defaults_to_grandslam_unless_legacy_is_forced() {
+        let default = Cli::try_parse_from(["ipakeep", "auth", "login"]).expect("CLI options");
+        let legacy =
+            Cli::try_parse_from(["ipakeep", "--legacy", "auth", "login"]).expect("CLI options");
+
+        assert!(use_grandslam(&default));
+        assert!(!use_grandslam(&legacy));
+    }
+
+    #[cfg(not(ipakeep_modern_adi))]
+    #[test]
+    fn non_macos_defaults_to_configurator_and_accepts_grandslam_flag() {
+        let default = Cli::try_parse_from(["ipakeep", "auth", "login"]).expect("CLI options");
+        let grandslam =
+            Cli::try_parse_from(["ipakeep", "--grandslam", "auth", "login"]).expect("CLI options");
+
+        assert!(!use_grandslam(&default));
+        assert!(use_grandslam(&grandslam));
     }
 }

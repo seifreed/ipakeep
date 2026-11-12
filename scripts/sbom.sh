@@ -6,6 +6,7 @@ out="${1:-"$root/sbom/ipakeep.cdx.json"}"
 repo="https://github.com/seifreed/ipakeep"
 tmp="$(mktemp -d)"
 raw="$root/.sbom-raw.json"
+go_bom="$tmp/modern-anisette.cdx.json"
 trap 'rm -rf "$tmp" "$raw"' EXIT
 
 hash_file() {
@@ -24,6 +25,8 @@ mkdir -p "$(dirname "$out")"
         --override-filename .sbom-raw
 )
 
+syft "dir:$root/tools/modern-anisette" -o cyclonedx-json > "$go_bom"
+
 lib_hash="$(hash_file "$root/src/lib.rs")"
 bin_hash="$(hash_file "$root/src/main.rs")"
 lock_hash="$(hash_file "$root/Cargo.lock")"
@@ -33,6 +36,7 @@ jq \
     --arg lib_hash "$lib_hash" \
     --arg bin_hash "$bin_hash" \
     --arg lock_hash "$lock_hash" \
+    --slurpfile go_bom "$go_bom" \
     '
     def org($name): {name: $name, url: ["https://github.com/seifreed"]};
     def add_vcs($url):
@@ -54,6 +58,8 @@ jq \
       else . end;
 
     scrub_paths
+    | .components += (($go_bom[0].components // []) | map(select(.name != "/go.mod")))
+    | .dependencies[0].dependsOn = ((.dependencies[0].dependsOn // []) + (($go_bom[0].components // []) | map(select(.name != "/go.mod") | .["bom-ref"])) | unique)
     | .serialNumber = "urn:uuid:7f60c5df-047a-5ac1-9a38-4f2f7d88c0a1"
     | .metadata.authors = [{name: "seifreed"}]
     | .metadata.supplier = org("seifreed")

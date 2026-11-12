@@ -34,7 +34,7 @@
 //! # }
 //! ```
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
 #[macro_use]
 extern crate objc;
 

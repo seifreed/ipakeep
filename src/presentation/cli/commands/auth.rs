@@ -29,7 +29,7 @@ pub struct LoginOptions<'a> {
     /// Fail if interactive input is required.
     pub non_interactive: bool,
 
-    /// Use the `GrandSlam` SRP flow instead of the default Configurator flow.
+    /// Use the `GrandSlam` SRP flow.
     pub grandslam: bool,
 }
 

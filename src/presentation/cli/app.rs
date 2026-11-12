@@ -27,12 +27,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub file_keychain: bool,
 
-    /// Use the legacy Configurator login flow. This is the default because
-    /// purchase/download require an App Store purchase token.
+    /// Force the Configurator login flow instead of the macOS `GrandSlam` default.
     #[arg(long, global = true, conflicts_with = "grandslam")]
     pub legacy: bool,
 
-    /// Use the `GrandSlam` SRP login flow.
+    /// Use the `GrandSlam` SRP login flow (the macOS default).
     #[arg(long, global = true)]
     pub grandslam: bool,
 

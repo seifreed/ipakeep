@@ -8,13 +8,14 @@ mod client;
 mod srp;
 mod srp_handshake;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
 mod aoskit;
 
 #[cfg(not(target_os = "macos"))]
-mod aoskit_fallback;
-
 mod anisette_docker;
+
+#[cfg(ipakeep_modern_adi)]
+mod modern_adi;
 
 pub use anisette::{AnisetteData, resolve_anisette};
 pub use client::{GrandSlamClient, SrpCompleteResult, SrpInitResponse};

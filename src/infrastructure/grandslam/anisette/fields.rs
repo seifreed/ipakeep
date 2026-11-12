@@ -29,7 +29,11 @@ impl AnisetteFields {
     ) -> Result<Self, AppStoreError> {
         let get = |keys: &[&str]| -> Option<String> {
             keys.iter()
-                .find_map(|key| obj.get(*key).map(value_to_string))
+                .find_map(|key| {
+                    obj.iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                        .map(|(_, value)| value_to_string(value))
+                })
                 .filter(|value| !value.is_empty())
         };
 

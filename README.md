@@ -31,7 +31,7 @@
 
 | Feature | Description |
 |---------|-------------|
-| **Modern GrandSlam auth** | Optional SRP-6a login against `gsa.apple.com` with full 2FA |
+| **Modern GrandSlam auth** | macOS login uses local ADI provisioning and supports trusted-device/SMS 2FA |
 | **Trusted-phone enumeration** | Lists the account's trusted phone numbers for SMS 2FA instead of guessing |
 | **Legacy auth** | Classic App Store authentication flow with `-5000` retry handling |
 | **Search & lookup** | Public iTunes Search/Lookup by term or bundle identifier |
@@ -42,7 +42,7 @@
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
-| **Cross-platform Anisette** | Local `AOSKit` on macOS, auto-managed Docker anisette server elsewhere |
+| **Cross-platform Anisette** | Local modern ADI on macOS, auto-managed Docker anisette server elsewhere |
 | **CLI + Library** | Use as a command-line tool or as a Rust crate |
 
 ### Supported Outputs
@@ -66,6 +66,10 @@ cargo build --release
 # binary at target/release/ipakeep
 ```
 
+Building on macOS also requires Go 1.26.5 or newer. The build compiles a small
+helper around ipatool's pinned modern ADI implementation; Apple framework assets
+are downloaded and verified on the first macOS login.
+
 ### Install the binary
 
 ```bash
@@ -88,7 +92,7 @@ export IPAKEEP_ANISETTE_IMAGE=my/anisette:tag        # use a custom image
 ## Quick Start
 
 ```bash
-# Sign in for purchase/download. Configurator auth is the default commerce path.
+# Sign in for purchase/download. macOS uses local ADI-backed GrandSlam auth.
 ipakeep auth login --email you@example.com --country es
 
 # Search the store
@@ -349,7 +353,7 @@ ipakeep auth revoke
 
 | Command | Description |
 |--------|-------------|
-| `ipakeep auth login` | Sign in via Configurator by default (`--email`, `--password`, `--code`, `--country`; `--grandslam` for SRP auth) |
+| `ipakeep auth login` | Sign in (`--email`, `--password`, `--code`, `--country`); macOS uses local ADI-backed GrandSlam auth |
 | `ipakeep auth info` | Show the stored account summary |
 | `ipakeep auth revoke` | Delete stored credentials |
 | `ipakeep search <term>` | Search the App Store (`--limit`, `--country`) |
@@ -367,8 +371,8 @@ ipakeep auth revoke
 | Option | Description |
 |--------|-------------|
 | `--format <text\|json>` | Output format (default `text`) |
-| `--legacy` | Kept for compatibility; Configurator login is already the default |
-| `--grandslam` | Use GrandSlam SRP login instead of Configurator |
+| `--legacy` | Force the Configurator login flow |
+| `--grandslam` | Use GrandSlam SRP login (the macOS default) |
 | `--non-interactive` | Fail instead of prompting |
 | `--file-keychain` | Force the file keychain instead of the macOS Keychain |
 | `--verbose` | Enable debug-level logging |
@@ -383,12 +387,10 @@ ipakeep auth revoke
 
 ### Authentication Notes
 
-- Configurator/legacy auth is the default because purchase and download require
-  an App Store purchase token.
-- `--grandslam` uses Apple's SRP flow and supports trusted-device/SMS 2FA, but
-  GrandSlam-only account state may not be enough for App Store purchases. If
-  purchase or download says the purchase token is missing, log in again without
-  `--grandslam`.
+- macOS uses a local modern ADI provider for GrandSlam. The first login downloads
+  Apple's signed macOS framework assets and provisions a local device identity.
+- Linux and Windows retain the Configurator default; `--grandslam` selects SRP
+  and uses the configured anisette provider.
 - Use `--non-interactive` with `--email`, `--password`, and optionally `--code`
   when no prompts are allowed.
 
@@ -448,7 +450,8 @@ main.rs          Wires concrete infrastructure into the presentation handlers
 ## Requirements
 
 - Rust toolchain (edition 2024)
-- macOS for local `AOSKit` Anisette; otherwise Docker for the anisette server
+- macOS builds require Go 1.26.5+ for local modern ADI; Linux/Windows use Docker
+  for the anisette server
 - See [Cargo.toml](Cargo.toml) for dependencies
 
 ## SBOM

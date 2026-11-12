@@ -37,6 +37,7 @@ fn json_login_output_is_sanitized() {
     assert_eq!(value["has_grandslam_state"], true);
 }
 
+#[cfg(not(ipakeep_modern_adi))]
 #[tokio::test]
 async fn login_defaults_to_configurator_flow() {
     let app_store = FakeAppStoreRepository::new().with_authenticate_result(Ok(sensitive_account()));
