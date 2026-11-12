@@ -3,6 +3,7 @@
 use ipakeep::domain::entity::Account;
 use ipakeep::domain::error::AppStoreError;
 use ipakeep::domain::repository::AppStoreRepository;
+use ipakeep::infrastructure::appstore::bag::resolve_auth_endpoint;
 use ipakeep::infrastructure::appstore::{AppleApiConfig, AppleAppStoreRepository};
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::http::plist_codec::encode_plist;
@@ -39,6 +40,34 @@ fn test_config(server: &MockServer) -> AppleApiConfig {
 
 fn repo(client: AppleHttpClient, config: AppleApiConfig) -> AppleAppStoreRepository {
     AppleAppStoreRepository::with_config(client, config)
+}
+
+#[tokio::test]
+async fn auth_bag_uses_authentication_user_agent() {
+    let server = MockServer::start().await;
+    #[cfg(target_os = "macos")]
+    let expected_user_agent =
+        "Configurator/2.21 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6";
+    #[cfg(not(target_os = "macos"))]
+    let expected_user_agent =
+        "Configurator/2.15 (Macintosh; OperatingSystem X 11.0.0; 16G29) AppleWebKit/2603.3.8";
+    Mock::given(method("GET"))
+        .and(path("/bag.xml"))
+        .and(header("user-agent", expected_user_agent))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "urlBag": {
+                "authenticateAccount": "https://auth.itunes.apple.com/auth/v1/native"
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let endpoint = resolve_auth_endpoint(&client, &format!("{}/bag.xml", server.uri()), "GUID")
+        .await
+        .unwrap();
+
+    assert_eq!(endpoint, "https://auth.itunes.apple.com/auth/v1/native");
 }
 
 fn plist_body(value: &serde_json::Value) -> Vec<u8> {
@@ -459,6 +488,48 @@ async fn authenticate_with_2fa_retries_empty_http_204_response() {
     let app_store = repo(client, test_config(&server));
     let account = app_store
         .authenticate_with_2fa("test@example.com", "password", "123456", "guid")
+        .await
+        .unwrap();
+
+    assert_eq!(account.email, "test@example.com");
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn authenticate_retries_transient_http_503_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/bag.xml"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "urlBag": {
+                "authenticateAccount": format!("{}/authenticate", server.uri())
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let requests = Arc::new(AtomicUsize::new(0));
+    let request_count = Arc::clone(&requests);
+    Mock::given(method("POST"))
+        .and(path("/authenticate"))
+        .respond_with(move |_request: &wiremock::Request| {
+            if request_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503).set_body_string("temporarily unavailable")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "passwordToken": "ptok",
+                    "dsPersonId": "dsid",
+                    "accountInfo": {"appleId": "test@example.com"}
+                }))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let app_store = repo(client, test_config(&server));
+    let account = app_store
+        .authenticate("test@example.com", "password", "guid")
         .await
         .unwrap();
 

@@ -1038,6 +1038,7 @@ dependencies = [
  "async-trait",
  "base64",
  "cbc",
+ "cc",
  "clap",
  "dialoguer",
  "dirs",

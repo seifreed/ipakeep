@@ -75,9 +75,27 @@ impl AppleHttpClient {
         &self,
         url: &str,
     ) -> Result<HttpResponse<T>, crate::domain::error::AppStoreError> {
-        let response = self
-            .client
-            .get(url)
+        self.get_json_with_headers(url, None).await
+    }
+
+    /// Send a GET request with optional headers and deserialize its response.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppStoreError::NetworkError` if the request or deserialization fails.
+    pub async fn get_json_with_headers<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<HttpResponse<T>, crate::domain::error::AppStoreError> {
+        let mut request = self.client.get(url);
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                request = request.header(key.as_str(), value.as_str());
+            }
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
@@ -183,6 +201,48 @@ impl AppleHttpClient {
         let plist_xml = super::plist_codec::encode_plist(plist_data)
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
+        self.post_plist_bytes(url, &plist_xml, headers).await
+    }
+
+    /// Send an already encoded plist body without changing its bytes.
+    ///
+    /// This is used when a request signature covers the exact serialized body.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppStoreError::NetworkError` if the request, status, or body decode fails.
+    pub async fn post_plist_bytes(
+        &self,
+        url: &str,
+        plist_xml: &[u8],
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
+        self.post_plist_bytes_with_server_errors(url, plist_xml, headers, false)
+            .await
+    }
+
+    /// Send an authentication plist while preserving server errors for retry handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppStoreError::NetworkError` if the request fails or the response is malformed.
+    pub async fn post_auth_plist_bytes(
+        &self,
+        url: &str,
+        plist_xml: &[u8],
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
+        self.post_plist_bytes_with_server_errors(url, plist_xml, headers, true)
+            .await
+    }
+
+    async fn post_plist_bytes_with_server_errors(
+        &self,
+        url: &str,
+        plist_xml: &[u8],
+        headers: Option<&HashMap<String, String>>,
+        preserve_server_errors: bool,
+    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
         let content_type = headers
             .and_then(|extra| {
                 extra
@@ -196,7 +256,7 @@ impl AppleHttpClient {
         request = request
             .header("Content-Type", content_type)
             .header("Accept", "*/*")
-            .body(plist_xml);
+            .body(plist_xml.to_vec());
 
         if let Some(extra_headers) = headers {
             for (key, value) in extra_headers {
@@ -218,6 +278,14 @@ impl AppleHttpClient {
             .bytes()
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
+
+        if preserve_server_errors && status.is_server_error() {
+            return Ok(HttpResponse {
+                status,
+                headers: resp_headers,
+                body: serde_json::Value::Null,
+            });
+        }
 
         ensure_success_status("POST plist", status, &body_bytes)?;
 

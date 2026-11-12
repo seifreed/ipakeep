@@ -2,6 +2,7 @@
 
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::http::AppleHttpClient;
+use std::collections::HashMap;
 
 /// Configurator authentication endpoint used when bag.xml omits
 /// `authenticateAccount`.
@@ -22,8 +23,12 @@ pub async fn resolve_auth_endpoint(
     guid: &str,
 ) -> Result<String, AppStoreError> {
     let url = format!("{bag_url}?guid={guid}");
+    let headers = HashMap::from([(
+        "User-Agent".into(),
+        super::authentication::CONFIGURATOR_USER_AGENT.into(),
+    )]);
     let response = client
-        .get_json::<serde_json::Value>(&url)
+        .get_json_with_headers::<serde_json::Value>(&url, Some(&headers))
         .await
         .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
 

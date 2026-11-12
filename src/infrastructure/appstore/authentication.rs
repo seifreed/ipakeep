@@ -13,7 +13,11 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY_MS: u64 = 1000;
 /// Spurious `failureType` Apple sometimes returns on the first attempt; retried.
 const SPURIOUS_FAILURE_TYPE: &str = "-5000";
-const CONFIGURATOR_USER_AGENT: &str =
+#[cfg(target_os = "macos")]
+pub(super) const CONFIGURATOR_USER_AGENT: &str =
+    "Configurator/2.21 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6";
+#[cfg(not(target_os = "macos"))]
+pub(super) const CONFIGURATOR_USER_AGENT: &str =
     "Configurator/2.15 (Macintosh; OperatingSystem X 11.0.0; 16G29) AppleWebKit/2603.3.8";
 
 /// Authenticate with Apple using email and password.
@@ -59,6 +63,8 @@ async fn authenticate_with_attempt(
         plist_pairs.push(("createSession", "true"));
     }
     let plist_body = crate::infrastructure::http::plist_codec::build_plist_dict(&plist_pairs);
+    let plist_xml = crate::infrastructure::http::plist_codec::encode_plist(&plist_body)
+        .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
     let mut headers = HashMap::from([("User-Agent".into(), CONFIGURATOR_USER_AGENT.into())]);
     if is_mzfinance_auth {
         headers.insert(
@@ -68,10 +74,33 @@ async fn authenticate_with_attempt(
     }
 
     for attempt in 0..MAX_RETRIES {
+        let mut request_headers = headers.clone();
+        if is_native_auth_url(&auth_url) {
+            #[cfg(target_os = "macos")]
+            request_headers
+                .extend(super::native_auth::request_headers(&auth_url, &plist_xml).await?);
+            #[cfg(not(target_os = "macos"))]
+            return Err(AppStoreError::AuthenticationFailed(
+                "Apple's native App Store login requires macOS Store signing and device proof"
+                    .into(),
+            ));
+        }
+
         let response = client
-            .post_plist(&auth_url, &plist_body, Some(&headers))
+            .post_auth_plist_bytes(&auth_url, &plist_xml, Some(&request_headers))
             .await
             .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
+
+        if response.status.is_server_error() {
+            if attempt < MAX_RETRIES - 1 {
+                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                continue;
+            }
+            return Err(AppStoreError::NetworkError(format!(
+                "Apple authentication endpoint returned HTTP {} after retries",
+                response.status
+            )));
+        }
 
         if response.status == reqwest::StatusCode::NO_CONTENT && response.body.is_null() {
             if attempt < MAX_RETRIES - 1 {
@@ -103,6 +132,20 @@ async fn authenticate_with_attempt(
     Err(AppStoreError::AuthenticationFailed(
         "authentication failed after retries".into(),
     ))
+}
+
+fn is_native_auth_url(auth_url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(auth_url) else {
+        return false;
+    };
+
+    url.scheme() == "https"
+        && url.host_str() == Some("auth.itunes.apple.com")
+        && url.path() == "/auth/v1/native"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port_or_known_default() == Some(443)
+        && url.fragment().is_none()
 }
 
 fn auth_url_with_guid(auth_url: &str, guid: &str, has_auth_code: bool) -> String {
@@ -218,5 +261,21 @@ mod tests {
             url,
             "https://auth.itunes.apple.com/auth/v1/native/fast?guid=new&foo=bar"
         );
+    }
+
+    #[test]
+    fn native_auth_url_requires_the_exact_apple_origin_and_path() {
+        assert!(is_native_auth_url(
+            "https://auth.itunes.apple.com/auth/v1/native?guid=GUID"
+        ));
+        assert!(!is_native_auth_url(
+            "https://auth.itunes.apple.com.example.invalid/auth/v1/native"
+        ));
+        assert!(!is_native_auth_url(
+            "https://auth.itunes.apple.com/auth/v1/native/fast"
+        ));
+        assert!(!is_native_auth_url(
+            "http://auth.itunes.apple.com/auth/v1/native"
+        ));
     }
 }

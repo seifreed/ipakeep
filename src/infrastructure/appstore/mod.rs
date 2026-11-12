@@ -6,6 +6,9 @@ pub mod config;
 pub mod store_api;
 pub mod storefront;
 
+#[cfg(target_os = "macos")]
+mod native_auth;
+
 pub use config::AppleApiConfig;
 pub use store_api::AppleAppStoreRepository;
 pub use storefront::{locale_country, storefront_for_country};
