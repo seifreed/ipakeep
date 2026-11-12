@@ -34,6 +34,19 @@ def get_device(kind: str):
     return frida.get_usb_device(timeout=10)
 
 
+def attach_target(device, target: str):
+    if target.isdecimal():
+        return int(target)
+    application = next(
+        (app for app in device.enumerate_applications() if app.identifier == target), None
+    )
+    if application is None:
+        return target
+    if application.pid == 0:
+        raise ValueError(f"{target} is not running; open it or pass --spawn")
+    return application.pid
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Dump FairPlay-decrypted Mach-O slices.")
     parser.add_argument("target", help="Bundle id, app name, or PID.")
@@ -57,9 +70,7 @@ def main() -> int:
             pid = device.spawn([args.target])
             session = device.attach(pid)
         else:
-            # Accept a numeric PID or a process/app name.
-            target = int(args.target) if args.target.isdigit() else args.target
-            session = device.attach(target)
+            session = device.attach(attach_target(device, args.target))
     except frida.PermissionDeniedError:
         # macOS with SIP enabled won't let a normal user attach to another app
         # (no get-task-allow). Re-run as root, or boot with SIP disabled.
@@ -70,6 +81,9 @@ def main() -> int:
             f"--device {args.device} --out {args.out} {args.target}",
             file=sys.stderr,
         )
+        return 2
+    except (ValueError, frida.ProcessNotFoundError) as exc:
+        print(f"cannot attach to {args.target}: {exc}", file=sys.stderr)
         return 2
 
     with open(os.path.join(HERE, "ipakeep_dump.js"), "r", encoding="utf-8") as handle:
