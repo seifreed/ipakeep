@@ -118,7 +118,7 @@ fn inspect_thin_arm64_reports_encryption_and_dumpability() {
             .iter()
             .map(|t| t.ios_major)
             .collect::<Vec<_>>(),
-        vec![18, 26, 27]
+        vec![16, 18, 26, 27]
     );
     assert!(slice.dumpable_on.iter().all(|t| t.dumpable));
 }

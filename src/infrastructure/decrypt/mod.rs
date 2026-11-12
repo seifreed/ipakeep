@@ -24,9 +24,10 @@ use std::process::Command;
 /// Per-iOS-major dumpability verdict for one slice.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DumpTarget {
-    /// iOS major version (18, 26, or 27).
+    /// iOS major version represented in the minimum-OS compatibility matrix.
     pub ios_major: u32,
-    /// Whether the slice's minimum OS allows loading on that major.
+    /// Whether the slice's minimum OS is at or below that major. This does not
+    /// establish API, entitlement, or Frida compatibility.
     pub dumpable: bool,
 }
 
@@ -52,7 +53,7 @@ pub struct SliceReport {
     /// File name the dumper must produce; consumed by `decrypt patch --from`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dump_filename: Option<String>,
-    /// Per-iOS-major dumpability, when the minimum OS is known.
+    /// Per-iOS-major minimum-OS compatibility, when the minimum OS is known.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dumpable_on: Vec<DumpTarget>,
 }
