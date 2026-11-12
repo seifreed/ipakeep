@@ -13,7 +13,7 @@ from types import ModuleType, SimpleNamespace
 sys.modules["frida"] = ModuleType("frida")
 from ipakeep_dump import (
     attach_target,
-    extension_executables,
+    extension_process_names,
     is_extension_process,
     watch_extensions,
 )
@@ -59,6 +59,26 @@ class FakeProcessDevice:
         self.processes = [SimpleNamespace(pid=42, name="Notify")]
         self.session = FakeSession()
         self.attached = []
+        self.resumed = []
+        self.spawn_handler = None
+        self.gating = False
+
+    def on(self, _event, callback):
+        self.spawn_handler = callback
+
+    def off(self, _event, callback):
+        self.spawn_handler = None
+
+    def enable_spawn_gating(self):
+        self.gating = True
+        self.spawn_handler(SimpleNamespace(pid=43, identifier="com.example.Notify"))
+        self.spawn_handler(SimpleNamespace(pid=44, identifier="com.other.App"))
+
+    def disable_spawn_gating(self):
+        self.gating = False
+
+    def resume(self, pid):
+        self.resumed.append(pid)
 
     def enumerate_processes(self):
         return self.processes
@@ -93,14 +113,22 @@ class AttachTargetTests(unittest.TestCase):
             with zipfile.ZipFile(ipa_path, "w") as ipa:
                 ipa.writestr(
                     "Payload/Example.app/PlugIns/Notify.appex/Info.plist",
-                    plistlib.dumps({"CFBundleExecutable": "NotificationService"}),
+                    plistlib.dumps(
+                        {
+                            "CFBundleExecutable": "NotificationService",
+                            "CFBundleIdentifier": "com.example.NotificationService",
+                        }
+                    ),
                 )
                 ipa.writestr(
                     "Payload/Example.app/Info.plist",
                     plistlib.dumps({"CFBundleExecutable": "Example"}),
                 )
 
-            self.assertEqual(extension_executables(str(ipa_path)), {"NotificationService"})
+            self.assertEqual(
+                extension_process_names(str(ipa_path)),
+                {"NotificationService", "com.example.NotificationService"},
+            )
 
     def test_extension_process_matches_executable_or_qualified_name(self):
         executables = {"NotificationService"}
@@ -117,9 +145,9 @@ class AttachTargetTests(unittest.TestCase):
                 )
 
             with self.assertRaisesRegex(ValueError, "invalid extension plist"):
-                extension_executables(str(ipa_path))
+                extension_process_names(str(ipa_path))
 
-    def test_running_extension_process_is_attached_and_swept(self):
+    def test_running_and_spawned_extensions_are_attached_and_swept(self):
         device = FakeProcessDevice()
         with tempfile.TemporaryDirectory() as temp_dir:
             watch_extensions(
@@ -131,7 +159,9 @@ class AttachTargetTests(unittest.TestCase):
                 0.01,
             )
 
-        self.assertEqual(device.attached, [42])
+        self.assertEqual(device.attached, [43, 42])
+        self.assertEqual(device.resumed, [43, 44])
+        self.assertFalse(device.gating)
         self.assertTrue(device.session.script.sweeps >= 1)
         self.assertTrue(device.session.detached)
 

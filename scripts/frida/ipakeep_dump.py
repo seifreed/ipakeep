@@ -23,6 +23,7 @@ import argparse
 import os
 import plistlib
 import sys
+import threading
 import time
 import zipfile
 from pathlib import PurePosixPath
@@ -51,8 +52,8 @@ def attach_target(device, target: str):
     return application.pid
 
 
-def extension_executables(ipa_path: str) -> set[str]:
-    executables = set()
+def extension_process_names(ipa_path: str) -> set[str]:
+    process_names = set()
     with zipfile.ZipFile(ipa_path) as ipa:
         for entry in ipa.infolist():
             parts = PurePosixPath(entry.filename).parts
@@ -73,18 +74,19 @@ def extension_executables(ipa_path: str) -> set[str]:
                 metadata = plistlib.loads(ipa.read(entry))
             except Exception as error:
                 raise ValueError(f"invalid extension plist {entry.filename}: {error}") from error
-            executable = (
-                metadata.get("CFBundleExecutable") if isinstance(metadata, dict) else None
-            )
-            if isinstance(executable, str) and executable:
-                executables.add(executable)
-    return executables
+            if isinstance(metadata, dict):
+                process_names.update(
+                    value
+                    for key in ("CFBundleExecutable", "CFBundleIdentifier")
+                    if isinstance((value := metadata.get(key)), str) and value
+                )
+    return process_names
 
 
-def is_extension_process(process_name: str, executables: set[str]) -> bool:
+def is_extension_process(process_name: str, extension_names: set[str]) -> bool:
     return any(
         process_name == executable or process_name.endswith(f".{executable}")
-        for executable in executables
+        for executable in extension_names
     )
 
 
@@ -138,36 +140,99 @@ def detach_session(session) -> None:
         pass
 
 
-def watch_extensions(device, executables, agent_path, out_dir, written, seconds: float):
-    if not executables:
+def resume_spawn(device, pid: int) -> None:
+    try:
+        device.resume(pid)
+    except (frida.InvalidOperationError, frida.ProcessNotFoundError):
+        pass
+
+
+def watch_extensions(device, process_names, agent_path, out_dir, written, seconds: float):
+    if not process_names:
         time.sleep(seconds)
         return
 
     deadline = time.monotonic() + seconds
     seen_pids = set()
+    attaching_pids = set()
     sessions = {}
+    state_changed = threading.Condition()
+
+    def on_spawn(spawn):
+        with state_changed:
+            duplicate = spawn.pid in seen_pids
+            if not duplicate:
+                seen_pids.add(spawn.pid)
+                attaching_pids.add(spawn.pid)
+            while duplicate and spawn.pid in attaching_pids:
+                state_changed.wait()
+        if duplicate:
+            resume_spawn(device, spawn.pid)
+            return
+        attached = None
+        try:
+            if is_extension_process(spawn.identifier, process_names):
+                attached = attach_extension(device, spawn.pid, agent_path, out_dir, written)
+        except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
+            print(f"cannot attach to extension PID {spawn.pid}: {error}", file=sys.stderr)
+        except Exception as error:
+            print(f"cannot instrument spawned PID {spawn.pid}: {error}", file=sys.stderr)
+        finally:
+            with state_changed:
+                if attached is not None:
+                    sessions[spawn.pid] = attached
+                attaching_pids.discard(spawn.pid)
+                state_changed.notify_all()
+            resume_spawn(device, spawn.pid)
+
+    device.on("spawn-added", on_spawn)
     try:
-        while time.monotonic() < deadline:
-            for process in device.enumerate_processes():
-                if process.pid in seen_pids or not is_extension_process(process.name, executables):
+        device.enable_spawn_gating()
+    except Exception:
+        device.off("spawn-added", on_spawn)
+        raise
+    try:
+        for process in device.enumerate_processes():
+            if not is_extension_process(process.name, process_names):
+                continue
+            with state_changed:
+                if process.pid in seen_pids:
+                    while process.pid in attaching_pids:
+                        state_changed.wait()
                     continue
                 seen_pids.add(process.pid)
-                try:
-                    sessions[process.pid] = attach_extension(
-                        device, process.pid, agent_path, out_dir, written
-                    )
-                except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
-                    print(f"cannot attach to extension PID {process.pid}: {error}", file=sys.stderr)
+                attaching_pids.add(process.pid)
+            attached = None
+            try:
+                attached = attach_extension(device, process.pid, agent_path, out_dir, written)
+            except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
+                print(f"cannot attach to extension PID {process.pid}: {error}", file=sys.stderr)
+            finally:
+                with state_changed:
+                    if attached is not None:
+                        sessions[process.pid] = attached
+                    attaching_pids.discard(process.pid)
+                    state_changed.notify_all()
 
-            for pid, (session, script) in list(sessions.items()):
+        while time.monotonic() < deadline:
+            with state_changed:
+                active_sessions = list(sessions.items())
+            for pid, (session, script) in active_sessions:
                 if not sweep_extension(script):
                     detach_session(session)
-                    del sessions[pid]
+                    with state_changed:
+                        sessions.pop(pid, None)
             time.sleep(min(0.1, max(0, deadline - time.monotonic())))
     finally:
-        for session, script in sessions.values():
-            sweep_extension(script)
-            detach_session(session)
+        try:
+            device.disable_spawn_gating()
+        finally:
+            device.off("spawn-added", on_spawn)
+            with state_changed:
+                remaining_sessions = list(sessions.values())
+            for session, script in remaining_sessions:
+                sweep_extension(script)
+                detach_session(session)
 
 
 def main() -> int:
@@ -186,7 +251,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        executables = extension_executables(args.ipa)
+        process_names = extension_process_names(args.ipa)
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         print(f"cannot inspect app extensions in {args.ipa}: {error}", file=sys.stderr)
         return 2
@@ -224,9 +289,9 @@ def main() -> int:
 
     root = script.exports_sync.arm()
     print(f"armed; bundle root: {root}")
-    if executables:
-        print(f"watching {len(executables)} app extension(s); trigger activity during --settle")
-    watch_extensions(device, executables, agent_path, args.out, written, args.settle)
+    if process_names:
+        print("watching app extension processes during --settle")
+    watch_extensions(device, process_names, agent_path, args.out, written, args.settle)
     script.exports_sync.sweep()
     session.detach()
 
