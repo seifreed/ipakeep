@@ -2,8 +2,8 @@
 
 // On-device FairPlay slice dumper for ipakeep.
 //
-// For every loaded Mach-O *of the target app bundle* whose LC_ENCRYPTION_INFO(_64)
-// has cryptid != 0, read the now-decrypted [cryptoff, cryptoff+cryptsize) region
+// For every loaded Mach-O *of the target app bundle* with an encrypted region,
+// read the now-decrypted [cryptoff, cryptoff+cryptsize) region
 // straight from memory and stream it back tagged with the exact filename
 // `ipakeep decrypt inspect` prints (`<module-basename>.<arch>.bin`).
 //
@@ -63,8 +63,8 @@ function dumpModule(mod) {
     if (cmd === LC_ENCRYPTION_INFO || cmd === LC_ENCRYPTION_INFO_64) {
       const cryptoff = cursor.add(8).readU32();
       const cryptsize = cursor.add(12).readU32();
-      const cryptid = cursor.add(16).readU32();
-      if (cryptid !== 0 && cryptsize > 0) {
+      // iOS clears cryptid in loaded dylibs after decrypting their pages.
+      if (cryptsize > 0) {
         const name = mod.name + '.' + archLabel(cputype, cpusubtype) + '.bin';
         const data = base.add(cryptoff).readByteArray(cryptsize);
         sent.add(mod.name);

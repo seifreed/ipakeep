@@ -1,7 +1,10 @@
 """Tests for the dependency-free target selection in the Frida runner."""
 
+import shutil
+import subprocess
 import sys
 import unittest
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 sys.modules["frida"] = ModuleType("frida")
@@ -34,6 +37,11 @@ class AttachTargetTests(unittest.TestCase):
         device = FakeDevice([])
         self.assertEqual(attach_target(device, "Example"), "Example")
         self.assertEqual(attach_target(device, "1234"), 1234)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not installed")
+    def test_agent_dumps_regions_after_ios_clears_cryptid(self):
+        script = Path(__file__).with_name("test_ipakeep_dump.js")
+        subprocess.run([shutil.which("node"), str(script)], check=True)
 
 
 if __name__ == "__main__":
