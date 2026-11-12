@@ -106,6 +106,7 @@ fn builtin_dump_runner_is_available_outside_the_repository() {
         &python,
         concat!(
             "#!/bin/sh\n",
+            "[ \"$1\" != -c ] || exit 0\n",
             "test -f \"$1\" || exit 91\n",
             "test -f \"$(dirname \"$1\")/ipakeep_dump.js\" || exit 92\n",
             "echo bundled-runner-found >&2\nexit 93\n",

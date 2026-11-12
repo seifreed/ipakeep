@@ -9,7 +9,9 @@
 //! device (USB) or an Apple Silicon Mac (`Local`).
 
 use super::{ensure_decrypted, patch_ipa_decrypted};
-use crate::infrastructure::exec::{newest_ipa, require_program, run_inherit, temp_dir};
+use crate::infrastructure::exec::{
+    find_in_path, newest_ipa, require_program, run_inherit, temp_dir,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -101,9 +103,10 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     let ipa = req
         .ipa
         .ok_or("builtin dumper needs --ipa <encrypted.ipa> to patch")?;
-    require_program("python3")?;
+    let python = python_with_frida()?;
     let agent = prepare_agent(req.agent, work)?;
     let (program, args) = builtin_argv(
+        &python,
         &agent,
         req.bundle_id,
         req.device,
@@ -117,6 +120,37 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
 
     let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
+}
+
+fn python_with_frida() -> Result<String, String> {
+    let mut candidates = vec!["python3".to_string()];
+    if let Some(frida_ps) = find_in_path("frida-ps")
+        && let Ok(contents) = std::fs::read_to_string(frida_ps)
+        && let Some(interpreter) = contents.lines().next().and_then(interpreter_from_shebang)
+    {
+        candidates.push(interpreter);
+    }
+    candidates.dedup();
+    for candidate in candidates {
+        if Command::new(&candidate)
+            .args(["-c", "import frida"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            return Ok(candidate);
+        }
+    }
+    Err("cannot import Frida from `python3` or the interpreter used by `frida-ps`; install `frida` and `frida-tools` in the same Python environment".into())
+}
+
+fn interpreter_from_shebang(line: &str) -> Option<String> {
+    let mut words = line.strip_prefix("#!")?.split_whitespace();
+    let executable = words.next()?;
+    if executable == "/usr/bin/env" {
+        words.next().map(str::to_string)
+    } else {
+        Some(executable.to_string())
+    }
 }
 
 fn prepare_agent(override_path: Option<&Path>, work: &Path) -> Result<PathBuf, String> {
@@ -155,6 +189,7 @@ fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>,
 
 /// Argv for the builtin Python runner. Pure for testing.
 pub(super) fn builtin_argv(
+    python: &str,
     agent: &Path,
     bundle_id: &str,
     device: DumpDevice,
@@ -175,7 +210,7 @@ pub(super) fn builtin_argv(
         args.push("--spawn".into());
     }
     args.push(bundle_id.to_string());
-    ("python3".into(), args)
+    (python.into(), args)
 }
 
 /// Argv for an external dumper writing its decrypted IPA into `out_dir`.
@@ -229,6 +264,7 @@ mod tests {
     #[test]
     fn builtin_argv_threads_device_settle_and_spawn() {
         let (program, args) = builtin_argv(
+            "python3.14",
             Path::new("/x/ipakeep_dump.py"),
             "com.example.App",
             DumpDevice::Local,
@@ -236,12 +272,24 @@ mod tests {
             7.5,
             true,
         );
-        assert_eq!(program, "python3");
+        assert_eq!(program, "python3.14");
         assert_eq!(args[0], "/x/ipakeep_dump.py");
         assert!(args.windows(2).any(|w| w == ["--device", "local"]));
         assert!(args.windows(2).any(|w| w == ["--settle", "7.5"]));
         assert!(args.contains(&"--spawn".to_string()));
         assert_eq!(args.last().unwrap(), "com.example.App");
+    }
+
+    #[test]
+    fn reads_python_from_frida_tools_shebang() {
+        assert_eq!(
+            interpreter_from_shebang("#!/opt/homebrew/bin/python3.14"),
+            Some("/opt/homebrew/bin/python3.14".into())
+        );
+        assert_eq!(
+            interpreter_from_shebang("#!/usr/bin/env python3.14"),
+            Some("python3.14".into())
+        );
     }
 
     #[test]
