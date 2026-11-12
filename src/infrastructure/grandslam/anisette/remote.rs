@@ -54,6 +54,7 @@ mod tests {
                     "X-Apple-I-Client-Time": "2026-01-01T00:00:00Z",
                     "X-Apple-I-TimeZone": "UTC",
                     "X-Apple-Locale": "es_ES",
+                    "X-MMe-Client-Info": "REMOTE-CLIENT-INFO",
                 })),
             )
             .mount(&server)
@@ -75,6 +76,11 @@ mod tests {
             "REMOTE-SERIAL"
         );
         assert_eq!(data.headers.get("X-Apple-I-Locale").unwrap(), "es_ES");
+        assert_eq!(
+            data.headers.get("X-MMe-Client-Info").unwrap(),
+            "REMOTE-CLIENT-INFO"
+        );
+        assert_eq!(data.cpd["X-MMe-Client-Info"], "REMOTE-CLIENT-INFO");
         assert_eq!(data.headers.get("X-Apple-I-MD-RINFO").unwrap(), "50660608");
 
         let cpd = data.cpd.as_object().unwrap();

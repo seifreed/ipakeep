@@ -16,6 +16,7 @@ pub(super) struct AnisetteFields {
     pub(super) md_lu: String,
     pub(super) md_m: String,
     pub(super) rinfo: String,
+    pub(super) client_info: String,
     pub(super) device_id: String,
     pub(super) serial: String,
 }
@@ -46,6 +47,7 @@ impl AnisetteFields {
             md_lu: get(&["X-Apple-I-MD-LU"]).unwrap_or_default(),
             md_m: get(&["X-Apple-I-MD-M"]).ok_or_else(|| missing("X-Apple-I-MD-M"))?,
             rinfo: get(&["X-Apple-I-MD-RINFO"]).unwrap_or_else(|| RINFO.to_string()),
+            client_info: get(&["X-MMe-Client-Info"]).unwrap_or_else(|| CLIENT_INFO.to_string()),
             device_id: get(&["X-Mme-Device-Id"]).unwrap_or_else(|| FALLBACK_DEVICE_ID.to_string()),
             serial: get(&["X-Apple-I-SRL-NO"]).unwrap_or_else(|| "0".to_string()),
         })
@@ -73,7 +75,7 @@ pub(super) fn build_headers(fields: &AnisetteFields) -> HashMap<String, String> 
         ("X-Apple-I-MD-RINFO".into(), fields.rinfo.clone()),
         ("X-Mme-Device-Id".into(), fields.device_id.clone()),
         ("X-Apple-I-SRL-NO".into(), fields.serial.clone()),
-        ("X-MMe-Client-Info".into(), CLIENT_INFO.into()),
+        ("X-MMe-Client-Info".into(), fields.client_info.clone()),
     ])
 }
 
@@ -102,7 +104,7 @@ pub(super) fn build_cpd(fields: &AnisetteFields) -> JsonValue {
         "X-Apple-I-MD-RINFO": fields.rinfo,
         "X-Mme-Device-Id": fields.device_id,
         "X-Apple-I-SRL-NO": fields.serial,
-        "X-MMe-Client-Info": CLIENT_INFO,
+        "X-MMe-Client-Info": fields.client_info,
     })
 }
 

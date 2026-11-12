@@ -112,6 +112,7 @@ fn generate_anisette() -> AnisetteData {
         md_lu: get_local_user_uuid().unwrap_or(tokens.md_lu),
         md_m: tokens.md_m,
         rinfo: RINFO.to_string(),
+        client_info: CLIENT_INFO.to_string(),
         device_id,
         serial,
     };
