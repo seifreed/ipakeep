@@ -63,6 +63,11 @@ static void hexdump(const char *label, const uint8_t *b, size_t n) {
 }
 
 int main(void) {
+    /* Raw, unbuffered proof-of-exec: survives a later SIGKILL (which would
+     * otherwise discard buffered stdout, hiding whether we launched at all). */
+    (void)!write(2, "ALIVE\n", 6);
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     printf("== ipakeep de-platform probe (read-only) ==\n");
     printf("pid=%d\n", getpid());
 
@@ -88,6 +93,31 @@ int main(void) {
     printf("proc_task(proc)    = 0x%016llx\n",
            (unsigned long long)proc_task(proc));
     printf("proc_getcsflags()  = 0x%08x\n", proc_getcsflags(proc));
+
+    /*
+     * Offset discovery (read-only). The jailbreak already knows the kernel
+     * struct offsets; dump them instead of patchfinding the kernelcache.
+     */
+    printf("\n== jbinfo serialized (offset database) ==\n");
+    void *info = jbinfo_get_serialized();
+    if (info) {
+        char *desc = xpc_copy_description(info);
+        if (desc) { puts(desc); free(desc); }
+        else puts("(xpc_copy_description returned NULL)");
+    } else {
+        puts("(jbinfo_get_serialized returned NULL)");
+    }
+
+    printf("\n== proc_find_main_binary_code_dir(proc) ==\n");
+    uint64_t cdir = proc_find_main_binary_code_dir(proc);
+    printf("code_dir = 0x%016llx %s\n", (unsigned long long)cdir,
+           looks_like_kernel_ptr(cdir) ? "(looks like a kernel VA!)"
+                                       : "(not a kernel VA -- likely gated)");
+    if (looks_like_kernel_ptr(cdir)) {
+        uint8_t buf[0x80];
+        if (kreadbuf(cdir, buf, sizeof(buf)) == 0)
+            hexdump("code_dir head", buf, sizeof(buf));
+    }
 
     long off_textvp = env_off("IPAKEEP_OFF_P_TEXTVP");
     if (off_textvp < 0) {

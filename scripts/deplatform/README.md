@@ -11,15 +11,21 @@ jailbroken device. On A11/t8015 under Dopamine (iPhone de Pau, iOS 16.7.16 /
 - `mremap_encrypted` needs exactly that `r-x` mapping, so it returns **EPERM**
   (proven at every offset; a read-only mapping has no mremap fallback).
 
-The only known fix is to **de-platform our own process**: clear
-`csb_platform_binary` in our main-binary `cs_blob` (and `TF_PLATFORM` in our
-task). Clearing `p_csflags` was proven insufficient — platform status is read
-from the `cs_blob`/task, not `p_csflags` (matches XNU `csproc_clear_platform_binary`).
-This requires kernel R/W and the struct-offset chain:
+The only known fix is to **de-platform our own process** with kernel R/W.
+Clearing `p_csflags` was proven insufficient. On this kernel (verified live
+against Dopamine's own offset database, `jbinfo_get_serialized`) the platform
+status that gates library validation is the **`TFRO_PLATFORM` (0x400)** bit in
+the read-only proc structure `proc_ro.t_flags_ro`:
 
 ```
-proc -> p_textvp (vnode) -> v_ubcinfo (ubc_info) -> cs_blobs -> csb_platform_binary
+proc -> proc_ro (@+24) -> t_flags_ro (@+120)  &= ~0x400
 ```
+
+`proc_ro` is read-only-mapped kernel memory, so the write must go through a
+physical-write-backed primitive (libjailbreak's `kwrite32` / `physwritebuf`),
+not an ordinary virtual write. (The generic XNU `cs_blob.csb_platform_binary`
+chain — `proc -> p_textvp -> ubc_info -> cs_blobs` — does not apply here:
+`proc_find_main_binary_code_dir` is arm64e-gated and returns -1 on A11.)
 
 ## Hard constraints (verified by research wf_7d2faab6-116)
 
@@ -29,26 +35,41 @@ proc -> p_textvp (vnode) -> v_ubcinfo (ubc_info) -> cs_blobs -> csb_platform_bin
   derived on-device. Dopamine's ready `proc_find_main_binary_code_dir` helper is
   arm64e-gated and bails on A11, so we walk the chain ourselves.
 
+## Running a helper on the device (the non-obvious parts)
+
+1. **Build + sign** on macOS: `LIBJAILBREAK=<dylib> ./build.sh src out`
+   (repoints to `/var/jb/basebin/libjailbreak.dylib`, signs with `ldid`).
+2. **Trust-cache** the cdhash: `sudo jbctl trustcache add <CDHash>` (hex from
+   `codesign -dvvv`, NOT a path).
+3. **Run from a jbroot path**: `sudo cp` it to `/var/jb/usr/bin/` and run it
+   there. A trust-cached binary under `/var/mobile` is still SIGKILLed at exec
+   by the sandbox (`failed to apply exec policy`); under `/var/jb` the platform
+   sandbox profile applies and it runs.
+4. **Run as root**: `jbclient_initialize_primitives` only grants kernel R/W to
+   a root process. (`kalloc/kmap/kcall` also need an IOSurface entitlement, but
+   de-platforming needs only `kread`/`kwrite`, which work without it.)
+5. SSH to the device throttles hard on repeated password auth; use an
+   `ssh -M`/`ControlMaster` multiplexed connection to avoid re-auth.
+
 ## Staged plan (each stage commits + pushes)
 
-1. **Probe (read-only)** — `deplatform_probe.c`: walk the chain with
-   env-supplied offsets, validate every pointer is a kernel VA, hexdump the
-   `cs_blob`, print `csops`. Writes nothing. ← start here.
-2. Locate the `csb_platform_binary` bit by diffing a platform vs non-platform
-   `cs_blob` dump; pin the offsets.
-3. **Clear helper** — read-validate the full chain, then `kwrite` the platform
-   bit + `TF_PLATFORM`; re-read `csops` to confirm. Writes gated behind a
-   validated check and an explicit `--commit` flag (dry-run by default).
+1. ✅ **Probe (read-only)** — `deplatform_probe.c`: dumps `jbinfo` offsets,
+   tests `proc_find_main_binary_code_dir`, walks the chain, `csops`. No writes.
+2. ✅ **Offsets pinned** from Dopamine's live offset DB (see above).
+3. ✅ **Clear helper** — `deplatform.c`: validates `proc -> proc_ro ->
+   t_flags_ro`, then clears `TFRO_PLATFORM` via `kwrite32`. Dry-run by default;
+   writes only with `--commit` after validation.
 4. Self-de-platform, then `mmap(PROT_EXEC)` + `mremap_encrypted` the installed
-   binary (in-process, so no `exec` re-platformizes us); write plaintext out.
+   binary in-process (no `exec`, which would re-platformize us); write plaintext.
 5. Wire into `run.sh` / the `fouldecrypt` backend and add EPERM detection.
 
 ## Files
 
-- `deplatform_probe.c` — stage 1, read-only.
+- `deplatform_probe.c` — stage 1, read-only offset/chain discovery.
+- `deplatform.c` — stage 3, the TFRO_PLATFORM clear (dry-run unless `--commit`).
 - `libjailbreak.h` — minimal decls for the libjailbreak exports we call.
 - `build.sh` — cross-compile on macOS (iPhoneOS SDK) + link libjailbreak + sign.
-- `ent.plist` — ad-hoc signing entitlements.
+- `ent.plist` — ad-hoc signing entitlements (optional; trust cache suffices).
 
 Safety rule (user's personal device): no blind kernel writes — read-validate
-every offset against known-good values before any write.
+every offset against the live values before any write; dry-run is the default.

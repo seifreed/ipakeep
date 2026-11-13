@@ -34,4 +34,24 @@ uint32_t kread32(uint64_t kaddr);
 uint64_t kread64(uint64_t kaddr);
 int kreadbuf(uint64_t kaddr, void *buf, size_t size);
 
+/*
+ * Kernel memory writes. On Dopamine these are physical-write backed (physrw),
+ * so they reach read-only-mapped kernel memory such as the proc_ro structure
+ * (where the platform flag lives) -- an ordinary virtual write could not.
+ */
+void kwrite32(uint64_t kaddr, uint32_t value);
+void kwrite64(uint64_t kaddr, uint64_t value);
+
+/*
+ * Offset discovery. jbinfo_get_serialized returns an xpc dictionary of the
+ * jailbreak's boot constants and kernel struct offsets; xpc_copy_description
+ * renders any xpc object as readable text. proc_find_main_binary_code_dir
+ * resolves a proc's main-binary code directory in kernel memory (reportedly
+ * arm64e-gated -- the probe tests whether it works on this A11 anyway).
+ * Signatures are best-effort from the export table; the probe only reads.
+ */
+void *jbinfo_get_serialized(void);
+char *xpc_copy_description(void *object);
+uint64_t proc_find_main_binary_code_dir(uint64_t proc);
+
 #endif /* IPAKEEP_LIBJAILBREAK_H */
