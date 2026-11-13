@@ -13,6 +13,8 @@ pub mod simulator;
 
 use crate::domain::repository::AppStoreRepository;
 use crate::domain::usecase::ResolveApp;
+use std::path::Path;
+use std::time::Instant;
 
 /// Get the device GUID (MAC address) for Apple API requests.
 pub fn get_guid() -> String {
@@ -20,6 +22,38 @@ pub fn get_guid() -> String {
         || "000000000000".to_string(),
         |addr| addr.to_string().replace(':', "").to_uppercase(),
     )
+}
+
+fn save_artifact(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let started = Instant::now();
+    if let Err(error) = std::fs::write(path, bytes) {
+        tracing::error!(
+            service = "ipakeep",
+            component = "download",
+            operation = "save_ipa",
+            event_name = "download.artifact.save_failed",
+            outcome = "failure",
+            error_type = ?error.kind(),
+            duration_ms = elapsed_ms(started),
+            "failed to save downloaded IPA"
+        );
+        return Err(format!("failed to write file: {error}"));
+    }
+    tracing::info!(
+        service = "ipakeep",
+        component = "download",
+        operation = "save_ipa",
+        event_name = "download.artifact.saved",
+        outcome = "success",
+        size_bytes = bytes.len(),
+        duration_ms = elapsed_ms(started),
+        "downloaded IPA saved"
+    );
+    Ok(())
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Resolve a user-supplied app reference into a numeric App Store id.

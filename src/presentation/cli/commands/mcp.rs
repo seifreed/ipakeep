@@ -169,8 +169,7 @@ where
                 .map_err(|error| format!("download failed: {error}"))?;
             let patched = prepare_download(item, &bytes)?;
             let path = directory.join(ipa_filename(&item.metadata, app_id, index));
-            std::fs::write(&path, &patched)
-                .map_err(|error| format!("failed to write file: {error}"))?;
+            super::save_artifact(&path, &patched)?;
             files.push(SavedFile {
                 path: path.to_string_lossy().into_owned(),
                 size: patched.len(),

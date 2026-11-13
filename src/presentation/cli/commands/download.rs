@@ -12,7 +12,6 @@ use crate::presentation::cli::commands::{get_guid, resolve_app_id};
 use crate::presentation::cli::output::OutputFormat;
 use serde::Serialize;
 use std::path::Path;
-use std::time::Instant;
 
 /// CLI request parameters for the download command.
 pub struct DownloadRequest<'a> {
@@ -147,45 +146,13 @@ where
     let file_name = derive_ipa_filename(&item.metadata, app_id, index);
     let full_path = destination.path_for_item(&file_name);
 
-    save_artifact(&full_path, &patched)?;
+    super::save_artifact(&full_path, &patched)?;
     print_download_progress(format, &format!("Saved to: {}", full_path.display()));
 
     Ok(DownloadResult {
         path: full_path.to_string_lossy().to_string(),
         size: saved_size,
     })
-}
-
-fn save_artifact(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let started = Instant::now();
-    if let Err(error) = std::fs::write(path, bytes) {
-        tracing::error!(
-            service = "ipakeep",
-            component = "download",
-            operation = "save_ipa",
-            event_name = "download.artifact.save_failed",
-            outcome = "failure",
-            error_type = ?error.kind(),
-            duration_ms = elapsed_ms(started),
-            "failed to save downloaded IPA"
-        );
-        return Err(format!("failed to write file: {error}"));
-    }
-    tracing::info!(
-        service = "ipakeep",
-        component = "download",
-        operation = "save_ipa",
-        event_name = "download.artifact.saved",
-        outcome = "success",
-        size_bytes = bytes.len(),
-        duration_ms = elapsed_ms(started),
-        "downloaded IPA saved"
-    );
-    Ok(())
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn print_download_progress(format: &OutputFormat, message: &str) {
@@ -204,7 +171,7 @@ struct DownloadResult {
 
 #[cfg(test)]
 mod observability_tests {
-    use super::{DownloadResult, save_artifact};
+    use super::DownloadResult;
     use crate::infrastructure::observability::log_capture::LogCapture;
     use tempfile::TempDir;
 
@@ -214,7 +181,7 @@ mod observability_tests {
         let _guard = capture.install();
         let directory = TempDir::new().expect("temporary output directory");
         let path = directory.path().join("private-app.ipa");
-        save_artifact(&path, b"ipa-content").expect("save artifact");
+        super::super::save_artifact(&path, b"ipa-content").expect("save artifact");
 
         let logs = capture.contents();
         assert!(logs.contains("download.artifact.saved"));
