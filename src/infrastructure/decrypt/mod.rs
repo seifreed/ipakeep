@@ -18,6 +18,7 @@ use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
 use macho::Slice;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
 use std::process::Command;
@@ -99,10 +100,9 @@ pub fn inspect_ipa(ipa_bytes: &[u8]) -> Result<InspectReport, String> {
             continue;
         };
         let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
-        let basename = entry_basename(&name);
         let slice_reports: Vec<SliceReport> = slices
             .iter()
-            .map(|slice| slice_report(slice, &basename))
+            .map(|slice| slice_report(slice, &name))
             .collect();
         any_encrypted |= slice_reports.iter().any(|s| s.encrypted);
         machos.push(MachoReport {
@@ -119,7 +119,7 @@ pub fn inspect_ipa(ipa_bytes: &[u8]) -> Result<InspectReport, String> {
     })
 }
 
-fn slice_report(slice: &Slice, basename: &str) -> SliceReport {
+fn slice_report(slice: &Slice, entry: &str) -> SliceReport {
     let encryption = slice.encryption;
     let encrypted = encryption.is_some_and(|e| e.cryptid != 0);
     let minimum_os = slice.build_version.map(|b| format_version(b.minos));
@@ -143,52 +143,138 @@ fn slice_report(slice: &Slice, basename: &str) -> SliceReport {
         cryptoff: encryption.map(|e| e.cryptoff),
         cryptsize: encryption.map(|e| e.cryptsize),
         minimum_os,
-        dump_filename: encrypted.then(|| dump_filename(basename, &slice.arch)),
+        dump_filename: encrypted.then(|| dump_filename(entry, &slice.arch)),
         dumpable_on,
     }
 }
 
 /// Patch dumped plaintext slices back into an IPA and zero every `cryptid`.
 ///
-/// `from_dir` holds one file per encrypted slice, named as `inspect` reports
-/// (`<basename>.<arch>.bin`). Every encrypted slice must have a matching,
-/// correctly sized file, or the patch aborts rather than emit a partially
-/// decrypted IPA.
+/// `from_dir` holds one file per dumped slice, named as `inspect` reports
+/// (`<bundle-relative path>.<arch>.bin`, with `/` escaped as `%2F`); the legacy
+/// `<basename>.<arch>.bin` name is accepted as a fallback. A large slice may
+/// instead arrive as `<name>.part.<offset>` chunks, and a `<name>.uuid` sidecar
+/// carries the dumped module's `LC_UUID`.
+///
+/// Encrypted slices of a fat Mach-O without a dump (the device only runs one
+/// architecture) are removed from the binary; the drop is logged. A Mach-O
+/// whose every encrypted slice lacks a dump aborts the patch rather than emit a
+/// still-encrypted IPA.
 ///
 /// # Errors
 ///
-/// Returns an error if a dumped slice is missing/mis-sized or the archive
-/// cannot be rewritten.
+/// Returns an error if a dumped slice is missing/mis-sized, belongs to a
+/// different build (`LC_UUID` mismatch), or the archive cannot be rewritten.
 pub fn patch_ipa_decrypted(ipa_bytes: &[u8], from_dir: &Path) -> Result<Vec<u8>, String> {
+    let outcome = patch_with_report(ipa_bytes, from_dir)?;
+    for slice in &outcome.dropped_slices {
+        tracing::warn!(
+            event_name = "decrypt.patch.slice_dropped",
+            slice = %slice,
+            "no dump for encrypted slice; removed it from the fat binary"
+        );
+    }
+    for slice in &outcome.unverified_slices {
+        tracing::warn!(
+            event_name = "decrypt.patch.uuid_unverified",
+            slice = %slice,
+            "dump has no LC_UUID sidecar; cannot confirm it matches the IPA build"
+        );
+    }
+    Ok(outcome.ipa)
+}
+
+/// Result of [`patch_with_report`]: the patched IPA plus what was dropped or
+/// could not be matched by `LC_UUID`.
+struct PatchOutcome {
+    ipa: Vec<u8>,
+    /// `entry[arch]` of encrypted slices removed for lack of a dump.
+    dropped_slices: Vec<String>,
+    /// `entry[arch]` of patched slices whose dump carried no `LC_UUID`.
+    unverified_slices: Vec<String>,
+}
+
+fn patch_with_report(ipa_bytes: &[u8], from_dir: &Path) -> Result<PatchOutcome, String> {
     let mut scan = open_archive(ipa_bytes)?;
     let mut patched: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut dropped_slices = Vec::new();
+    let mut unverified_slices = Vec::new();
 
     for i in 0..scan.len() {
         let Some((name, mut bytes)) = read_if_macho(&mut scan, i)? else {
             continue;
         };
         let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
-        let basename = entry_basename(&name);
+        let mut missing = Vec::new();
         let mut touched = false;
-        for slice in &slices {
+        for (index, slice) in slices.iter().enumerate() {
             let Some(info) = slice.encryption.filter(|e| e.cryptid != 0) else {
                 continue;
             };
-            let filename = dump_filename(&basename, &slice.arch);
-            let dumped = read_dumped_slice(from_dir, &filename, info.cryptsize)?;
-            apply_slice(&mut bytes, slice, &dumped, info.command_offset)?;
+            let candidates = dump_filenames(&name, &slice.arch);
+            let Some(dump) = read_dumped_slice(from_dir, &candidates, info.cryptsize)? else {
+                missing.push((index, candidates[0].clone()));
+                continue;
+            };
+            let label = format!("{name}[{}]", slice.arch);
+            if check_uuid(slice.uuid, dump.uuid, &label)? {
+                unverified_slices.push(label);
+            }
+            apply_slice(&mut bytes, slice, &dump.bytes, info.command_offset)?;
             touched = true;
         }
-        if touched {
-            patched.insert(name, bytes);
+
+        if !touched {
+            if let Some((_, filename)) = missing.first() {
+                return Err(format!(
+                    "missing dumped slice {}: no dump for {name}",
+                    from_dir.join(filename).display()
+                ));
+            }
+            continue;
         }
+        if !missing.is_empty() {
+            bytes = macho::retain_slices(&bytes, |index| {
+                missing.iter().all(|(dropped, _)| *dropped != index)
+            })
+            .map_err(|e| format!("{name}: {e}"))?;
+            dropped_slices.extend(
+                missing
+                    .iter()
+                    .map(|(index, _)| format!("{name}[{}]", slices[*index].arch)),
+            );
+        }
+        patched.insert(name, bytes);
     }
 
     if patched.is_empty() {
         return Err("no encrypted Mach-O slices found to patch".into());
     }
 
-    repack(ipa_bytes, &patched)
+    Ok(PatchOutcome {
+        ipa: repack(ipa_bytes, &patched)?,
+        dropped_slices,
+        unverified_slices,
+    })
+}
+
+/// Reject a dump whose `LC_UUID` differs from the IPA slice's. Returns `true`
+/// when the match could not be verified (either side lacks a UUID).
+fn check_uuid(
+    expected: Option<[u8; 16]>,
+    dumped: Option<[u8; 16]>,
+    label: &str,
+) -> Result<bool, String> {
+    match (expected, dumped) {
+        (Some(expected), Some(dumped)) if expected != dumped => Err(format!(
+            "{label}: dumped LC_UUID {} does not match the IPA's {} \
+             (the installed app is a different build)",
+            hex(&dumped),
+            hex(&expected)
+        )),
+        (Some(_), Some(_)) => Ok(false),
+        _ => Ok(true),
+    }
 }
 
 fn apply_slice(
@@ -213,18 +299,119 @@ fn apply_slice(
     Ok(())
 }
 
-fn read_dumped_slice(from_dir: &Path, filename: &str, expected: u32) -> Result<Vec<u8>, String> {
-    let path = from_dir.join(filename);
-    let bytes = std::fs::read(&path)
-        .map_err(|e| format!("missing dumped slice {}: {e}", path.display()))?;
-    if bytes.len() as u64 != u64::from(expected) {
-        return Err(format!(
-            "{}: expected {expected} bytes (cryptsize), got {}",
-            path.display(),
-            bytes.len()
-        ));
+/// Plaintext of one slice as dumped on device, plus its `LC_UUID` if reported.
+struct DumpedSlice {
+    bytes: Vec<u8>,
+    uuid: Option<[u8; 16]>,
+}
+
+/// Read the first dump found among `candidates` (whole file, else chunks).
+/// `Ok(None)` means no candidate exists.
+fn read_dumped_slice(
+    from_dir: &Path,
+    candidates: &[String],
+    expected: u32,
+) -> Result<Option<DumpedSlice>, String> {
+    for filename in candidates {
+        let Some(bytes) = read_whole_or_chunks(from_dir, filename)? else {
+            continue;
+        };
+        if bytes.len() as u64 != u64::from(expected) {
+            return Err(format!(
+                "{}: expected {expected} bytes (cryptsize), got {}",
+                from_dir.join(filename).display(),
+                bytes.len()
+            ));
+        }
+        let uuid = read_uuid_sidecar(from_dir, filename)?;
+        return Ok(Some(DumpedSlice { bytes, uuid }));
     }
-    Ok(bytes)
+    Ok(None)
+}
+
+fn read_whole_or_chunks(from_dir: &Path, filename: &str) -> Result<Option<Vec<u8>>, String> {
+    let path = from_dir.join(filename);
+    match std::fs::read(&path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            read_chunks(from_dir, filename)
+        }
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+
+/// Reassemble `<filename>.part.<offset>` chunks; they must tile `[0, len)`.
+fn read_chunks(from_dir: &Path, filename: &str) -> Result<Option<Vec<u8>>, String> {
+    let prefix = format!("{filename}.part.");
+    let entries = match std::fs::read_dir(from_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", from_dir.display())),
+    };
+    let mut chunks = BTreeMap::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(offset) = name.strip_prefix(&prefix) else {
+            continue;
+        };
+        let offset: usize = offset
+            .parse()
+            .map_err(|_| format!("{name}: invalid chunk offset"))?;
+        chunks.insert(offset, entry.path());
+    }
+    if chunks.is_empty() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    for (offset, path) in chunks {
+        if offset != bytes.len() {
+            return Err(format!(
+                "{}: chunk at offset {offset} does not follow {} assembled bytes",
+                from_dir.join(filename).display(),
+                bytes.len()
+            ));
+        }
+        let chunk = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        bytes.extend(chunk);
+    }
+    Ok(Some(bytes))
+}
+
+/// Read `<filename>.uuid` (hex text, dashes allowed). Absent → `None`.
+fn read_uuid_sidecar(from_dir: &Path, filename: &str) -> Result<Option<[u8; 16]>, String> {
+    let path = from_dir.join(format!("{filename}.uuid"));
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    parse_uuid(&text)
+        .map(Some)
+        .ok_or_else(|| format!("{}: not a 16-byte hex UUID", path.display()))
+}
+
+fn parse_uuid(text: &str) -> Option<[u8; 16]> {
+    let digits: Vec<u8> = text
+        .bytes()
+        .filter(|b| !matches!(b, b'-' | b' ' | b'\n' | b'\r'))
+        .collect();
+    if digits.len() != 32 {
+        return None;
+    }
+    let mut uuid = [0_u8; 16];
+    for (byte, pair) in uuid.iter_mut().zip(digits.chunks(2)) {
+        let pair = std::str::from_utf8(pair).ok()?;
+        *byte = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(uuid)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02X}");
+        out
+    })
 }
 
 fn repack(ipa_bytes: &[u8], patched: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
@@ -372,12 +559,36 @@ fn read_app_info<R: Read + Seek>(
     Ok((string("CFBundleExecutable"), string("MinimumOSVersion")))
 }
 
-fn entry_basename(name: &str) -> String {
-    name.rsplit('/').next().unwrap_or(name).to_string()
+fn entry_basename(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
 }
 
-fn dump_filename(basename: &str, arch: &str) -> String {
-    format!("{basename}.{arch}.bin")
+/// Path of a zip entry relative to its `.app` bundle root (e.g.
+/// `Frameworks/Foo.framework/Foo`); the basename when no `.app/` is present.
+fn bundle_relative_path(name: &str) -> &str {
+    name.find(".app/")
+        .map_or_else(|| entry_basename(name), |at| &name[at + ".app/".len()..])
+}
+
+/// Dump file name for a slice: the bundle-relative path with `%` and `/`
+/// escaped so it stays one flat file name, plus `.<arch>.bin`. Must match
+/// `dumpName` in `scripts/frida/ipakeep_dump.js`.
+fn dump_filename(entry: &str, arch: &str) -> String {
+    let escaped = bundle_relative_path(entry)
+        .replace('%', "%25")
+        .replace('/', "%2F");
+    format!("{escaped}.{arch}.bin")
+}
+
+/// Candidate dump names, preferred first: path-based, then legacy basename.
+fn dump_filenames(entry: &str, arch: &str) -> Vec<String> {
+    let preferred = dump_filename(entry, arch);
+    let legacy = format!("{}.{arch}.bin", entry_basename(entry));
+    if legacy == preferred {
+        vec![preferred]
+    } else {
+        vec![preferred, legacy]
+    }
 }
 
 fn format_version(packed: u32) -> String {

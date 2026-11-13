@@ -19,6 +19,7 @@ const CPU_TYPE_ARM64: u32 = 0x0100_000c;
 const CPU_SUBTYPE_MASK: u32 = 0x00ff_ffff;
 const CPU_SUBTYPE_ARM64E: u32 = 2;
 
+const LC_UUID: u32 = 0x1b;
 const LC_ENCRYPTION_INFO: u32 = 0x21;
 const LC_ENCRYPTION_INFO_64: u32 = 0x2c;
 const LC_BUILD_VERSION: u32 = 0x32;
@@ -64,6 +65,8 @@ pub(super) struct Slice {
     pub(super) base: u64,
     pub(super) encryption: Option<EncryptionInfo>,
     pub(super) build_version: Option<BuildVersion>,
+    /// `LC_UUID` payload, identifying this exact build of the slice.
+    pub(super) uuid: Option<[u8; 16]>,
 }
 
 impl Slice {
@@ -126,6 +129,7 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
     // appear; track them separately and combine at the end.
     let mut build_version = None;
     let mut version_min = None;
+    let mut uuid = None;
 
     if read_le_u32(bytes, header) == Some(MH_MAGIC_64) {
         let ncmds = read_le_u32(bytes, header + 16).ok_or("truncated Mach-O header")?;
@@ -145,6 +149,12 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
                         cryptid: read_le_u32(bytes, cmd_at + 16).ok_or("truncated crypt info")?,
                         command_offset: offset,
                     });
+                }
+                LC_UUID => {
+                    let raw = bytes
+                        .get(cmd_at + 8..cmd_at + 24)
+                        .ok_or("truncated uuid command")?;
+                    uuid = Some(<[u8; 16]>::try_from(raw).map_err(|_| "truncated uuid command")?);
                 }
                 // `minos` at command +12.
                 LC_BUILD_VERSION => {
@@ -174,9 +184,120 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
         base,
         encryption,
         build_version: build_version.or(version_min),
+        uuid,
     })
 }
 
+/// One `fat_arch(_64)` entry: its raw header bytes plus the slice it describes.
+struct FatEntry<'a> {
+    header: &'a [u8],
+    align: u32,
+    slice: &'a [u8],
+}
+
+/// Rebuild a fat Mach-O keeping only the slices whose index `keep` accepts.
+///
+/// Slice indices match [`parse`]'s order. A single surviving slice is emitted
+/// as a thin Mach-O (like `lipo -thin`); several are repacked into a fresh fat
+/// archive honoring each slice's alignment.
+///
+/// # Errors
+///
+/// Returns an error when `bytes` is not fat, a fat entry is truncated or out of
+/// bounds, or no slice survives.
+pub(super) fn retain_slices(bytes: &[u8], keep: impl Fn(usize) -> bool) -> Result<Vec<u8>, String> {
+    let magic = read_be_u32(bytes, 0).ok_or("file too small for a Mach-O")?;
+    let offset_width = match magic {
+        FAT_MAGIC => 4,
+        FAT_MAGIC_64 => 8,
+        _ => return Err("only fat Mach-Os can be thinned".into()),
+    };
+    let entries: Vec<FatEntry> = fat_entries(bytes, offset_width)?
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| keep(index).then_some(entry))
+        .collect();
+    match entries.as_slice() {
+        [] => Err("no slice left after thinning".into()),
+        [only] => Ok(only.slice.to_vec()),
+        _ => repack_fat(magic, offset_width, &entries),
+    }
+}
+
+fn fat_entries(bytes: &[u8], offset_width: usize) -> Result<Vec<FatEntry<'_>>, String> {
+    let nfat = read_be_u32(bytes, 4).ok_or("truncated fat header")?;
+    let arch_len = fat_arch_len(offset_width);
+    let mut entries = Vec::new();
+    for index in 0..usize::try_from(nfat).map_err(|_| "fat count overflow")? {
+        let at = index
+            .checked_mul(arch_len)
+            .and_then(|o| o.checked_add(8))
+            .ok_or("fat offset overflow")?;
+        let header = bytes.get(at..at + arch_len).ok_or("truncated fat arch")?;
+        let offset = read_be_word(header, 8, offset_width).ok_or("truncated fat arch")?;
+        let size =
+            read_be_word(header, 8 + offset_width, offset_width).ok_or("truncated fat arch")?;
+        let align = read_be_u32(header, 8 + 2 * offset_width).ok_or("truncated fat arch")?;
+        let start = usize::try_from(offset).map_err(|_| "fat slice offset overflow")?;
+        let end = start
+            .checked_add(usize::try_from(size).map_err(|_| "fat slice size overflow")?)
+            .ok_or("fat slice size overflow")?;
+        let slice = bytes
+            .get(start..end)
+            .ok_or("fat slice exceeds file bounds")?;
+        entries.push(FatEntry {
+            header,
+            align,
+            slice,
+        });
+    }
+    Ok(entries)
+}
+
+fn fat_arch_len(offset_width: usize) -> usize {
+    if offset_width == 8 { 32 } else { 20 }
+}
+
+fn repack_fat(magic: u32, offset_width: usize, entries: &[FatEntry]) -> Result<Vec<u8>, String> {
+    let arch_len = fat_arch_len(offset_width);
+    let mut out = Vec::new();
+    out.extend(magic.to_be_bytes());
+    let count = u32::try_from(entries.len()).map_err(|_| "too many fat slices")?;
+    out.extend(count.to_be_bytes());
+    let table_at = out.len();
+    out.resize(table_at + entries.len() * arch_len, 0);
+
+    for (index, entry) in entries.iter().enumerate() {
+        let alignment = 1_usize
+            .checked_shl(entry.align)
+            .ok_or("fat slice alignment overflow")?;
+        let offset = out.len().div_ceil(alignment) * alignment;
+        out.resize(offset, 0);
+        out.extend_from_slice(entry.slice);
+
+        let at = table_at + index * arch_len;
+        let header = &mut out[at..at + arch_len];
+        header.copy_from_slice(entry.header);
+        write_be_word(header, 8, offset_width, offset)?;
+    }
+    Ok(out)
+}
+
+fn write_be_word(
+    bytes: &mut [u8],
+    offset: usize,
+    width: usize,
+    value: usize,
+) -> Result<(), String> {
+    if width == 8 {
+        let wide = u64::try_from(value).map_err(|_| "fat offset overflow")?;
+        bytes[offset..offset + 8].copy_from_slice(&wide.to_be_bytes());
+    } else {
+        let narrow = u32::try_from(value).map_err(|_| "fat offset exceeds 32-bit fat header")?;
+        bytes[offset..offset + 4].copy_from_slice(&narrow.to_be_bytes());
+    }
+    Ok(())
+}
 fn arch_label(cputype: u32, cpusubtype: u32) -> String {
     match (cputype, cpusubtype & CPU_SUBTYPE_MASK) {
         (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E) => "arm64e".into(),

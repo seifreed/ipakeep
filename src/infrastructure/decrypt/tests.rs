@@ -418,3 +418,226 @@ fn verify_rejects_fat_binary_without_slices() {
     assert!(!verify_ipa(&ipa).unwrap().ok);
     assert!(ensure_decrypted(ipa).is_err());
 }
+
+const LC_UUID: u32 = 0x1b;
+const CPU_SUBTYPE_ARM64E: u32 = 2;
+
+/// [`thin_macho`] plus an `LC_UUID` whose 16 bytes are all `uuid_byte`.
+fn thin_macho_with_uuid(cpusubtype: u32, filler: u8, uuid_byte: u8) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for value in [MH_MAGIC_64, CPU_TYPE_ARM64, cpusubtype, 2, 3, 72, 0, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    for value in [LC_ENCRYPTION_INFO_64, 24, CRYPTOFF, CRYPTSIZE, 1, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    for value in [LC_BUILD_VERSION, 24, 2, MINOS_16, MINOS_16, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    push_u32_le(&mut bytes, LC_UUID);
+    push_u32_le(&mut bytes, 24);
+    bytes.extend([uuid_byte; 16]);
+    bytes.resize(CRYPTOFF as usize, 0);
+    bytes.resize((CRYPTOFF + CRYPTSIZE) as usize, filler);
+    bytes
+}
+
+fn build_ipa_with(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in entries {
+        writer.start_file(*name, opts).unwrap();
+        writer.write_all(data).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+fn read_entry(ipa: &[u8], name: &str) -> Vec<u8> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(ipa)).unwrap();
+    let mut bytes = Vec::new();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    bytes
+}
+
+fn plaintext() -> Vec<u8> {
+    (0..CRYPTSIZE).map(|value| value.to_le_bytes()[0]).collect()
+}
+
+#[test]
+fn patch_thins_fat_binary_dropping_undumped_slices() {
+    let fat = fat_macho(&[
+        (
+            CPU_TYPE_ARM64,
+            0,
+            thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11),
+        ),
+        (
+            CPU_TYPE_ARM64,
+            CPU_SUBTYPE_ARM64E,
+            thin_macho(CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, MINOS_16, 0x22),
+        ),
+    ]);
+    let ipa = build_ipa(&fat);
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
+
+    let outcome = patch_with_report(&ipa, dir.path()).unwrap();
+
+    assert_eq!(
+        outcome.dropped_slices,
+        vec!["Payload/Test.app/TestExec[arm64e]".to_string()]
+    );
+    let exec = read_entry(&outcome.ipa, "Payload/Test.app/TestExec");
+    let slices = macho::parse(&exec).unwrap();
+    assert_eq!(slices.len(), 1);
+    assert_eq!(slices[0].arch, "arm64");
+    assert_eq!(slices[0].encryption.unwrap().cryptid, 0);
+    assert!(verify_ipa(&outcome.ipa).unwrap().ok);
+}
+
+#[test]
+fn retain_slices_repacks_remaining_fat_slices_aligned() {
+    let fat = fat_macho(&[
+        (
+            CPU_TYPE_ARM64,
+            0,
+            thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11),
+        ),
+        (
+            CPU_TYPE_ARM64,
+            CPU_SUBTYPE_ARM64E,
+            thin_macho(CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, MINOS_16, 0x22),
+        ),
+        (
+            CPU_TYPE_X86_64,
+            0,
+            thin_macho(CPU_TYPE_X86_64, 0, MINOS_16, 0x33),
+        ),
+    ]);
+    let thinned = macho::retain_slices(&fat, |index| index != 1).unwrap();
+    let slices = macho::parse(&thinned).unwrap();
+    let arches: Vec<_> = slices.iter().map(|s| s.arch.as_str()).collect();
+    assert_eq!(arches, ["arm64", "x86_64"]);
+    let (start, end) = slices[1].crypt_range().unwrap();
+    assert!(thinned[start..end].iter().all(|&b| b == 0x33));
+    assert!(macho::retain_slices(&fat, |_| false).is_err());
+}
+
+#[test]
+fn patch_still_fails_when_no_slice_of_a_binary_was_dumped() {
+    let fat = fat_macho(&[
+        (
+            CPU_TYPE_ARM64,
+            0,
+            thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11),
+        ),
+        (
+            CPU_TYPE_ARM64,
+            CPU_SUBTYPE_ARM64E,
+            thin_macho(CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, MINOS_16, 0x22),
+        ),
+    ]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let err = patch_ipa_decrypted(&build_ipa(&fat), dir.path()).unwrap_err();
+    assert!(err.contains("missing dumped slice"), "{err}");
+}
+
+#[test]
+fn patch_rejects_dump_with_mismatched_uuid() {
+    let ipa = build_ipa(&thin_macho_with_uuid(0, 0x11, 0xAA));
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin.uuid"), "BB".repeat(16)).unwrap();
+
+    let err = patch_ipa_decrypted(&ipa, dir.path()).unwrap_err();
+    assert!(err.contains("LC_UUID"), "{err}");
+}
+
+#[test]
+fn patch_accepts_matching_uuid_and_warns_without_one() {
+    let ipa = build_ipa(&thin_macho_with_uuid(0, 0x11, 0xAA));
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
+
+    let unverified = patch_with_report(&ipa, dir.path()).unwrap();
+    assert_eq!(unverified.unverified_slices.len(), 1);
+
+    std::fs::write(
+        dir.path().join("TestExec.arm64.bin.uuid"),
+        "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\n",
+    )
+    .unwrap();
+    let verified = patch_with_report(&ipa, dir.path()).unwrap();
+    assert!(verified.unverified_slices.is_empty());
+    assert!(verify_ipa(&verified.ipa).unwrap().ok);
+}
+
+#[test]
+fn same_named_binaries_use_bundle_relative_dump_names() {
+    let app = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11);
+    let framework = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x22);
+    let framework_entry = "Payload/Test.app/Frameworks/Core.framework/TestExec";
+    let ipa = build_ipa_with(&[
+        ("Payload/Test.app/TestExec", &app),
+        (framework_entry, &framework),
+    ]);
+
+    let report = inspect_ipa(&ipa).unwrap();
+    let names: Vec<_> = report
+        .machos
+        .iter()
+        .map(|m| m.slices[0].dump_filename.clone().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "TestExec.arm64.bin",
+            "Frameworks%2FCore.framework%2FTestExec.arm64.bin"
+        ]
+    );
+
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join(&names[0]), vec![0xA1; CRYPTSIZE as usize]).unwrap();
+    std::fs::write(dir.path().join(&names[1]), vec![0xB2; CRYPTSIZE as usize]).unwrap();
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).unwrap();
+
+    for (entry, expected) in [("Payload/Test.app/TestExec", 0xA1), (framework_entry, 0xB2)] {
+        let exec = read_entry(&patched, entry);
+        let (start, end) = macho::parse(&exec).unwrap()[0].crypt_range().unwrap();
+        assert!(exec[start..end].iter().all(|&b| b == expected), "{entry}");
+    }
+}
+
+#[test]
+fn patch_falls_back_to_legacy_basename_dump_name() {
+    let entry = "Payload/Test.app/Frameworks/Core.framework/Core";
+    let ipa = build_ipa_with(&[(entry, &thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11))]);
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("Core.arm64.bin"), plaintext()).unwrap();
+
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).unwrap();
+    assert!(verify_ipa(&patched).unwrap().ok);
+}
+
+#[test]
+fn patch_reassembles_chunked_dump() {
+    let ipa = build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11));
+    let data = plaintext();
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin.part.0"), &data[..0x30]).unwrap();
+    std::fs::write(dir.path().join("TestExec.arm64.bin.part.48"), &data[0x30..]).unwrap();
+
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).unwrap();
+    let exec = read_entry(&patched, "Payload/Test.app/TestExec");
+    let (start, end) = macho::parse(&exec).unwrap()[0].crypt_range().unwrap();
+    assert_eq!(&exec[start..end], data.as_slice());
+
+    std::fs::remove_file(dir.path().join("TestExec.arm64.bin.part.0")).unwrap();
+    let err = patch_ipa_decrypted(&ipa, dir.path()).unwrap_err();
+    assert!(err.contains("chunk at offset 48"), "{err}");
+}
