@@ -34,11 +34,23 @@ where
     R: AppStoreRepository,
 {
     if let Ok(id) = app.parse::<i64>() {
-        tracing::debug!(app_id = id, "resolved app reference as numeric id");
+        tracing::debug!(
+            service = "ipakeep",
+            component = "cli",
+            operation = "resolve_app_id",
+            event_name = "app.reference.resolved",
+            app_id = id,
+            resolution = "numeric_id",
+            "app reference resolved"
+        );
         return Ok(id);
     }
 
     tracing::debug!(
+        service = "ipakeep",
+        component = "cli",
+        operation = "resolve_app_id",
+        event_name = "app.reference.lookup_started",
         app_ref_len = app.len(),
         country,
         "resolving app reference by bundle id"
@@ -48,11 +60,23 @@ where
         .await
         .map_err(|e| format!("lookup failed: {e}"))?
     {
-        tracing::debug!(app_id = found.id, "resolved app reference by bundle id");
+        tracing::debug!(
+            service = "ipakeep",
+            component = "cli",
+            operation = "resolve_app_id",
+            event_name = "app.reference.resolved",
+            app_id = found.id,
+            resolution = "bundle_id",
+            "app reference resolved"
+        );
         return Ok(found.id);
     }
 
     tracing::debug!(
+        service = "ipakeep",
+        component = "cli",
+        operation = "resolve_app_id",
+        event_name = "app.reference.search_started",
         app_ref_len = app.len(),
         country,
         "resolving app reference by search"
@@ -63,10 +87,25 @@ where
         .map_err(|e| format!("search failed: {e}"))?;
 
     let Some(first) = results.into_iter().next() else {
-        tracing::debug!("app reference resolution returned no search results");
+        tracing::debug!(
+            service = "ipakeep",
+            component = "cli",
+            operation = "resolve_app_id",
+            event_name = "app.reference.resolved",
+            outcome = "not_found",
+            "app reference did not resolve"
+        );
         return Err(format!("no app found matching '{app}'"));
     };
-    tracing::debug!(app_id = first.id, "resolved app reference by search");
+    tracing::debug!(
+        service = "ipakeep",
+        component = "cli",
+        operation = "resolve_app_id",
+        event_name = "app.reference.resolved",
+        app_id = first.id,
+        resolution = "search",
+        "app reference resolved"
+    );
     Ok(first.id)
 }
 
@@ -136,7 +175,7 @@ mod tests {
         let logs = capture.contents();
         assert!(logs.contains("resolving app reference by bundle id"));
         assert!(logs.contains("resolving app reference by search"));
-        assert!(logs.contains("resolved app reference by search"));
+        assert!(logs.contains("app.reference.resolved"));
         assert!(!logs.contains("secret-app-name"));
     }
 

@@ -109,6 +109,7 @@ fn record_process_result(
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match status {
         Ok(status) if status.success() => tracing::debug!(
+            service = "ipakeep",
             component = "external_process",
             event_name = "process.completed",
             program,
@@ -118,6 +119,7 @@ fn record_process_result(
             "external process completed"
         ),
         Ok(status) => tracing::warn!(
+            service = "ipakeep",
             component = "external_process",
             event_name = "process.completed",
             program,
@@ -127,6 +129,7 @@ fn record_process_result(
             "external process returned a failure status"
         ),
         Err(error) => tracing::warn!(
+            service = "ipakeep",
             component = "external_process",
             event_name = "process.spawn_failed",
             program,

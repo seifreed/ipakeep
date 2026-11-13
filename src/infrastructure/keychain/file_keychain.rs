@@ -63,6 +63,7 @@ impl CredentialRepository for FileKeychain {
 
         write_private_file(&self.auth_file(), &json)?;
         tracing::info!(
+            service = "ipakeep",
             component = "credential_store",
             backend = "file",
             operation = "save",
@@ -79,6 +80,7 @@ impl CredentialRepository for FileKeychain {
 
         if !path.exists() {
             tracing::debug!(
+                service = "ipakeep",
                 component = "credential_store",
                 backend = "file",
                 operation = "load",
@@ -99,6 +101,7 @@ impl CredentialRepository for FileKeychain {
         })?;
 
         tracing::debug!(
+            service = "ipakeep",
             component = "credential_store",
             backend = "file",
             operation = "load",
@@ -122,6 +125,7 @@ impl CredentialRepository for FileKeychain {
             .await
             .map_err(|e: std::io::Error| CredentialError::DeleteFailed(e.to_string()))?;
         tracing::info!(
+            service = "ipakeep",
             component = "credential_store",
             backend = "file",
             operation = "delete",

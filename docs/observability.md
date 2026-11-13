@@ -198,3 +198,11 @@ attempt count, reason, and configured delay. Ordinary 4xx responses log at
 DEBUG; 408, 429, and server errors remain WARN. The CLI panic hook emits a
 CRITICAL-equivalent `ERROR` event with source basename and line, never the panic
 payload.
+
+### Milestone 10 — normalized events and artifact privacy
+
+Legacy GrandSlam, App Store, CLI resolution, process, and simulator events now
+use the shared service/component/operation/event naming convention. SPD schema
+keys are no longer logged. Download progress and JSON results no longer expose
+Apple's signed source URL; the final file write emits size and duration without
+the output path. Tests cover safe artifact events and the 404 log level.

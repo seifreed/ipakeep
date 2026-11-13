@@ -66,13 +66,17 @@ pub(super) async fn purchase(
     let sent_store_front = headers
         .get("X-Apple-Store-Front")
         .map_or("", String::as_str);
-    tracing::debug!(
-        %failure_type,
-        %sent_store_front,
-        %server_store_front,
-        sent_dsid_len = headers.get("X-Dsid").map_or(0, String::len),
+    tracing::warn!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "purchase",
+        event_name = "appstore.purchase.rejected",
+        outcome = "failure",
+        failure_type,
+        request_store_front = sent_store_front,
+        response_store_front = server_store_front,
+        dsid_len = headers.get("X-Dsid").map_or(0, String::len),
         auth_scheme = "password-token",
-        body_keys = ?response.body.as_object().map(|body| body.keys().collect::<Vec<_>>()),
         "purchase rejected by store"
     );
 

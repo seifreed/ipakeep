@@ -94,6 +94,7 @@ async fn authenticate_with_attempt(
         if response.status.is_server_error() {
             if attempt < MAX_RETRIES - 1 {
                 tracing::warn!(
+                    service = "ipakeep",
                     component = "authentication",
                     operation = "apple_login",
                     event_name = "auth.retry.scheduled",
@@ -115,6 +116,7 @@ async fn authenticate_with_attempt(
         if response.status == reqwest::StatusCode::NO_CONTENT && response.body.is_null() {
             if attempt < MAX_RETRIES - 1 {
                 tracing::warn!(
+                    service = "ipakeep",
                     component = "authentication",
                     operation = "apple_login",
                     event_name = "auth.retry.scheduled",

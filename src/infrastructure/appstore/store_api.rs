@@ -73,6 +73,7 @@ impl AppleAppStoreRepository {
 
         let pod_url = format!("https://p{pod}-buy.itunes.apple.com{path}{query}");
         tracing::debug!(
+            service = "ipakeep",
             component = "appstore",
             operation = "store_request",
             event_name = "appstore.request.retry",

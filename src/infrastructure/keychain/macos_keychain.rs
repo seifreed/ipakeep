@@ -104,6 +104,7 @@ impl CredentialRepository for MacOSKeychain {
         .await
         .map_err(|e| CredentialError::SaveFailed(format!("task failed: {e}")))??;
         tracing::info!(
+            service = "ipakeep",
             component = "credential_store",
             backend = "macos_keychain",
             operation = "save",
@@ -125,6 +126,7 @@ impl CredentialRepository for MacOSKeychain {
                         ))
                     })?;
                 tracing::debug!(
+                    service = "ipakeep",
                     component = "credential_store",
                     backend = "macos_keychain",
                     operation = "load",
@@ -137,6 +139,7 @@ impl CredentialRepository for MacOSKeychain {
             }
             Err(CredentialError::NotFound) => {
                 tracing::debug!(
+                    service = "ipakeep",
                     component = "credential_store",
                     backend = "macos_keychain",
                     operation = "load",
@@ -171,6 +174,7 @@ impl CredentialRepository for MacOSKeychain {
         .await
         .map_err(|e| CredentialError::DeleteFailed(format!("task failed: {e}")))??;
         tracing::info!(
+            service = "ipakeep",
             component = "credential_store",
             backend = "macos_keychain",
             operation = "delete",

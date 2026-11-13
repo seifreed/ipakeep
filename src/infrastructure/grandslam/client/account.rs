@@ -21,15 +21,10 @@ pub(super) fn parse_spd_account(spd: &JsonValue) -> Account {
     let name = format!("{first_name} {last_name}").trim().to_string();
 
     tracing::debug!(
-        spd_keys = ?spd
-            .as_object()
-            .map(|o| o.keys().map(String::as_str).collect::<Vec<_>>())
-            .unwrap_or_default(),
-        service_tokens = ?spd
-            .get("t")
-            .and_then(JsonValue::as_object)
-            .map(|o| o.keys().map(String::as_str).collect::<Vec<_>>())
-            .unwrap_or_default(),
+        service = "ipakeep",
+        component = "grandslam",
+        operation = "parse_account",
+        event_name = "auth.account.parsed",
         dsid_len = dsid.len(),
         dsid_numeric = !dsid.is_empty() && dsid.bytes().all(|b| b.is_ascii_digit()),
         "parsed GrandSlam SPD account fields"

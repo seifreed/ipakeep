@@ -98,6 +98,7 @@ pub fn install_panic_hook() {
             None => ("unknown".into(), 0),
         };
         tracing::error!(
+            service = "ipakeep",
             component = "runtime",
             event_name = "application.panic",
             source_file,

@@ -128,6 +128,7 @@ fn record_body_read(
     let duration_ms = elapsed_ms(started);
     if let Some(error) = error {
         tracing::warn!(
+            service = "ipakeep",
             component = "http",
             event_name = "http.response.body_read_failed",
             status,
@@ -140,6 +141,7 @@ fn record_body_read(
     }
     if let Some(body_bytes) = body_bytes {
         tracing::debug!(
+            service = "ipakeep",
             component = "http",
             event_name = "http.response.body_read",
             status,
@@ -150,6 +152,7 @@ fn record_body_read(
         );
     } else {
         tracing::debug!(
+            service = "ipakeep",
             component = "http",
             event_name = "http.response.body_read",
             status,
@@ -286,5 +289,26 @@ mod tests {
             .expect_err("closed server");
 
         assert!(!error.to_string().contains("private-value"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ordinary_not_found_response_is_debug_not_warning() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+        let client = Client::new();
+
+        send_with_observability(&client, client.get(server.uri()))
+            .await
+            .expect("HTTP response");
+
+        let logs = capture.contents();
+        assert!(logs.contains("http.response.headers_received"));
+        assert!(logs.contains("DEBUG"));
+        assert!(!logs.contains("WARN"));
     }
 }

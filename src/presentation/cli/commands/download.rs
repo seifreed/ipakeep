@@ -13,6 +13,7 @@ use crate::presentation::cli::output::OutputFormat;
 use serde::Serialize;
 use std::io::Cursor;
 use std::path::Path;
+use std::time::Instant;
 
 /// CLI request parameters for the download command.
 pub struct DownloadRequest<'a> {
@@ -133,7 +134,7 @@ where
     };
     print_download_progress(
         format,
-        &format!("Downloading item {}: {} (MD5: {md5})", index + 1, item.url),
+        &format!("Downloading item {} (MD5: {md5})", index + 1),
     );
 
     let bytes = app_store
@@ -154,14 +155,45 @@ where
     let file_name = derive_ipa_filename(&item.metadata, app_id, index);
     let full_path = destination.path_for_item(&file_name);
 
-    std::fs::write(&full_path, &patched).map_err(|e| format!("failed to write file: {e}"))?;
+    save_artifact(&full_path, &patched)?;
     print_download_progress(format, &format!("Saved to: {}", full_path.display()));
 
     Ok(DownloadResult {
-        url: item.url.clone(),
         path: full_path.to_string_lossy().to_string(),
         size: saved_size,
     })
+}
+
+fn save_artifact(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let started = Instant::now();
+    if let Err(error) = std::fs::write(path, bytes) {
+        tracing::error!(
+            service = "ipakeep",
+            component = "download",
+            operation = "save_ipa",
+            event_name = "download.artifact.save_failed",
+            outcome = "failure",
+            error_type = ?error.kind(),
+            duration_ms = elapsed_ms(started),
+            "failed to save downloaded IPA"
+        );
+        return Err(format!("failed to write file: {error}"));
+    }
+    tracing::info!(
+        service = "ipakeep",
+        component = "download",
+        operation = "save_ipa",
+        event_name = "download.artifact.saved",
+        outcome = "success",
+        size_bytes = bytes.len(),
+        duration_ms = elapsed_ms(started),
+        "downloaded IPA saved"
+    );
+    Ok(())
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn print_download_progress(format: &OutputFormat, message: &str) {
@@ -174,7 +206,37 @@ fn print_download_progress(format: &OutputFormat, message: &str) {
 /// Result of a single downloaded item for JSON output.
 #[derive(Debug, Serialize)]
 struct DownloadResult {
-    url: String,
     path: String,
     size: usize,
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::{DownloadResult, save_artifact};
+    use crate::infrastructure::observability::log_capture::LogCapture;
+    use tempfile::TempDir;
+
+    #[test]
+    fn artifact_saved_event_reports_size_without_full_path() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let directory = TempDir::new().expect("temporary output directory");
+        let path = directory.path().join("private-app.ipa");
+        save_artifact(&path, b"ipa-content").expect("save artifact");
+
+        let logs = capture.contents();
+        assert!(logs.contains("download.artifact.saved"));
+        assert!(logs.contains("size_bytes=11"));
+        assert!(!logs.contains(path.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn download_json_result_does_not_include_signed_source_url() {
+        let result = DownloadResult {
+            path: "app.ipa".into(),
+            size: 11,
+        };
+        let json = serde_json::to_string(&result).expect("download result JSON");
+        assert!(!json.contains("url"));
+    }
 }

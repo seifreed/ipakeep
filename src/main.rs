@@ -77,6 +77,7 @@ async fn run() -> Result<(), String> {
     observability::install_panic_hook();
     tracing::info!(
         service = "ipakeep",
+        component = "cli",
         version = env!("CARGO_PKG_VERSION"),
         event_name = "application.started",
         "application started"
@@ -86,25 +87,27 @@ async fn run() -> Result<(), String> {
     let span = tracing::info_span!(
         "cli.command",
         service = "ipakeep",
+        component = "cli",
         environment = %observability::environment(),
         operation,
         outcome = tracing::field::Empty,
         duration_ms = tracing::field::Empty,
     );
     let started = Instant::now();
-    tracing::info!(parent: &span, service = "ipakeep", operation, event_name = "command.started", "command started");
+    tracing::info!(parent: &span, service = "ipakeep", component = "cli", operation, event_name = "command.started", "command started");
     let result = run_command(cli).instrument(span.clone()).await;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let outcome = if result.is_ok() { "success" } else { "failure" };
     span.record("outcome", outcome);
     span.record("duration_ms", duration_ms);
     if result.is_ok() {
-        tracing::info!(parent: &span, service = "ipakeep", operation, event_name = "command.completed", outcome, duration_ms, "command completed");
+        tracing::info!(parent: &span, service = "ipakeep", component = "cli", operation, event_name = "command.completed", outcome, duration_ms, "command completed");
     } else {
-        tracing::error!(parent: &span, service = "ipakeep", operation, event_name = "command.failed", outcome, duration_ms, error_type = "command_error", "command failed; see stderr for details");
+        tracing::error!(parent: &span, service = "ipakeep", component = "cli", operation, event_name = "command.failed", outcome, duration_ms, error_type = "command_error", "command failed; see stderr for details");
     }
     tracing::info!(
         service = "ipakeep",
+        component = "cli",
         event_name = "application.stopped",
         "application stopped"
     );

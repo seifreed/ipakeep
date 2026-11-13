@@ -45,6 +45,10 @@ pub(super) fn parse_srp_init_response(
     })?;
 
     tracing::debug!(
+        service = "ipakeep",
+        component = "grandslam",
+        operation = "srp_init",
+        event_name = "auth.srp.parameters_received",
         sp = %sp,
         iterations,
         salt_len = salt.len(),

@@ -25,6 +25,7 @@ pub use runtime::unlock_runtime_path;
 /// Returns an error if the path cannot be scanned or a Mach-O write fails.
 pub fn prepare_path(path: &Path) -> Result<Vec<PathBuf>, String> {
     tracing::debug!(
+        service = "ipakeep",
         component = "simulator",
         operation = "prepare_path",
         event_name = "simulator.prepare.started",
@@ -33,6 +34,7 @@ pub fn prepare_path(path: &Path) -> Result<Vec<PathBuf>, String> {
     let mut converted = Vec::new();
     prepare_path_inner(path, &mut converted)?;
     tracing::debug!(
+        service = "ipakeep",
         component = "simulator",
         operation = "prepare_path",
         event_name = "simulator.prepare.completed",
@@ -56,6 +58,7 @@ pub fn install_ipa(
     entitlements: Option<&Path>,
 ) -> Result<PathBuf, String> {
     tracing::debug!(
+        service = "ipakeep",
         component = "simulator",
         operation = "install_ipa",
         event_name = "simulator.install.started",
@@ -66,6 +69,7 @@ pub fn install_ipa(
     );
     let app = installer::install_ipa(ipa, run_after_install, console, target, entitlements)?;
     tracing::debug!(
+        service = "ipakeep",
         component = "simulator",
         operation = "install_ipa",
         event_name = "simulator.install.completed",
@@ -130,6 +134,7 @@ pub fn run_app(
     entitlements: Option<&Path>,
 ) -> Result<(), String> {
     tracing::debug!(
+        service = "ipakeep",
         component = "simulator",
         operation = "run_app",
         event_name = "simulator.launch.started",
