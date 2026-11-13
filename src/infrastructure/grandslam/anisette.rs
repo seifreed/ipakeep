@@ -15,6 +15,7 @@ use crate::domain::error::AppStoreError;
 use crate::infrastructure::exec::observed_output;
 #[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
 use fields::current_locale;
+#[cfg(any(ipakeep_modern_adi, test))]
 use fields::{AnisetteFields, build_cpd, build_headers};
 #[cfg(not(ipakeep_modern_adi))]
 use remote::fetch_remote;
@@ -87,6 +88,11 @@ pub async fn resolve_anisette(_client: &reqwest::Client) -> Result<AnisetteData,
 }
 
 #[cfg(not(ipakeep_modern_adi))]
+/// Resolve Anisette data from an explicit server or the platform provider.
+///
+/// # Errors
+///
+/// Returns an error when no usable Anisette provider is available.
 pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
     if let Ok(url) = std::env::var("IPAKEEP_ANISETTE_URL") {
         let url = url.trim();
@@ -109,6 +115,7 @@ pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, 
     }
 }
 
+#[cfg(any(ipakeep_modern_adi, test))]
 pub(super) fn from_headers(
     headers: HashMap<String, String>,
 ) -> Result<AnisetteData, AppStoreError> {

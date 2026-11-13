@@ -28,7 +28,8 @@ struct HelperResponse {
 
 /// Generate Anisette using Apple's current Store ADI implementation.
 pub(super) async fn generate() -> Result<super::anisette::AnisetteData, AppStoreError> {
-    let output = tokio::task::spawn_blocking(run_helper)
+    let span = tracing::Span::current();
+    let output = tokio::task::spawn_blocking(move || span.in_scope(run_helper))
         .await
         .map_err(|error| {
             AppStoreError::NetworkError(format!("modern Anisette task failed: {error}"))

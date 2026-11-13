@@ -122,10 +122,8 @@ Validation at this milestone: 268 tests pass, 1 ignored; `cargo check`,
 The initial score remains 4.4/10 until coverage and architecture work is
 complete.
 
-Remaining work: move instrumentation out of domain use cases; observe outbound
-HTTP, storage, filesystem, and subprocess boundaries; test structured output,
-secret handling, and concurrent events; finish the operator documentation and
-rescore.
+This remaining-work list was the snapshot at milestone 1; later milestones
+below record its completion and follow-up validation.
 
 ### Milestone 2 — domain boundary and outbound HTTP
 
@@ -206,3 +204,98 @@ use the shared service/component/operation/event naming convention. SPD schema
 keys are no longer logged. Download progress and JSON results no longer expose
 Apple's signed source URL; the final file write emits size and duration without
 the output path. Tests cover safe artifact events and the 404 log level.
+
+### Milestone 11 — command integration and cross-platform verification
+
+An integration test launches the real CLI and verifies JSON event structure,
+stderr/stdout separation, command-span environment context, failure lifecycle,
+and exclusion of the input path. Linux cross-compilation exposed and fixed a
+missing direct `libc` dependency and platform-only imports; authentication
+header setup now compiles without warnings on both macOS and Linux.
+
+Validation: 277 tests pass, 1 ignored; `cargo check`, `cargo build`,
+`cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check` pass on
+macOS. `cargo check --target aarch64-unknown-linux-gnu` passes in a Rust 1.94
+Linux container without warnings.
+
+## Operator guide
+
+### Configuration and destination
+
+| Setting | Default | Effect |
+|---|---|---|
+| `RUST_LOG` | `info`, or `debug` with `--verbose` | `tracing` filter; when set, it overrides the fallback level. |
+| `IPAKEEP_LOG_FORMAT` | `text` | `text` or `json`; JSON is one event per stderr line. |
+| `IPAKEEP_ENV` | `unspecified` | Sanitized environment label on the command span. |
+| destination | stderr | Keeps command results and `--format json` on stdout. |
+
+Examples:
+
+```sh
+RUST_LOG=debug ipakeep --verbose search "Ludo Star"
+IPAKEEP_LOG_FORMAT=json RUST_LOG=info IPAKEEP_ENV=production \
+  ipakeep --format json decrypt inspect ./missing.ipa
+RUST_LOG=ipakeep::infrastructure::http=debug,ipakeep=info ipakeep search "Ludo Star"
+```
+
+The CLI is short-lived and writes a small number of events to stderr. It does
+not create log files, so local rotation and retention do not apply. The
+synchronous stderr writer avoids a background worker or mandatory collector;
+the CLI does not buffer events for an asynchronous flush. No external exporter,
+metrics service, or network connection is required to use logging.
+
+### Event fields and correlation
+
+Events use UTC timestamps and normalized `service`, `component`, `operation`,
+`event_name`, `outcome`, `duration_ms`, `status`, `error_type`, and `body_bytes`
+fields when relevant. A `cli.command` span wraps awaited command work and carries
+the command operation and environment. HTTP, keychain, retry, and child-process
+events within that work inherit the span; JSON includes it under `span`. A
+single local CLI invocation is the correlation boundary, so the project does
+not generate request IDs, W3C trace IDs, or distributed spans.
+
+Useful events include:
+
+- `command.started`, `command.completed`, `command.failed`, and
+  `application.panic` for the process lifecycle.
+- `http.response.headers_received`, `http.response.body_read`, and
+  `http.response.body_read_failed` for remote calls and artifact transfer.
+- `credentials.saved`, `credentials.loaded`, and `credentials.deleted` for
+  credential persistence.
+- `process.completed` and `process.spawn_failed` for host tools.
+- `auth.retry.scheduled` and `appstore.request.retry` for recoverable retries.
+- `download.artifact.saved` for the local IPA write.
+
+Successful request/process detail and routine state resolution are DEBUG.
+Command and credential writes are INFO. Recoverable fallbacks, retries,
+server failures, process failures, and panics use WARN or ERROR according to
+impact. Normal 4xx responses use DEBUG because optional 404s are part of a few
+fallback paths; 408, 429, and 5xx remain WARN.
+
+### Privacy and adding events
+
+Do not log CLI arguments verbatim, signed URLs, query strings, request or
+response bodies, auth headers, cookies, account fields, filesystem paths, or
+child-process arguments/output. HTTP events keep the hostname and omit the
+path/query. Process events keep only the executable basename and exit metadata.
+Response errors retain status and safe parser/error classifications; raw
+request URLs and arbitrary server bodies are removed. User-facing CLI output
+may still include a path when it identifies the requested file operation, but
+that path is not copied into tracing events.
+
+When adding an event, use the existing `tracing` macros at the relevant
+presentation or infrastructure boundary. Give it a stable `event_name`, set
+`component` and `operation`, choose a level by impact, and include only safe
+fields needed to diagnose the outcome. Keep domain use cases free of tracing;
+the command span already correlates their awaited work with infrastructure
+events.
+
+### Captured example
+
+This command was run locally with `IPAKEEP_LOG_FORMAT=json`, `RUST_LOG=info`,
+and `IPAKEEP_ENV=production`; the IPA was intentionally missing. This is the
+actual command failure event, separated from the user-facing stderr error:
+
+```json
+{"timestamp":"2026-11-13T13:34:56.870812Z","level":"ERROR","message":"command failed; see stderr for details","service":"ipakeep","component":"cli","operation":"decrypt.inspect","event_name":"command.failed","outcome":"failure","duration_ms":3,"error_type":"command_error","target":"ipakeep","span":{"component":"cli","duration_ms":3,"environment":"production","operation":"decrypt.inspect","outcome":"failure","service":"ipakeep","name":"cli.command"},"spans":[]}
+```

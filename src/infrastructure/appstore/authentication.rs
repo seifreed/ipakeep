@@ -74,17 +74,7 @@ async fn authenticate_with_attempt(
     }
 
     for attempt in 0..MAX_RETRIES {
-        let mut request_headers = headers.clone();
-        if is_native_auth_url(&auth_url) {
-            #[cfg(target_os = "macos")]
-            request_headers
-                .extend(super::native_auth::request_headers(&auth_url, &plist_xml).await?);
-            #[cfg(not(target_os = "macos"))]
-            return Err(AppStoreError::AuthenticationFailed(
-                "Apple's native App Store login requires macOS Store signing and device proof"
-                    .into(),
-            ));
-        }
+        let request_headers = request_headers(&auth_url, &plist_xml, &headers).await?;
 
         let response = client
             .post_auth_plist_bytes(&auth_url, &plist_xml, Some(&request_headers))
@@ -154,6 +144,29 @@ async fn authenticate_with_attempt(
     Err(AppStoreError::AuthenticationFailed(
         "authentication failed after retries".into(),
     ))
+}
+
+async fn request_headers(
+    auth_url: &str,
+    plist_xml: &[u8],
+    headers: &HashMap<String, String>,
+) -> Result<HashMap<String, String>, AppStoreError> {
+    #[cfg(target_os = "macos")]
+    if is_native_auth_url(auth_url) {
+        let mut headers = headers.clone();
+        headers.extend(super::native_auth::request_headers(auth_url, plist_xml).await?);
+        return Ok(headers);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if is_native_auth_url(auth_url) {
+        return Err(AppStoreError::AuthenticationFailed(
+            "Apple's native App Store login requires macOS Store signing and device proof".into(),
+        ));
+    }
+
+    let _ = plist_xml;
+    Ok(headers.clone())
 }
 
 fn is_native_auth_url(auth_url: &str) -> bool {
@@ -299,6 +312,33 @@ mod tests {
         ));
         assert!(!is_native_auth_url(
             "http://auth.itunes.apple.com/auth/v1/native"
+        ));
+    }
+
+    #[tokio::test]
+    async fn non_native_auth_headers_are_preserved() {
+        let headers = HashMap::from([("User-Agent".into(), "safe-agent".into())]);
+
+        let result = request_headers("https://example.invalid/auth", b"", &headers)
+            .await
+            .expect("non-native headers");
+
+        assert_eq!(result, headers);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn native_auth_headers_fail_closed_off_macos() {
+        let result = request_headers(
+            "https://auth.itunes.apple.com/auth/v1/native",
+            b"",
+            &HashMap::new(),
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(AppStoreError::AuthenticationFailed(_))
         ));
     }
 }

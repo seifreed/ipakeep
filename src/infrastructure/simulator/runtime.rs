@@ -1,6 +1,10 @@
+#[cfg(target_os = "macos")]
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 
+#[cfg(target_os = "macos")]
 use super::{command_output, command_with_args, run_checked};
 
 /// Create a read-write tmpfs overlay for a Simulator runtime path.
