@@ -87,7 +87,6 @@ pub(super) fn parse_srp_init_response(
 pub(super) fn two_factor_required_result(
     inner: &JsonValue,
     session_key: &[u8],
-    notification_sent: bool,
 ) -> Result<SrpCompleteResult, AppStoreError> {
     let spd = extract_base64(inner, "spd")
         .map_err(|e| AppStoreError::AuthenticationFailed(format!("missing spd: {e}")))?;
@@ -109,11 +108,7 @@ pub(super) fn two_factor_required_result(
         ));
     }
 
-    Ok(SrpCompleteResult::TwoFactorRequired {
-        dsid,
-        idms_token,
-        notification_sent,
-    })
+    Ok(SrpCompleteResult::TwoFactorRequired { dsid, idms_token })
 }
 
 pub(super) fn verify_server_proof_response(

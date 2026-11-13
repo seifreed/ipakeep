@@ -116,17 +116,12 @@ fn two_factor_required_result_extracts_identity_from_encrypted_spd() {
         "spd": BASE64.encode(encrypt_spd_fixture(session_key, &spd)),
     });
 
-    let result = two_factor_required_result(&inner, session_key, true)
+    let result = two_factor_required_result(&inner, session_key)
         .expect("2FA result should decode identity fields from spd");
 
     match result {
-        SrpCompleteResult::TwoFactorRequired {
-            dsid,
-            idms_token,
-            notification_sent,
-        } => {
+        SrpCompleteResult::TwoFactorRequired { dsid, idms_token } => {
             assert_eq!((dsid, idms_token), ("adsid-xyz".into(), "idms-xyz".into()));
-            assert!(notification_sent);
         }
         SrpCompleteResult::Success(_) => panic!("expected TwoFactorRequired, got Success"),
     }
@@ -141,7 +136,7 @@ fn two_factor_required_result_errors_when_identity_fields_absent() {
     });
 
     assert!(matches!(
-        two_factor_required_result(&inner, session_key, true),
+        two_factor_required_result(&inner, session_key),
         Err(AppStoreError::AuthenticationFailed(_))
     ));
 }

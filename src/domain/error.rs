@@ -16,8 +16,6 @@ pub enum AppStoreError {
         dsid: String,
         /// IDMS token for continuing the 2FA flow.
         idms_token: String,
-        /// Whether Apple already sent the trusted-device notification.
-        notification_sent: bool,
     },
 
     /// The Apple account is disabled.

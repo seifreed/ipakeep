@@ -15,7 +15,6 @@ pub(super) struct GrandSlamLoginContext<'a> {
 pub(super) struct GrandSlamChallenge<'a> {
     pub(super) dsid: &'a str,
     pub(super) idms_token: &'a str,
-    pub(super) notification_sent: bool,
 }
 
 pub(super) async fn handle_2fa<R, C>(
@@ -69,17 +68,17 @@ where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
-    if challenge.notification_sent {
-        println!("A trusted-device verification code has already been sent.");
-    } else {
-        use_case
-            .request_trusted_device_notification(challenge.dsid, challenge.idms_token)
-            .await
-            .map_err(|e| format!("failed to request trusted device notification: {e}"))?;
-    }
+    request_trusted_device_code(use_case, challenge.dsid, challenge.idms_token).await?;
 
     let code = dialoguer::Input::<String>::new()
-        .with_prompt("Enter 2FA code from trusted device")
+        .with_prompt("Enter 6-digit code from trusted device")
+        .validate_with(|input: &String| {
+            if is_trusted_device_code(input) {
+                Ok(())
+            } else {
+                Err("Enter the 6-digit code shown on a trusted device.".to_string())
+            }
+        })
         .interact_text()
         .map_err(|e| format!("failed to read 2FA code: {e}"))?;
 
@@ -92,6 +91,27 @@ where
         )
         .await
         .map_err(|e| format!("login failed: {e}"))
+}
+
+async fn request_trusted_device_code<R, C>(
+    use_case: &AuthLogin<R, C>,
+    dsid: &str,
+    idms_token: &str,
+) -> Result<(), String>
+where
+    R: AppStoreRepository,
+    C: CredentialRepository,
+{
+    use_case
+        .request_trusted_device_notification(dsid, idms_token)
+        .await
+        .map_err(|e| format!("failed to request trusted-device code: {e}"))?;
+    println!("Requested a verification code on your trusted devices.");
+    Ok(())
+}
+
+fn is_trusted_device_code(code: &str) -> bool {
+    code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 async fn complete_sms<R, C>(
@@ -201,13 +221,39 @@ fn app_store_error_type(error: &crate::domain::error::AppStoreError) -> &'static
 }
 
 #[cfg(test)]
-mod observability_tests {
-    use super::app_store_error_type;
+mod tests {
+    use super::{app_store_error_type, request_trusted_device_code};
     use crate::domain::error::AppStoreError;
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use crate::domain::usecase::AuthLogin;
 
     #[test]
     fn error_classification_does_not_include_error_content() {
         let error = AppStoreError::NetworkError("secret-token-in-url".into());
         assert_eq!(app_store_error_type(&error), "network");
+    }
+
+    #[tokio::test]
+    async fn trusted_device_challenge_still_requests_a_notification() {
+        let app_store = FakeAppStoreRepository::new();
+        let use_case = AuthLogin::new(app_store.clone(), InMemoryCredentialRepository::new());
+
+        request_trusted_device_code(&use_case, "dsid", "idms")
+            .await
+            .expect("trusted-device request");
+
+        assert_eq!(
+            app_store.request_trusted_device_notification_calls(),
+            vec![("dsid".into(), "idms".into())]
+        );
+    }
+
+    #[test]
+    fn trusted_device_code_requires_six_ascii_digits() {
+        assert!(super::is_trusted_device_code("123456"));
+        assert!(!super::is_trusted_device_code("e"));
+        assert!(!super::is_trusted_device_code("12345"));
+        assert!(!super::is_trusted_device_code("1234567"));
+        assert!(!super::is_trusted_device_code("１２３４５６"));
     }
 }

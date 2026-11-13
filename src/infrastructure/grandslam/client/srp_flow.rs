@@ -71,11 +71,11 @@ pub(super) async fn complete(
     .map_err(|e| AppStoreError::AuthenticationFailed(format!("SRP proof failed: {e}")))?;
 
     let inner = send_complete_request(client, email, init, &m1).await?;
-    if let Some(notification_sent) = second_factor_notification_state(read_status(&inner)) {
-        if notification_sent {
+    if let Some(server_proof_required) = second_factor_server_proof_required(read_status(&inner)) {
+        if server_proof_required {
             verify_server_proof_response(&inner, init, &m1, &session_key)?;
         }
-        return two_factor_required_result(&inner, &session_key, notification_sent);
+        return two_factor_required_result(&inner, &session_key);
     }
     let ec = check_grandslam_status(&inner, "SRP complete")?;
 
@@ -112,7 +112,7 @@ async fn send_complete_request(
     extract_response(&response).cloned()
 }
 
-fn second_factor_notification_state(status: (u64, i64)) -> Option<bool> {
+fn second_factor_server_proof_required(status: (u64, i64)) -> Option<bool> {
     if status.0 == 409 {
         Some(true)
     } else if status.1 == -21669 {
@@ -164,20 +164,21 @@ pub enum SrpCompleteResult {
         dsid: String,
         /// IDMS token.
         idms_token: String,
-        /// Whether Apple already sent a trusted-device notification.
-        notification_sent: bool,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{second_factor_notification_state, srp_init_error};
+    use super::{second_factor_server_proof_required, srp_init_error};
 
     #[test]
     fn identifies_grandslam_two_factor_statuses() {
-        assert_eq!(second_factor_notification_state((409, 0)), Some(true));
-        assert_eq!(second_factor_notification_state((200, -21669)), Some(false));
-        assert_eq!(second_factor_notification_state((200, 0)), None);
+        assert_eq!(second_factor_server_proof_required((409, 0)), Some(true));
+        assert_eq!(
+            second_factor_server_proof_required((200, -21669)),
+            Some(false)
+        );
+        assert_eq!(second_factor_server_proof_required((200, 0)), None);
     }
 
     #[test]

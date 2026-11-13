@@ -156,6 +156,13 @@ impl FakeAppStoreRepository {
         self.lock_inner().authenticate_grandslam_calls.clone()
     }
 
+    /// Return the recorded calls to `request_trusted_device_notification`.
+    pub fn request_trusted_device_notification_calls(&self) -> Vec<(String, String)> {
+        self.lock_inner()
+            .request_trusted_device_notification_calls
+            .clone()
+    }
+
     /// Return the recorded calls to `validate_trusted_device_code`.
     pub fn validate_trusted_device_code_calls(&self) -> Vec<(String, String, String)> {
         self.lock_inner().validate_trusted_device_code_calls.clone()
