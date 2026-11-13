@@ -7,8 +7,10 @@ use crate::infrastructure::grandslam::client::http::{
 };
 use crate::infrastructure::grandslam::client::response::parse_trusted_phone_numbers;
 use crate::infrastructure::grandslam::resolve_anisette;
-use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
-use crate::infrastructure::http::{decode_plist, response_snippet};
+use crate::infrastructure::http::decode_plist;
+use crate::infrastructure::http::telemetry::{
+    read_response_bytes, read_response_json, send_with_observability,
+};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -49,20 +51,20 @@ pub(super) async fn list_trusted_phone_numbers(
     let request = client
         .get(AUTH_OPTIONS_URL)
         .headers(build_header_map(&headers)?);
-    let value: JsonValue = send_with_observability(client, request)
+    let response = send_with_observability(client, request)
         .await
         .map_err(|e| {
             AppStoreError::NetworkError(format!("trusted phone list request failed: {e}"))
-        })?
-        .error_for_status()
-        .map_err(|e| {
-            AppStoreError::NetworkError(format!("trusted phone list request failed: {e}"))
-        })?
-        .json()
-        .await
-        .map_err(|e| {
-            AppStoreError::NetworkError(format!("trusted phone list decode failed: {e}"))
         })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppStoreError::NetworkError(format!(
+            "trusted phone list request failed with HTTP {status}"
+        )));
+    }
+    let value: JsonValue = read_response_json(response).await.map_err(|e| {
+        AppStoreError::NetworkError(format!("trusted phone list decode failed: {e}"))
+    })?;
 
     Ok(parse_trusted_phone_numbers(&value))
 }
@@ -136,11 +138,15 @@ pub(super) async fn validate_sms_code(
         .post(PHONE_SECURITY_CODE_URL)
         .headers(build_header_map(&headers)?)
         .json(&body);
-    send_with_observability(client, request)
+    let response = send_with_observability(client, request)
         .await
-        .map_err(|e| AppStoreError::NetworkError(format!("SMS validation request failed: {e}")))?
-        .error_for_status()
-        .map_err(|e| AppStoreError::AuthenticationFailed(format!("invalid SMS code: {e}")))?;
+        .map_err(|e| AppStoreError::NetworkError(format!("SMS validation request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(AppStoreError::AuthenticationFailed(format!(
+            "invalid SMS code: HTTP {}",
+            response.status()
+        )));
+    }
 
     Ok(())
 }
@@ -172,8 +178,7 @@ fn validate_trusted_device_response(
 ) -> Result<(), AppStoreError> {
     if !status.is_success() {
         return Err(AppStoreError::AuthenticationFailed(format!(
-            "trusted-device code validation failed with HTTP {status}: {}",
-            response_snippet(body)
+            "trusted-device code validation failed with HTTP {status}"
         )));
     }
 

@@ -2,7 +2,6 @@
 
 mod response;
 
-use super::response_snippet;
 use super::telemetry::{read_response_bytes, read_response_text, send_with_observability};
 use reqwest::cookie::Jar;
 use reqwest::{Client, ClientBuilder, Url};
@@ -110,8 +109,7 @@ impl AppleHttpClient {
 
         let value = decode_json_or_plist(&text).map_err(|e| {
             crate::domain::error::AppStoreError::NetworkError(format!(
-                "response decode failed for HTTP {status}: {e}; body: {}",
-                response_snippet(text.as_bytes())
+                "response decode failed for HTTP {status}: {e}"
             ))
         })?;
         let body = serde_json::from_value(value).map_err(|e| {
@@ -172,8 +170,7 @@ impl AppleHttpClient {
 
         let body = decode_json_or_plist(&text).map_err(|e| {
             crate::domain::error::AppStoreError::NetworkError(format!(
-                "response decode failed for HTTP {status}: {e}; body: {}",
-                response_snippet(text.as_bytes())
+                "response decode failed for HTTP {status}: {e}"
             ))
         })?;
 
@@ -304,8 +301,7 @@ impl AppleHttpClient {
             })
             .map_err(|e| {
                 crate::domain::error::AppStoreError::NetworkError(format!(
-                    "plist decode failed for HTTP {status} ({content_type}): {e}; body: {}",
-                    response_snippet(&body_bytes)
+                    "plist decode failed for HTTP {status} ({content_type}): {e}"
                 ))
             })?;
 

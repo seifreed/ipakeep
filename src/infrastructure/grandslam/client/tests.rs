@@ -147,18 +147,18 @@ fn two_factor_required_result_errors_when_identity_fields_absent() {
 }
 
 #[test]
-fn two_factor_status_error_includes_http_status_and_body() {
+fn two_factor_status_error_omits_untrusted_response_body() {
     let error = two_factor_status_error(
         "trusted device request",
         reqwest::StatusCode::UNAUTHORIZED,
-        b"not authorized",
+        b"private-response-value",
     );
 
     let AppStoreError::AuthenticationFailed(message) = error else {
         panic!("expected authentication failure");
     };
     assert!(message.contains("HTTP 401"));
-    assert!(message.contains("not authorized"));
+    assert!(!message.contains("private-response-value"));
 }
 
 #[tokio::test]
@@ -166,10 +166,15 @@ async fn post_plist_returns_status_error_before_decoding_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/grandslam"))
-        .respond_with(ResponseTemplate::new(500).set_body_raw(
-            encode_plist(&serde_json::json!({ "Response": { "ok": true } })).expect("plist"),
-            "application/x-apple-plist",
-        ))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_raw(
+                encode_plist(&serde_json::json!({
+                    "Response": { "secret": "private-response-value" }
+                }))
+                .expect("plist"),
+                "application/x-apple-plist",
+            ),
+        )
         .mount(&server)
         .await;
 
@@ -186,5 +191,5 @@ async fn post_plist_returns_status_error_before_decoding_body() {
         panic!("expected network error");
     };
     assert!(message.contains("HTTP 500"));
-    assert!(message.contains("Response"));
+    assert!(!message.contains("private-response-value"));
 }

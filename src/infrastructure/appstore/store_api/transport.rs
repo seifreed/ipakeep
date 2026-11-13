@@ -32,7 +32,7 @@ pub(super) fn appstore_query_url(
     pairs: &[(&str, &str)],
 ) -> Result<String, AppStoreError> {
     let mut url = Url::parse(base)
-        .map_err(|e| AppStoreError::NetworkError(format!("invalid App Store URL: {e}")))?;
+        .map_err(|_| AppStoreError::NetworkError("invalid App Store URL".into()))?;
     {
         let mut query = url.query_pairs_mut();
         for (key, value) in pairs {

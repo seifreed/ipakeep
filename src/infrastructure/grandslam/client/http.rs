@@ -2,7 +2,6 @@
 
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::http::plist_codec::{decode_plist, encode_plist};
-use crate::infrastructure::http::response_snippet;
 use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value as JsonValue;
@@ -41,8 +40,7 @@ pub(super) async fn post_plist(
 
     if !status.is_success() {
         return Err(AppStoreError::NetworkError(format!(
-            "GrandSlam request failed with HTTP {status}: {}",
-            response_snippet(&bytes)
+            "GrandSlam request failed with HTTP {status}"
         )));
     }
 

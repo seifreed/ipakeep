@@ -13,9 +13,7 @@ pub(super) async fn fetch_remote(
     let url = base_url.trim_end_matches('/').to_string();
     let response = send_with_observability(client, client.get(&url))
         .await
-        .map_err(|e| {
-            AppStoreError::NetworkError(format!("anisette server request to {url} failed: {e}"))
-        })?;
+        .map_err(|e| AppStoreError::NetworkError(format!("anisette server request failed: {e}")))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -51,15 +49,16 @@ async fn fetch_remote_user_agent(
     let response = send_with_observability(client, client.get(&url))
         .await
         .map_err(|e| {
-            AppStoreError::NetworkError(format!(
-                "anisette client info request to {url} failed: {e}"
-            ))
+            AppStoreError::NetworkError(format!("anisette client info request failed: {e}"))
         })?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
     let response = response.error_for_status().map_err(|e| {
-        AppStoreError::NetworkError(format!("anisette client info request failed: {e}"))
+        AppStoreError::NetworkError(format!(
+            "anisette client info request failed: {}",
+            e.without_url()
+        ))
     })?;
     let body: JsonValue = read_response_json(response).await.map_err(|e| {
         AppStoreError::NetworkError(format!("anisette client info decode failed: {e}"))

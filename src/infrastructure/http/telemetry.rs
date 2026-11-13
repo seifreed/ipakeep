@@ -1,7 +1,6 @@
 //! Safe metadata logging for outbound HTTP requests.
 
 use reqwest::{Client, RequestBuilder, Response};
-#[cfg(not(ipakeep_modern_adi))]
 use serde::de::DeserializeOwned;
 use std::time::Instant;
 
@@ -12,16 +11,19 @@ pub(crate) async fn send_with_observability(
     client: &Client,
     request: RequestBuilder,
 ) -> Result<Response, reqwest::Error> {
-    let request = request.build().inspect_err(|_error| {
-        tracing::warn!(
-            service = "ipakeep",
-            component = "http",
-            event_name = "http.request.build_failed",
-            error_type = "invalid_request",
-            outcome = "failure",
-            "HTTP request could not be built"
-        );
-    })?;
+    let request = request
+        .build()
+        .inspect_err(|_error| {
+            tracing::warn!(
+                service = "ipakeep",
+                component = "http",
+                event_name = "http.request.build_failed",
+                error_type = "invalid_request",
+                outcome = "failure",
+                "HTTP request could not be built"
+            );
+        })
+        .map_err(reqwest::Error::without_url)?;
     let method = request.method().as_str().to_string();
     let host = request.url().host_str().unwrap_or("unknown").to_string();
     let started = Instant::now();
@@ -73,7 +75,7 @@ pub(crate) async fn send_with_observability(
                 error_type = request_error_type(&error),
                 "HTTP request failed"
             );
-            Err(error)
+            Err(error.without_url())
         }
     }
 }
@@ -86,7 +88,9 @@ pub(crate) async fn read_response_bytes(response: Response) -> Result<Vec<u8>, r
         Ok(body) => record_body_read(status, started, Some(body.len()), None),
         Err(error) => record_body_read(status, started, None, Some(error)),
     }
-    result.map(|body| body.to_vec())
+    result
+        .map(|body| body.to_vec())
+        .map_err(reqwest::Error::without_url)
 }
 
 pub(crate) async fn read_response_text(response: Response) -> Result<String, reqwest::Error> {
@@ -97,10 +101,9 @@ pub(crate) async fn read_response_text(response: Response) -> Result<String, req
         Ok(body) => record_body_read(status, started, Some(body.len()), None),
         Err(error) => record_body_read(status, started, None, Some(error)),
     }
-    result
+    result.map_err(reqwest::Error::without_url)
 }
 
-#[cfg(not(ipakeep_modern_adi))]
 pub(crate) async fn read_response_json<T: DeserializeOwned>(
     response: Response,
 ) -> Result<T, reqwest::Error> {
@@ -111,7 +114,7 @@ pub(crate) async fn read_response_json<T: DeserializeOwned>(
         Ok(_) => record_body_read(status, started, None, None),
         Err(error) => record_body_read(status, started, None, Some(error)),
     }
-    result
+    result.map_err(reqwest::Error::without_url)
 }
 
 fn record_body_read(
@@ -266,5 +269,20 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn returned_transport_error_omits_signed_query_values() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
+        let address = listener.local_addr().expect("local address");
+        drop(listener);
+        let url = format!("http://{address}/?signature=private-value");
+        let client = Client::new();
+
+        let error = send_with_observability(&client, client.get(url))
+            .await
+            .expect_err("closed server");
+
+        assert!(!error.to_string().contains("private-value"));
     }
 }

@@ -27,7 +27,7 @@ async fn get_json_rejects_non_success_status_before_decoding() {
         panic!("expected network error");
     };
     assert!(message.contains("HTTP 500"));
-    assert!(message.contains("results"));
+    assert!(!message.contains("results"));
 }
 
 #[tokio::test]
@@ -50,7 +50,7 @@ async fn post_form_rejects_non_success_status_before_decoding() {
         panic!("expected network error");
     };
     assert!(message.contains("HTTP 401"));
-    assert!(message.contains("passwordToken"));
+    assert!(!message.contains("should-not-be-used"));
 }
 
 #[tokio::test]
@@ -78,5 +78,5 @@ async fn post_plist_rejects_non_success_status_before_decoding() {
         panic!("expected network error");
     };
     assert!(message.contains("HTTP 503"));
-    assert!(message.contains("songList"));
+    assert!(!message.contains("songList"));
 }

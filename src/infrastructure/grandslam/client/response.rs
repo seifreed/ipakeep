@@ -2,7 +2,6 @@
 
 use crate::domain::entity::TrustedPhoneNumber;
 use crate::domain::error::AppStoreError;
-use crate::infrastructure::http::response_snippet;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value as JsonValue;
 
@@ -54,8 +53,7 @@ pub(super) fn check_grandslam_status(
     let (hsc, ec) = read_status(inner);
     if hsc != 200 {
         return Err(AppStoreError::AuthenticationFailed(format!(
-            "{context} failed: HTTP {hsc} (error code {ec}): {}",
-            status_message(inner)
+            "{context} failed: HTTP {hsc} (error code {ec})"
         )));
     }
     Ok(ec)
@@ -64,12 +62,9 @@ pub(super) fn check_grandslam_status(
 pub(super) fn two_factor_status_error(
     operation: &str,
     status: reqwest::StatusCode,
-    body: &[u8],
+    _body: &[u8],
 ) -> AppStoreError {
-    AppStoreError::AuthenticationFailed(format!(
-        "{operation} failed with HTTP {status}: {}",
-        response_snippet(body)
-    ))
+    AppStoreError::AuthenticationFailed(format!("{operation} failed with HTTP {status}"))
 }
 
 /// Parse the `trustedPhoneNumbers` array from Apple's HSA2 auth-options JSON.
@@ -111,15 +106,6 @@ pub(super) fn extract_base64(value: &JsonValue, key: &str) -> Result<Vec<u8>, St
         .map_err(|e| format!("base64 decode failed for {key}: {e}"))
 }
 
-/// Read the `Status.em` error message from a `GrandSlam` response.
-fn status_message(inner: &JsonValue) -> &str {
-    inner
-        .get("Status")
-        .and_then(|s| s.get("em"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown error")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,19 +142,20 @@ mod tests {
     }
 
     #[test]
-    fn check_grandslam_status_returns_error_code_or_message() {
+    fn check_grandslam_status_returns_safe_error_code() {
         assert_eq!(
             check_grandslam_status(&json!({"Status": {"hsc": 200, "ec": -21669}}), "SRP").unwrap(),
             -21669
         );
 
         let error = check_grandslam_status(
-            &json!({"Status": {"hsc": 500, "ec": 7, "em": "broken"}}),
+            &json!({"Status": {"hsc": 500, "ec": 7, "em": "account-secret"}}),
             "SRP",
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("HTTP 500"));
-        assert!(error.contains("broken"));
+        assert!(error.contains("error code 7"));
+        assert!(!error.contains("account-secret"));
     }
 }

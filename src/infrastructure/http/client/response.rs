@@ -1,7 +1,7 @@
 //! HTTP response decoding and status errors.
 
 use crate::domain::error::AppStoreError;
-use crate::infrastructure::http::{plist_codec, response_snippet};
+use crate::infrastructure::http::plist_codec;
 use reqwest::StatusCode;
 
 /// An HTTP response with typed body, status code, and headers.
@@ -25,11 +25,12 @@ pub(super) fn ensure_success_status(
     Err(http_status_error(operation, status, body))
 }
 
-pub(super) fn http_status_error(operation: &str, status: StatusCode, body: &[u8]) -> AppStoreError {
-    AppStoreError::NetworkError(format!(
-        "{operation} failed with HTTP {status}: {}",
-        response_snippet(body)
-    ))
+pub(super) fn http_status_error(
+    operation: &str,
+    status: StatusCode,
+    _body: &[u8],
+) -> AppStoreError {
+    AppStoreError::NetworkError(format!("{operation} failed with HTTP {status}"))
 }
 
 pub(super) fn decode_json_or_plist(text: &str) -> Result<serde_json::Value, String> {
@@ -71,7 +72,7 @@ mod tests {
             .to_string();
 
         assert!(error.contains("op failed with HTTP 502 Bad Gateway"));
-        assert!(error.contains("bad body"));
+        assert!(!error.contains("bad body"));
     }
 
     #[test]

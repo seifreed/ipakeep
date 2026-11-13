@@ -182,3 +182,11 @@ consumption. JSON/plist/text responses and binary downloads use safe body-read
 events with status, duration, outcome, and byte count when available; body
 content remains excluded. This makes IPA transfer time observable beyond the
 initial response headers.
+
+### Milestone 8 — network error privacy
+
+Transport and response-read errors have their request URL removed before they
+reach callers. HTTP status and decoder errors remain available, but arbitrary
+response bodies and GrandSlam server text are no longer copied into diagnostic
+errors. Tests verify signed query values and response body sentinels stay out of
+logs and error text.

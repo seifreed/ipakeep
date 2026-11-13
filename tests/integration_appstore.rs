@@ -347,7 +347,7 @@ async fn download_bytes_returns_http_status_errors() {
         panic!("expected network error");
     };
     assert!(message.contains("HTTP 403"));
-    assert!(message.contains("download denied"));
+    assert!(!message.contains("download denied"));
 }
 
 #[tokio::test]
