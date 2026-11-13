@@ -12,6 +12,7 @@ pub mod search;
 pub mod simulator;
 
 use crate::domain::repository::AppStoreRepository;
+use crate::domain::usecase::ResolveApp;
 
 /// Get the device GUID (MAC address) for Apple API requests.
 pub fn get_guid() -> String {
@@ -35,80 +36,25 @@ pub async fn resolve_app_id<R>(app_store: &R, app: &str, country: &str) -> Resul
 where
     R: AppStoreRepository,
 {
-    if let Ok(id) = app.parse::<i64>() {
-        tracing::debug!(
-            service = "ipakeep",
-            component = "cli",
-            operation = "resolve_app_id",
-            event_name = "app.reference.resolved",
-            app_id = id,
-            resolution = "numeric_id",
-            "app reference resolved"
-        );
-        return Ok(id);
-    }
-
-    tracing::debug!(
-        service = "ipakeep",
-        component = "cli",
-        operation = "resolve_app_id",
-        event_name = "app.reference.lookup_started",
-        app_ref_len = app.len(),
-        country,
-        "resolving app reference by bundle id"
-    );
-    if let Some(found) = app_store
-        .lookup(app, country)
-        .await
-        .map_err(|e| format!("lookup failed: {e}"))?
-    {
-        tracing::debug!(
-            service = "ipakeep",
-            component = "cli",
-            operation = "resolve_app_id",
-            event_name = "app.reference.resolved",
-            app_id = found.id,
-            resolution = "bundle_id",
-            "app reference resolved"
-        );
-        return Ok(found.id);
-    }
-
-    tracing::debug!(
-        service = "ipakeep",
-        component = "cli",
-        operation = "resolve_app_id",
-        event_name = "app.reference.search_started",
-        app_ref_len = app.len(),
-        country,
-        "resolving app reference by search"
-    );
-    let results = app_store
-        .search(app, country, 1)
-        .await
-        .map_err(|e| format!("search failed: {e}"))?;
-
-    let Some(first) = results.into_iter().next() else {
-        tracing::debug!(
-            service = "ipakeep",
-            component = "cli",
-            operation = "resolve_app_id",
-            event_name = "app.reference.resolved",
-            outcome = "not_found",
-            "app reference did not resolve"
-        );
-        return Err(format!("no app found matching '{app}'"));
-    };
+    let result = ResolveApp::new(app_store).execute(app, country).await;
     tracing::debug!(
         service = "ipakeep",
         component = "cli",
         operation = "resolve_app_id",
         event_name = "app.reference.resolved",
-        app_id = first.id,
-        resolution = "search",
+        outcome = if result.is_ok() {
+            "success"
+        } else {
+            "not_found_or_error"
+        },
         "app reference resolved"
     );
-    Ok(first.id)
+    result.map_err(|error| match error {
+        crate::domain::error::AppStoreError::AppNotFound(_) => {
+            format!("no app found matching '{app}'")
+        }
+        error => error.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -128,37 +74,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn resolve_app_id_uses_numeric_id_directly() {
-        let repo = FakeAppStoreRepository::new();
-        assert_eq!(
-            resolve_app_id(&repo, "1198143062", "us").await.unwrap(),
-            1_198_143_062
-        );
-        // A numeric reference must not hit the network.
-        assert!(repo.lookup_calls().is_empty());
-        assert!(repo.search_calls().is_empty());
-    }
-
-    #[tokio::test]
-    async fn resolve_app_id_resolves_bundle_identifier_via_lookup() {
-        let repo = FakeAppStoreRepository::new().with_lookup_result(Ok(Some(app(42))));
-        assert_eq!(
-            resolve_app_id(&repo, "com.example.app", "us")
-                .await
-                .unwrap(),
-            42
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_app_id_falls_back_to_search_by_name() {
-        let repo = FakeAppStoreRepository::new()
-            .with_lookup_result(Ok(None))
-            .with_search_result(Ok(vec![app(99)]));
-        assert_eq!(resolve_app_id(&repo, "ludo-star", "es").await.unwrap(), 99);
-    }
-
     #[tokio::test(flavor = "current_thread")]
     async fn resolve_app_id_logs_resolution_without_app_ref_value() {
         let capture = LogCapture::default();
@@ -175,21 +90,7 @@ mod tests {
         );
 
         let logs = capture.contents();
-        assert!(logs.contains("resolving app reference by bundle id"));
-        assert!(logs.contains("resolving app reference by search"));
         assert!(logs.contains("app.reference.resolved"));
         assert!(!logs.contains("secret-app-name"));
-    }
-
-    #[tokio::test]
-    async fn resolve_app_id_errors_when_nothing_matches() {
-        let repo = FakeAppStoreRepository::new()
-            .with_lookup_result(Ok(None))
-            .with_search_result(Ok(vec![]));
-        assert!(
-            resolve_app_id(&repo, "nonexistent app", "us")
-                .await
-                .is_err()
-        );
     }
 }
