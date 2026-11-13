@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_HELPER_OUTPUT: usize = 64 * 1024;
@@ -26,8 +27,35 @@ struct HelperResponse {
     headers: HashMap<String, String>,
 }
 
+static PROCESS_ANISETTE: OnceLock<AnisetteData> = OnceLock::new();
+
 /// Generate Anisette using Apple's current Store ADI implementation.
-pub(super) async fn generate() -> Result<super::anisette::AnisetteData, AppStoreError> {
+///
+/// The helper re-provisions the machine on every run, so each call would yield
+/// a new `X-Apple-I-MD-M`. Apple binds the IDMS token issued during SRP to that
+/// provisioning, and 2FA requests carrying a different one fail with HTTP 401,
+/// so the first result is reused for the rest of the process.
+// ponytail: OTP reused for the whole process; add a TTL refresh if long-running commands start failing.
+pub(super) async fn generate() -> Result<AnisetteData, AppStoreError> {
+    cached(&PROCESS_ANISETTE, generate_fresh).await
+}
+
+async fn cached<F, Fut>(
+    cell: &OnceLock<AnisetteData>,
+    fresh: F,
+) -> Result<AnisetteData, AppStoreError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<AnisetteData, AppStoreError>>,
+{
+    if let Some(data) = cell.get() {
+        return Ok(data.clone());
+    }
+    let data = fresh().await?;
+    Ok(cell.get_or_init(|| data).clone())
+}
+
+async fn generate_fresh() -> Result<AnisetteData, AppStoreError> {
     let span = tracing::Span::current();
     let output = tokio::task::spawn_blocking(move || span.in_scope(run_helper))
         .await
@@ -278,6 +306,23 @@ mod tests {
         let headers = HashMap::from([("X-Apple-I-MD".into(), "token\nInjected: yes".into())]);
 
         assert!(validate_headers(&headers).is_err());
+    }
+
+    #[tokio::test]
+    async fn reuses_the_first_provisioning_for_later_requests() {
+        let cell = OnceLock::new();
+        let provision = |md_m: &'static str| async move {
+            build_anisette_data(HashMap::from([
+                ("X-Apple-I-MD".into(), "otp".into()),
+                ("X-Apple-I-MD-M".into(), md_m.into()),
+            ]))
+        };
+
+        let first = cached(&cell, || provision("first")).await.unwrap();
+        let second = cached(&cell, || provision("second")).await.unwrap();
+
+        assert_eq!(first.headers["X-Apple-I-MD-M"], "first");
+        assert_eq!(second.headers["X-Apple-I-MD-M"], "first");
     }
 
     #[tokio::test]
