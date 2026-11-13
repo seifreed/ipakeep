@@ -240,66 +240,19 @@ fn patch_with_report(
     let mut unverified_slices = Vec::new();
 
     for i in 0..scan.len() {
-        let Some((name, mut bytes)) = read_if_macho(&mut scan, i)? else {
+        let Some((name, bytes)) = read_if_macho(&mut scan, i)? else {
             continue;
         };
-        let slices = macho::parse(&bytes).map_err(|e| format!("{name}: {e}"))?;
-        let mut missing = Vec::new();
-        let mut touched = false;
-        for (index, slice) in slices.iter().enumerate() {
-            let Some(info) = slice.encryption.filter(|e| e.cryptid != 0) else {
-                continue;
-            };
-            let candidates = dump_filenames(&name, &slice.arch);
-            let Some(dump) = read_dumped_slice(from_dir, &candidates, info.cryptsize)? else {
-                missing.push((index, candidates[0].clone()));
-                continue;
-            };
-            let label = format!("{name}[{}]", slice.arch);
-            if check_uuid(slice.uuid, dump.uuid, &label)? {
-                unverified_slices.push(label);
-            }
-            apply_slice(&mut bytes, slice, &dump.bytes, info.command_offset)?;
-            touched = true;
+        let Some(entry) = patch_macho_entry(name, bytes, from_dir, drop_undumped_extensions)?
+        else {
+            continue;
+        };
+        if let Some(bundle) = entry.dropped_bundle {
+            dropped_bundles.insert(bundle);
         }
-
-        if !touched {
-            let Some((_, filename)) = missing.first() else {
-                continue;
-            };
-            match extension_bundle_prefix(&name) {
-                Some(bundle) if drop_undumped_extensions => {
-                    dropped_bundles.insert(bundle.to_string());
-                    continue;
-                }
-                Some(_) => {
-                    return Err(format!(
-                        "missing dumped slice {}: no dump for app extension {name}; \
-                         trigger the extension while dumping, or pass \
-                         --drop-undumped-extensions to remove it",
-                        from_dir.join(filename).display()
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "missing dumped slice {}: no dump for {name}",
-                        from_dir.join(filename).display()
-                    ));
-                }
-            }
-        }
-        if !missing.is_empty() {
-            bytes = macho::retain_slices(&bytes, |index| {
-                missing.iter().all(|(dropped, _)| *dropped != index)
-            })
-            .map_err(|e| format!("{name}: {e}"))?;
-            dropped_slices.extend(
-                missing
-                    .iter()
-                    .map(|(index, _)| format!("{name}[{}]", slices[*index].arch)),
-            );
-        }
-        patched.insert(name, bytes);
+        dropped_slices.extend(entry.dropped_slices);
+        unverified_slices.extend(entry.unverified_slices);
+        patched.insert(entry.name, entry.bytes);
     }
 
     patched.retain(|name, _| !in_dropped_bundle(name, &dropped_bundles));
@@ -313,6 +266,135 @@ fn patch_with_report(
         unverified_slices,
         dropped_bundles,
     })
+}
+
+struct PatchedEntry {
+    name: String,
+    bytes: Vec<u8>,
+    dropped_bundle: Option<String>,
+    dropped_slices: Vec<String>,
+    unverified_slices: Vec<String>,
+}
+
+struct AvailableDumps {
+    missing: Vec<(usize, String)>,
+    unverified: Vec<String>,
+    touched: bool,
+}
+
+fn patch_macho_entry(
+    name: String,
+    mut bytes: Vec<u8>,
+    from_dir: &Path,
+    drop_undumped_extensions: bool,
+) -> Result<Option<PatchedEntry>, String> {
+    let slices = macho::parse(&bytes).map_err(|error| format!("{name}: {error}"))?;
+    let dumps = apply_available_dumps(&name, &mut bytes, &slices, from_dir)?;
+    let dropped_bundle = handle_missing_dumps(
+        &name,
+        &dumps.missing,
+        dumps.touched,
+        from_dir,
+        drop_undumped_extensions,
+    )?;
+    if !dumps.touched && dropped_bundle.is_none() {
+        return Ok(None);
+    }
+    let dropped_slices = if dumps.touched {
+        remove_missing_slices(&name, &mut bytes, &slices, &dumps.missing)?
+    } else {
+        Vec::new()
+    };
+
+    Ok(Some(PatchedEntry {
+        name,
+        bytes,
+        dropped_bundle,
+        dropped_slices,
+        unverified_slices: dumps.unverified,
+    }))
+}
+
+fn apply_available_dumps(
+    name: &str,
+    bytes: &mut [u8],
+    slices: &[Slice],
+    from_dir: &Path,
+) -> Result<AvailableDumps, String> {
+    let mut missing = Vec::new();
+    let mut unverified = Vec::new();
+    let mut touched = false;
+    for (index, slice) in slices.iter().enumerate() {
+        let Some(info) = slice
+            .encryption
+            .filter(|encryption| encryption.cryptid != 0)
+        else {
+            continue;
+        };
+        let candidates = dump_filenames(name, &slice.arch);
+        let Some(dump) = read_dumped_slice(from_dir, &candidates, info.cryptsize)? else {
+            missing.push((index, candidates[0].clone()));
+            continue;
+        };
+        let label = format!("{name}[{}]", slice.arch);
+        if check_uuid(slice.uuid, dump.uuid, &label)? {
+            unverified.push(label);
+        }
+        apply_slice(bytes, slice, &dump.bytes, info.command_offset)?;
+        touched = true;
+    }
+    Ok(AvailableDumps {
+        missing,
+        unverified,
+        touched,
+    })
+}
+
+fn handle_missing_dumps(
+    name: &str,
+    missing: &[(usize, String)],
+    touched: bool,
+    from_dir: &Path,
+    drop_undumped_extensions: bool,
+) -> Result<Option<String>, String> {
+    if touched || missing.is_empty() {
+        return Ok(None);
+    }
+    let (_, filename) = &missing[0];
+    let Some(bundle) = extension_bundle_prefix(name) else {
+        return Err(format!(
+            "missing dumped slice {}: no dump for {name}",
+            from_dir.join(filename).display()
+        ));
+    };
+    if drop_undumped_extensions {
+        return Ok(Some(bundle.to_string()));
+    }
+    Err(format!(
+        "missing dumped slice {}: no dump for app extension {name}; \
+         trigger the extension while dumping, or pass \
+         --drop-undumped-extensions to remove it",
+        from_dir.join(filename).display()
+    ))
+}
+
+fn remove_missing_slices(
+    name: &str,
+    bytes: &mut Vec<u8>,
+    slices: &[Slice],
+    missing: &[(usize, String)],
+) -> Result<Vec<String>, String> {
+    if missing.is_empty() {
+        return Ok(Vec::new());
+    }
+    *bytes = macho::retain_slices(bytes, |index| {
+        missing.iter().all(|(dropped, _)| *dropped != index)
+    })
+    .map_err(|error| format!("{name}: {error}"))?;
+    Ok(missing
+        .iter()
+        .map(|(index, _)| format!("{name}[{}]", slices[*index].arch))
+        .collect())
 }
 
 /// Archive prefix of the innermost `.appex` bundle containing `name`, e.g.
