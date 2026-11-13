@@ -4,6 +4,14 @@
 //! valid Anisette OTP tokens locally. Instead we run an anisette server in a
 //! Docker container and fetch the tokens over HTTP. This module detects whether
 //! the server is already running and, if not, launches the container.
+//!
+//! Machine provisioning persistence: anisette-v3 registers the machine with
+//! Apple once and stores the resulting ADI state (`adi.pb`) on disk. We keep
+//! that state in a named Docker volume ([`VOLUME`], mounted at
+//! [`SERVER_LIB_PATH`]) so the machine is provisioned a single time and the
+//! same identity is reused across restarts, matching how AltServer/SideStore
+//! persist `~/.adi/adi.pb`. Users who prefer to manage provisioning themselves
+//! can bypass this entirely by setting `IPAKEEP_ANISETTE_URL`.
 
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::exec::observed_tokio_output;
