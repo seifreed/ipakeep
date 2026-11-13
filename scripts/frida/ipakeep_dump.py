@@ -220,7 +220,9 @@ def kill_process(device, pid: int) -> None:
         )
 
 
-def watch_extensions(device, process_names, agent_path, out_dir, written, seconds: float) -> set[str]:
+def watch_extensions(
+    device, process_names, agent_path, out_dir, written, seconds: float, on_gated=None
+) -> set[str]:
     """Attach to extension processes for `seconds`; returns the matched process names.
 
     Frida delivers `spawn-added` on its own thread, where blocking device calls can
@@ -274,6 +276,8 @@ def watch_extensions(device, process_names, agent_path, out_dir, written, second
         device.off("spawn-added", on_spawn)
         raise
     try:
+        if on_gated is not None:
+            on_gated()
         drain_spawns(0)
         for process in device.enumerate_processes():
             if process.pid not in seen_pids and is_extension_process(process.name, process_names):
@@ -432,6 +436,16 @@ def run_dump(args) -> int:
         if pid is not None:
             kill_process(device, pid)
         return 2
+    except frida.NotSupportedError as error:
+        # FrontBoard refuses to launch apps while the device is locked.
+        LOGGER.error(
+            "service=ipakeep component=frida event_name=frida.spawn.failed hint=%r error=%r",
+            "unlock the device and keep the screen on while dumping",
+            str(error),
+        )
+        if pid is not None:
+            kill_process(device, pid)
+        return 2
     except (ValueError, frida.ProcessNotFoundError, frida.ExecutableNotFoundError) as error:
         LOGGER.error(
             "service=ipakeep component=frida event_name=frida.attach.failed error_type=%s error=%r",
@@ -445,7 +459,7 @@ def run_dump(args) -> int:
     written = []
     agent_path = os.path.join(HERE, "ipakeep_dump.js")
     try:
-        matched = dump_main_app(device, session, pid, process_names, agent_path, args, written)
+        matched = dump_main_app(device, session, pid, bundles, agent_path, args, written)
     except BaseException:
         if pid is not None:
             kill_process(device, pid)
@@ -467,7 +481,31 @@ def run_dump(args) -> int:
     return 0 if written else 1
 
 
-def dump_main_app(device, session, pid, process_names, agent_path, args, written) -> set[str]:
+def request_extension_launches(session, identifiers) -> None:
+    """Ask iOS, from inside the host app, to start each extension via NSExtension."""
+    if not identifiers:
+        return
+    with open(os.path.join(HERE, "ipakeep_extensions.js"), "r", encoding="utf-8") as handle:
+        launcher = session.create_script(handle.read())
+    launcher.load()
+    for identifier in identifiers:
+        try:
+            requested = launcher.exports_sync.launch(identifier)
+        except frida.core.RPCException as error:
+            requested = False
+            LOGGER.warning(
+                "service=ipakeep component=frida event_name=frida.extension.request_failed bundle_id=%r error=%r",
+                identifier,
+                str(error),
+            )
+        LOGGER.info(
+            "service=ipakeep component=frida event_name=frida.extension.requested bundle_id=%r requested=%s",
+            identifier,
+            requested,
+        )
+
+
+def dump_main_app(device, session, pid, bundles, agent_path, args, written) -> set[str]:
     script = load_agent(session, agent_path, args.out, written)
     if pid is not None:
         device.resume(pid)
@@ -477,12 +515,22 @@ def dump_main_app(device, session, pid, process_names, agent_path, args, written
         "service=ipakeep component=frida event_name=frida.target.armed target_type=%s",
         type(root).__name__,
     )
+    process_names = bundle_process_names(bundles)
+    identifiers = [identifier for identifier, _ in bundles if identifier]
     if process_names:
         LOGGER.info(
             "service=ipakeep component=frida event_name=frida.extensions.watch_started settle_seconds=%.3f",
             args.settle,
         )
-    matched = watch_extensions(device, process_names, agent_path, args.out, written, args.settle)
+    matched = watch_extensions(
+        device,
+        process_names,
+        agent_path,
+        args.out,
+        written,
+        args.settle,
+        on_gated=lambda: request_extension_launches(session, identifiers),
+    )
     script.exports_sync.sweep()
     return matched
 

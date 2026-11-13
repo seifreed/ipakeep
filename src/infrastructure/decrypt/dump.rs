@@ -247,6 +247,10 @@ fn prepare_agent(override_path: Option<&Path>, work: &Path) -> Result<PathBuf, S
             "ipakeep_dump.js",
             include_str!("../../../scripts/frida/ipakeep_dump.js"),
         ),
+        (
+            "ipakeep_extensions.js",
+            include_str!("../../../scripts/frida/ipakeep_extensions.js"),
+        ),
     ] {
         std::fs::write(directory.join(name), contents).map_err(|error| error.to_string())?;
     }

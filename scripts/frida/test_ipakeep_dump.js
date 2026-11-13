@@ -44,7 +44,7 @@ function testDecryptedDylibsAreDumped() {
   runtime.rpc.exports.arm();
 
   const slice = messages.find(({ payload }) => payload.event === "slice");
-  assert.equal(slice.payload.name, "Framework.arm64.bin");
+  assert.equal(slice.payload.name, "Frameworks%2FFramework.arm64.bin");
   assert.equal(slice.payload.cryptsize, 32);
   assert.deepEqual([...new Uint8Array(slice.data)], Array(32).fill(0x7f));
 }
