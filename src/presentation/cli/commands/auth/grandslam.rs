@@ -142,6 +142,8 @@ where
         Ok(_) => {
             tracing::warn!(
                 service = "ipakeep",
+                component = "cli",
+                operation = "select_sms_phone_id",
                 event_name = "auth.two_factor.phone_list_fallback",
                 outcome = "empty",
                 "no trusted phone numbers returned; defaulting to phone id 1"
@@ -151,6 +153,8 @@ where
         Err(e) => {
             tracing::warn!(
                 service = "ipakeep",
+                component = "cli",
+                operation = "select_sms_phone_id",
                 event_name = "auth.two_factor.phone_list_fallback",
                 error_type = app_store_error_type(&e),
                 "failed to list trusted phone numbers; defaulting to phone id 1"

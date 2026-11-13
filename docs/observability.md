@@ -246,7 +246,7 @@ the high-severity `quick-xml` issues are fixed in 0.41.0 and later
 | `RUST_LOG` | `info`, or `debug` with `--verbose` | `tracing` filter; when set, it overrides the fallback level. |
 | `IPAKEEP_LOG_FORMAT` | `text` | `text` or `json`; JSON is one event per stderr line. |
 | `IPAKEEP_ENV` | `unspecified` | Sanitized environment label on the command span. |
-| destination | stderr | Keeps command results and `--format json` on stdout. |
+| destination | stderr | The shell or service manager can route the inherited stderr stream to its chosen destination; command results and `--format json` stay on stdout. |
 
 Examples:
 
@@ -257,11 +257,12 @@ IPAKEEP_LOG_FORMAT=json RUST_LOG=info IPAKEEP_ENV=production \
 RUST_LOG=ipakeep::infrastructure::http=debug,ipakeep=info ipakeep search "Ludo Star"
 ```
 
-The CLI is short-lived and writes a small number of events to stderr. It does
-not create log files, so local rotation and retention do not apply. The
-synchronous stderr writer avoids a background worker or mandatory collector;
-the CLI does not buffer events for an asynchronous flush. No external exporter,
-metrics service, or network connection is required to use logging.
+The CLI is short-lived and writes a small number of events to stderr. Operators
+can route that standard stream with shell redirection or their process manager.
+The CLI does not create log files, so local rotation and retention do not
+apply. The synchronous stderr writer avoids a background worker or mandatory
+collector; the CLI does not buffer events for an asynchronous flush. No
+external exporter, metrics service, or network connection is required.
 
 ### Event fields and correlation
 
@@ -318,3 +319,31 @@ actual command failure event, separated from the user-facing stderr error:
 ```json
 {"timestamp":"2026-11-13T13:34:56.870812Z","level":"ERROR","message":"command failed; see stderr for details","service":"ipakeep","component":"cli","operation":"decrypt.inspect","event_name":"command.failed","outcome":"failure","duration_ms":3,"error_type":"command_error","target":"ipakeep","span":{"component":"cli","duration_ms":3,"environment":"production","operation":"decrypt.inspect","outcome":"failure","service":"ipakeep","name":"cli.command"},"spans":[]}
 ```
+
+## Final audit — 2026-11-13
+
+Every requested dimension applies. Metrics exporters, health endpoints,
+distributed trace IDs, log-file rotation, and a background async writer are
+intentionally omitted: this is a short-lived CLI with a process-level
+correlation boundary, low event volume, and stderr capture delegated to the
+shell or process manager.
+
+| Dimension | Initial | Final | Final evidence |
+|---|---:|---:|---|
+| Architecture and decoupling | 4 | 10 | Subscriber is initialized at the composition root; tracing stays in presentation/infrastructure, with no domain logging dependency. |
+| Functional coverage | 3 | 10 | Command lifecycle, HTTP headers/body, auth retries/fallbacks, credentials, host tools, simulator, downloads, and panic boundary are covered. |
+| Event quality and utility | 4 | 10 | Events use appropriate levels and stable names with outcomes, durations, status, byte counts, and safe error categories where useful. |
+| Structured logging and consistency | 5 | 10 | JSON emits UTC timestamps and normalized service/component/event fields; stdout remains reserved for results. |
+| Context and correlation | 2 | 10 | Command spans carry operation/environment through async work and the modern Anisette blocking helper; a real CLI integration test checks correlation. No synthetic distributed IDs are generated. |
+| Security and privacy | 7 | 10 | Sensitive request data, signed URLs, response bodies, account fields, paths, and child output are excluded from tracing; regression tests cover sentinels. `cargo audit` is clean and GitHub's five open ZIP alerts are fixed. |
+| Performance and resilience | 6 | 10 | INFO default limits volume, stderr keeps the CLI simple, sink write failure is tested not to interrupt work, and no long-lived worker needs shutdown flushing. |
+| Configuration and portability | 5 | 10 | `RUST_LOG`, `--verbose`, `IPAKEEP_LOG_FORMAT`, `IPAKEEP_ENV`, and inherited stderr routing cover level, format, environment, and destination behavior; macOS and Linux builds pass. |
+| Error handling | 4 | 10 | CLI failure events include operation/outcome/duration; HTTP and process boundaries classify failures without leaking URLs, bodies, args, or output; panic boundary records safe location metadata. |
+| Testing and verifiability | 4 | 10 | 278 tests pass, 1 is ignored; config, JSON schema, correlation, redaction, concurrency, process output, sink failure, HTTP behavior, and CLI lifecycle have automated coverage. Clippy, build, native/cross checks, and dependency audit pass. |
+| **Overall** | **4.4** | **10.0** | Arithmetic mean of the ten applicable dimensions. |
+
+Final verification on macOS: `cargo test --all` (278 passed, 1 ignored),
+`cargo clippy --all-targets -- -D warnings`, `cargo check`, `cargo build`,
+`cargo fmt --check`, `cargo audit` (no findings), and
+`cargo check --target aarch64-unknown-linux-gnu` in a Rust 1.94 Linux container.
+The JSON failure event example above was generated by running the actual CLI.

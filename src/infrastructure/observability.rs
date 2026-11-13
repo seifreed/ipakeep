@@ -147,6 +147,19 @@ fn sanitize_environment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{LogFormat, LoggingConfig, panic_payload_type, sanitize_environment};
+    use std::io::{self, Write};
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("destination unavailable"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("destination unavailable"))
+        }
+    }
 
     #[test]
     fn defaults_to_info_text_and_honors_verbose() {
@@ -188,5 +201,19 @@ mod tests {
     fn panic_payload_classification_never_returns_payload_content() {
         let payload = String::from("credential-secret");
         assert_eq!(panic_payload_type(&payload), "string");
+    }
+
+    #[test]
+    fn destination_write_failure_does_not_interrupt_the_operation() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(|| FailingWriter)
+            .finish();
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(event_name = "test.destination.failure", "test event");
+            42
+        });
+
+        assert_eq!(result, 42);
     }
 }
