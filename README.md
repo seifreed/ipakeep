@@ -53,15 +53,25 @@ Stage 2 requirements — ipakeep cannot decrypt from the downloaded file alone:
 
 - **Minimum iOS vs. jailbreakable devices.** Current apps often require an iOS
   newer than any device you can jailbreak. `decrypt inspect` reports which iOS
-  majors satisfy each slice's minimum. `decrypt set-min-os` can lower the
-  declared minimum, but it does not backport APIs and often crashes —
-  downgrading is not a real fix. An older App Store version (`list-versions`,
-  `download --external-version-id`) is the better option when one exists.
+  majors satisfy each slice's minimum. ipakeep's builtin dumper reads decrypted
+  code from a *running* app, so it needs the app to launch on the device; an
+  older App Store version (`list-versions`, `download --external-version-id`)
+  is the simplest workaround when one exists. Running the app is not
+  fundamentally required, though: decrypting the on-disk binary with
+  `mremap_encrypted()` after lowering `MinimumOSVersion` and installing with
+  AppSync, or an offline approach such as
+  [ipadecrypt](https://github.com/londek/ipadecrypt), can handle apps whose
+  minimum iOS is above the device's. ipakeep does not implement that static
+  mode yet. `decrypt set-min-os` lowers the declared minimum, but it does not
+  backport APIs, so the app may still crash at launch.
 - **Entitlements.** A development re-sign can only grant what your profile
   authorizes. App Groups, keychain access groups, push notifications,
   associated domains, iCloud containers, and Apple-restricted entitlements from
   the original team are not available to you, so features depending on them may
   fail. `decrypt entitlements <App.app>` reports which ones will break.
+  TrollStore is the exception: it keeps arbitrary entitlements, but only on
+  iOS 14.0b2–16.6.1, 16.7 RC and 17.0; LiveContainer/SideStore can emulate
+  keychain groups but not push or the original team's capabilities.
 
 ### Key Features
 
