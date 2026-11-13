@@ -146,6 +146,10 @@ mod tests {
             read_status(&json!({"Status": {"hsc": 409, "ec": -1}})),
             (409, -1)
         );
+        assert_eq!(
+            read_status(&json!({"Status": {"hsc": 409, "ec": 0}})),
+            (409, 0)
+        );
         assert_eq!(read_status(&json!({"Status": "-21669"})), (200, -21669));
         assert_eq!(read_status(&json!({"Status": "123"})), (200, 123));
         assert_eq!(read_status(&json!({"Status": "ok"})), (200, 0));

@@ -1,15 +1,16 @@
 use crate::domain::entity::Account;
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::grandslam::{
-    anisette::resolve_anisette,
+    anisette::{AnisetteData, resolve_anisette},
     srp::derive_srp_password,
     srp_handshake::{compute_a_pub, compute_client_proof, generate_a},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
-use super::response::{check_grandslam_status, extract_response};
+use super::response::{check_grandslam_status, extract_response, read_status};
 use super::srp_response::{
     finalize_srp_complete, parse_srp_init_response, two_factor_required_result,
+    verify_server_proof_response,
 };
 use super::{GRANDSLAM_URL, http};
 
@@ -20,13 +21,12 @@ pub(super) async fn init(
     let a = generate_a();
     let a_pub = compute_a_pub(&a);
     let anisette = resolve_anisette(client).await?;
-
     let body = serde_json::json!({
         "Header": {
             "Version": "1.0.1",
         },
         "Request": {
-            "cpd": anisette.cpd,
+            "cpd": anisette.cpd.clone(),
             "A2k": { "__binary": BASE64.encode(&a_pub) },
             "ps": ["s2k", "s2k_fo"],
             "u": email,
@@ -41,7 +41,7 @@ pub(super) async fn init(
         return Err(srp_init_error(ec));
     }
 
-    parse_srp_init_response(inner, a)
+    parse_srp_init_response(inner, a, anisette)
 }
 
 fn srp_init_error(ec: i64) -> AppStoreError {
@@ -70,38 +70,60 @@ pub(super) async fn complete(
     )
     .map_err(|e| AppStoreError::AuthenticationFailed(format!("SRP proof failed: {e}")))?;
 
-    let anisette = resolve_anisette(client).await?;
-    let body = serde_json::json!({
-        "Header": {
-            "Version": "1.0.1",
-        },
-        "Request": {
-            "cpd": anisette.cpd,
-            "c": init.c,
-            "M1": { "__binary": BASE64.encode(&m1) },
-            "u": email,
-            "o": "complete",
-        },
-    });
-
-    let response = http::post_plist(client, GRANDSLAM_URL, &body, Some(&anisette.headers)).await?;
-    let inner = extract_response(&response)?;
-    let ec = check_grandslam_status(inner, "SRP complete")?;
-
-    if ec == -21669 {
-        return two_factor_required_result(inner, &session_key);
+    let inner = send_complete_request(client, email, init, &m1).await?;
+    if let Some(notification_sent) = second_factor_notification_state(read_status(&inner)) {
+        if notification_sent {
+            verify_server_proof_response(&inner, init, &m1, &session_key)?;
+        }
+        return two_factor_required_result(&inner, &session_key, notification_sent);
     }
+    let ec = check_grandslam_status(&inner, "SRP complete")?;
+
     if ec != 0 {
         return Err(AppStoreError::AuthenticationFailed(format!(
             "SRP complete failed with error code {ec}"
         )));
     }
 
-    finalize_srp_complete(inner, init, &m1, &session_key)
+    finalize_srp_complete(&inner, init, &m1, &session_key)
+}
+
+async fn send_complete_request(
+    client: &reqwest::Client,
+    email: &str,
+    init: &SrpInitResponse,
+    m1: &[u8],
+) -> Result<serde_json::Value, AppStoreError> {
+    let body = serde_json::json!({
+        "Header": {
+            "Version": "1.0.1",
+        },
+        "Request": {
+            "cpd": init.anisette.cpd.clone(),
+            "c": init.c,
+            "M1": { "__binary": BASE64.encode(m1) },
+            "u": email,
+            "o": "complete",
+        },
+    });
+
+    let response =
+        http::post_plist(client, GRANDSLAM_URL, &body, Some(&init.anisette.headers)).await?;
+    extract_response(&response).cloned()
+}
+
+fn second_factor_notification_state(status: (u64, i64)) -> Option<bool> {
+    if status.0 == 409 {
+        Some(true)
+    } else if status.1 == -21669 {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Response from the SRP init step.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SrpInitResponse {
     /// Protocol string (`"s2k"` or `"s2k_fo"`).
     pub sp: String,
@@ -115,6 +137,20 @@ pub struct SrpInitResponse {
     pub c: String,
     /// Private ephemeral (kept for the complete step).
     pub(crate) a: Vec<u8>,
+    /// Anisette identity must remain stable across both SRP requests.
+    pub(crate) anisette: AnisetteData,
+}
+
+impl std::fmt::Debug for SrpInitResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SrpInitResponse")
+            .field("sp", &self.sp)
+            .field("salt_len", &self.salt.len())
+            .field("iterations", &self.iterations)
+            .field("b_pub_len", &self.b_pub.len())
+            .field("continuation_present", &!self.c.is_empty())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Result of the SRP complete step.
@@ -128,12 +164,21 @@ pub enum SrpCompleteResult {
         dsid: String,
         /// IDMS token.
         idms_token: String,
+        /// Whether Apple already sent a trusted-device notification.
+        notification_sent: bool,
     },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::srp_init_error;
+    use super::{second_factor_notification_state, srp_init_error};
+
+    #[test]
+    fn identifies_grandslam_two_factor_statuses() {
+        assert_eq!(second_factor_notification_state((409, 0)), Some(true));
+        assert_eq!(second_factor_notification_state((200, -21669)), Some(false));
+        assert_eq!(second_factor_notification_state((200, 0)), None);
+    }
 
     #[test]
     fn anisette_rejection_does_not_look_like_a_password_error() {

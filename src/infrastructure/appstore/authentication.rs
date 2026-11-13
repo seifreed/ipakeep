@@ -229,6 +229,7 @@ fn check_auth_failures(body: &serde_json::Value) -> Result<(), AppStoreError> {
         return Err(AppStoreError::AuthCodeRequired {
             dsid: String::new(),
             idms_token: String::new(),
+            notification_sent: false,
         });
     }
 

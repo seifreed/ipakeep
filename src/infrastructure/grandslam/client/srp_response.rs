@@ -2,6 +2,7 @@
 
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::grandslam::{
+    anisette::AnisetteData,
     client::{SrpCompleteResult, SrpInitResponse},
     srp::decrypt_spd,
     srp_handshake::{compute_a_pub, verify_server_proof},
@@ -19,6 +20,7 @@ use super::response::extract_base64;
 pub(super) fn parse_srp_init_response(
     inner: &JsonValue,
     a: Vec<u8>,
+    anisette: AnisetteData,
 ) -> Result<SrpInitResponse, AppStoreError> {
     let sp = inner
         .get("sp")
@@ -69,6 +71,7 @@ pub(super) fn parse_srp_init_response(
         b_pub,
         c,
         a,
+        anisette,
     })
 }
 
@@ -80,6 +83,7 @@ pub(super) fn parse_srp_init_response(
 pub(super) fn two_factor_required_result(
     inner: &JsonValue,
     session_key: &[u8],
+    notification_sent: bool,
 ) -> Result<SrpCompleteResult, AppStoreError> {
     let spd = extract_base64(inner, "spd")
         .map_err(|e| AppStoreError::AuthenticationFailed(format!("missing spd: {e}")))?;
@@ -101,7 +105,24 @@ pub(super) fn two_factor_required_result(
         ));
     }
 
-    Ok(SrpCompleteResult::TwoFactorRequired { dsid, idms_token })
+    Ok(SrpCompleteResult::TwoFactorRequired {
+        dsid,
+        idms_token,
+        notification_sent,
+    })
+}
+
+pub(super) fn verify_server_proof_response(
+    inner: &JsonValue,
+    init: &SrpInitResponse,
+    m1: &[u8],
+    session_key: &[u8],
+) -> Result<(), AppStoreError> {
+    let m2 = extract_base64(inner, "M2")
+        .map_err(|e| AppStoreError::AuthenticationFailed(format!("missing server proof: {e}")))?;
+    verify_server_proof(&compute_a_pub(&init.a), m1, session_key, &m2).map_err(|e| {
+        AppStoreError::AuthenticationFailed(format!("server proof verification failed: {e}"))
+    })
 }
 
 /// Verify the server proof and decrypt the SPD account payload.
@@ -111,12 +132,7 @@ pub(super) fn finalize_srp_complete(
     m1: &[u8],
     session_key: &[u8],
 ) -> Result<SrpCompleteResult, AppStoreError> {
-    let m2 = extract_base64(inner, "M2")
-        .map_err(|e| AppStoreError::AuthenticationFailed(format!("missing server proof: {e}")))?;
-
-    verify_server_proof(&compute_a_pub(&init.a), m1, session_key, &m2).map_err(|e| {
-        AppStoreError::AuthenticationFailed(format!("server proof verification failed: {e}"))
-    })?;
+    verify_server_proof_response(inner, init, m1, session_key)?;
 
     let spd = extract_base64(inner, "spd")
         .map_err(|e| AppStoreError::AuthenticationFailed(format!("missing spd: {e}")))?;
@@ -137,6 +153,14 @@ mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
     use serde_json::json;
+    use std::collections::HashMap;
+
+    fn anisette_fixture() -> AnisetteData {
+        AnisetteData {
+            headers: HashMap::from([("X-Apple-I-MD".into(), "otp".into())]),
+            cpd: json!({"X-Apple-I-MD": "otp"}),
+        }
+    }
 
     #[test]
     fn parse_srp_init_response_reads_values_and_defaults() {
@@ -147,6 +171,7 @@ mod tests {
                 "c": "continuation"
             }),
             vec![9],
+            anisette_fixture(),
         )
         .unwrap();
 
@@ -156,6 +181,8 @@ mod tests {
         assert_eq!(response.b_pub, vec![4, 5, 6]);
         assert_eq!(response.c, "continuation");
         assert_eq!(response.a, vec![9]);
+        assert_eq!(response.anisette.headers["X-Apple-I-MD"], "otp");
+        assert_eq!(response.anisette.cpd["X-Apple-I-MD"], "otp");
     }
 
     #[test]
@@ -169,6 +196,7 @@ mod tests {
                 "c": "continuation"
             }),
             Vec::new(),
+            anisette_fixture(),
         )
         .unwrap();
 
@@ -179,21 +207,30 @@ mod tests {
     #[test]
     fn parse_srp_init_response_reports_missing_required_fields() {
         assert!(
-            parse_srp_init_response(&json!({"B": BASE64.encode([1_u8]), "c": "c"}), Vec::new())
-                .unwrap_err()
-                .to_string()
-                .contains("salt")
+            parse_srp_init_response(
+                &json!({"B": BASE64.encode([1_u8]), "c": "c"}),
+                Vec::new(),
+                anisette_fixture(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("salt")
         );
         assert!(
-            parse_srp_init_response(&json!({"s": BASE64.encode([1_u8]), "c": "c"}), Vec::new())
-                .unwrap_err()
-                .to_string()
-                .contains("server ephemeral")
+            parse_srp_init_response(
+                &json!({"s": BASE64.encode([1_u8]), "c": "c"}),
+                Vec::new(),
+                anisette_fixture(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("server ephemeral")
         );
         assert!(
             parse_srp_init_response(
                 &json!({"s": BASE64.encode([1_u8]), "B": BASE64.encode([2_u8])}),
-                Vec::new()
+                Vec::new(),
+                anisette_fixture()
             )
             .unwrap_err()
             .to_string()

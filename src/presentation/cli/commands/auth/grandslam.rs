@@ -15,6 +15,7 @@ pub(super) struct GrandSlamLoginContext<'a> {
 pub(super) struct GrandSlamChallenge<'a> {
     pub(super) dsid: &'a str,
     pub(super) idms_token: &'a str,
+    pub(super) notification_sent: bool,
 }
 
 pub(super) async fn handle_2fa<R, C>(
@@ -68,10 +69,14 @@ where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
-    use_case
-        .request_trusted_device_notification(challenge.dsid, challenge.idms_token)
-        .await
-        .map_err(|e| format!("failed to request trusted device notification: {e}"))?;
+    if challenge.notification_sent {
+        println!("A trusted-device verification code has already been sent.");
+    } else {
+        use_case
+            .request_trusted_device_notification(challenge.dsid, challenge.idms_token)
+            .await
+            .map_err(|e| format!("failed to request trusted device notification: {e}"))?;
+    }
 
     let code = dialoguer::Input::<String>::new()
         .with_prompt("Enter 2FA code from trusted device")

@@ -12,9 +12,15 @@ pub(super) async fn authenticate(
     let init = grand_slam.srp_init(email).await?;
     match grand_slam.srp_complete(email, password, &init).await? {
         SrpCompleteResult::Success(account) => Ok(*account),
-        SrpCompleteResult::TwoFactorRequired { dsid, idms_token } => {
-            Err(AppStoreError::AuthCodeRequired { dsid, idms_token })
-        }
+        SrpCompleteResult::TwoFactorRequired {
+            dsid,
+            idms_token,
+            notification_sent,
+        } => Err(AppStoreError::AuthCodeRequired {
+            dsid,
+            idms_token,
+            notification_sent,
+        }),
     }
 }
 
