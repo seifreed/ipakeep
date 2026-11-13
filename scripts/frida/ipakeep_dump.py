@@ -481,28 +481,44 @@ def run_dump(args) -> int:
     return 0 if written else 1
 
 
-def request_extension_launches(session, identifiers) -> None:
-    """Ask iOS, from inside the host app, to start each extension via NSExtension."""
+def request_extension_launches(device, host_session, identifiers) -> None:
+    """Ask iOS to start each extension via NSExtension.
+
+    SpringBoard is the preferred host: it is always running and can start
+    event-driven extensions (e.g. notification services) even while the device
+    is locked. The dumped app is the fallback host (e.g. on a Mac).
+    """
     if not identifiers:
         return
     with open(os.path.join(HERE, "ipakeep_extensions.js"), "r", encoding="utf-8") as handle:
-        launcher = session.create_script(handle.read())
-    launcher.load()
-    for identifier in identifiers:
-        try:
-            requested = launcher.exports_sync.launch(identifier)
-        except frida.core.RPCException as error:
-            requested = False
-            LOGGER.warning(
-                "service=ipakeep component=frida event_name=frida.extension.request_failed bundle_id=%r error=%r",
+        source = handle.read()
+    springboard = None
+    try:
+        springboard = device.attach("SpringBoard")
+    except (frida.ProcessNotFoundError, frida.NotSupportedError, frida.PermissionDeniedError):
+        pass
+    try:
+        launcher = (springboard or host_session).create_script(source)
+        launcher.load()
+        for identifier in identifiers:
+            try:
+                requested = launcher.exports_sync.launch(identifier)
+            except frida.core.RPCException as error:
+                requested = False
+                LOGGER.warning(
+                    "service=ipakeep component=frida event_name=frida.extension.request_failed bundle_id=%r error=%r",
+                    identifier,
+                    str(error),
+                )
+            LOGGER.info(
+                "service=ipakeep component=frida event_name=frida.extension.requested bundle_id=%r host=%s requested=%s",
                 identifier,
-                str(error),
+                "SpringBoard" if springboard else "app",
+                requested,
             )
-        LOGGER.info(
-            "service=ipakeep component=frida event_name=frida.extension.requested bundle_id=%r requested=%s",
-            identifier,
-            requested,
-        )
+    finally:
+        if springboard is not None:
+            detach_session(springboard)
 
 
 def dump_main_app(device, session, pid, bundles, agent_path, args, written) -> set[str]:
@@ -529,7 +545,7 @@ def dump_main_app(device, session, pid, bundles, agent_path, args, written) -> s
         args.out,
         written,
         args.settle,
-        on_gated=lambda: request_extension_launches(session, identifiers),
+        on_gated=lambda: request_extension_launches(device, session, identifiers),
     )
     script.exports_sync.sweep()
     return matched
