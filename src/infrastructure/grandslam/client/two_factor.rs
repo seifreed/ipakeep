@@ -15,6 +15,8 @@ const TRUSTED_DEVICE_URL: &str = "https://gsa.apple.com/auth/verify/trusteddevic
 const PHONE_URL: &str = "https://gsa.apple.com/auth/verify/phone";
 const PHONE_SECURITY_CODE_URL: &str = "https://gsa.apple.com/auth/verify/phone/securitycode";
 const VALIDATE_URL: &str = "https://gsa.apple.com/grandslam/GsService2/validate";
+const XCODE_VERSION: &str = "11.2 (11B41)";
+const SMS_ACCEPT: &str = "application/json, text/javascript, */*; q=0.01";
 
 pub(super) async fn request_trusted_device_notification(
     client: &reqwest::Client,
@@ -23,6 +25,7 @@ pub(super) async fn request_trusted_device_notification(
 ) -> Result<(), AppStoreError> {
     let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "text/x-xml-plist".into());
+    headers.insert("Accept".into(), "text/x-xml-plist".into());
 
     let response = client
         .get(TRUSTED_DEVICE_URL)
@@ -70,6 +73,7 @@ pub(super) async fn validate_trusted_device_code(
 ) -> Result<(), AppStoreError> {
     let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "text/x-xml-plist".into());
+    headers.insert("Accept".into(), "text/x-xml-plist".into());
     headers.insert("security-code".into(), code.into());
 
     client
@@ -92,6 +96,7 @@ pub(super) async fn request_sms(
 ) -> Result<(), AppStoreError> {
     let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "application/json".into());
+    headers.insert("Accept".into(), SMS_ACCEPT.into());
 
     let body = serde_json::json!({
         "phoneNumber": { "id": phone_id },
@@ -117,6 +122,7 @@ pub(super) async fn validate_sms_code(
 ) -> Result<(), AppStoreError> {
     let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "application/json".into());
+    headers.insert("Accept".into(), SMS_ACCEPT.into());
     let body = serde_json::json!({
         "phoneNumber": { "id": phone_id },
         "securityCode": { "code": code },
@@ -142,20 +148,24 @@ async fn identity_headers(
     idms_token: &str,
 ) -> Result<HashMap<String, String>, AppStoreError> {
     let mut headers = resolve_anisette(client).await?.headers;
-    add_identity_token(&mut headers, dsid, idms_token);
+    add_auth_headers(&mut headers, dsid, idms_token);
     Ok(headers)
 }
 
-fn add_identity_token(headers: &mut HashMap<String, String>, dsid: &str, idms_token: &str) {
+fn add_auth_headers(headers: &mut HashMap<String, String>, dsid: &str, idms_token: &str) {
     headers.insert(
         "X-Apple-Identity-Token".into(),
         identity_token(dsid, idms_token),
     );
+    headers.insert("User-Agent".into(), "Xcode".into());
+    headers.insert("Accept-Language".into(), "en-us".into());
+    headers.insert("X-Apple-App-Info".into(), "com.apple.gs.xcode.auth".into());
+    headers.insert("X-Xcode-Version".into(), XCODE_VERSION.into());
 }
 
 #[cfg(test)]
 mod tests {
-    use super::add_identity_token;
+    use super::add_auth_headers;
     use crate::infrastructure::grandslam::client::http::identity_token;
     use std::collections::HashMap;
 
@@ -163,7 +173,7 @@ mod tests {
     fn identity_token_is_added_without_dropping_anisette_headers() {
         let mut headers = HashMap::from([("X-Apple-I-MD".into(), "anisette-md".into())]);
 
-        add_identity_token(&mut headers, "123", "token");
+        add_auth_headers(&mut headers, "123", "token");
 
         assert_eq!(
             headers.get("X-Apple-I-MD").map(String::as_str),
@@ -172,6 +182,11 @@ mod tests {
         assert_eq!(
             headers.get("X-Apple-Identity-Token").map(String::as_str),
             Some(identity_token("123", "token").as_str())
+        );
+        assert_eq!(headers.get("User-Agent").map(String::as_str), Some("Xcode"));
+        assert_eq!(
+            headers.get("X-Apple-App-Info").map(String::as_str),
+            Some("com.apple.gs.xcode.auth")
         );
     }
 }
