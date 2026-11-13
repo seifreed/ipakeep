@@ -157,3 +157,11 @@ delete operations with backend, outcome, and duration fields; account names,
 tokens, and storage paths are excluded. Tests assert the file backend's events
 do not contain account data and parse an actual HTTP JSON event to verify its
 normalized level, event name, method, status, and duration fields.
+
+### Milestone 5 — shared external process events
+
+The common synchronous process runners and Simulator command adapters now emit
+completion or spawn-failure events with the executable basename, exit code,
+outcome, and duration. Arguments, environment, stdin/stdout, stderr, and full
+executable paths are excluded. A regression test runs a failing child process
+whose arguments and output contain a sentinel and verifies neither is logged.

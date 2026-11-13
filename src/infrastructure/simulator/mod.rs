@@ -1,5 +1,6 @@
 //! iOS Simulator helpers for preparing and launching extracted app bundles.
 
+use crate::infrastructure::exec::observed_output;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -191,9 +192,8 @@ fn codesign_command(target: &Path, identity: &str, entitlements: Option<&Path>) 
 }
 
 fn command_output(mut command: Command) -> Result<String, String> {
-    let output = command
-        .output()
-        .map_err(|e| format!("failed to run {command:?}: {e}"))?;
+    let output =
+        observed_output(&mut command).map_err(|e| format!("failed to run {command:?}: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
@@ -201,9 +201,8 @@ fn command_output(mut command: Command) -> Result<String, String> {
 }
 
 fn run_checked(mut command: Command) -> Result<(), String> {
-    let output = command
-        .output()
-        .map_err(|e| format!("failed to run {command:?}: {e}"))?;
+    let output =
+        observed_output(&mut command).map_err(|e| format!("failed to run {command:?}: {e}"))?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         if !stdout.trim().is_empty() {
