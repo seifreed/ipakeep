@@ -27,6 +27,42 @@
 
 **ipakeep** is a Rust toolkit to authenticate with Apple, search the App Store, acquire app licenses, and download IPA files — patched with their DRM `sinf` blobs and `iTunesMetadata.plist` while retaining Apple’s FairPlay encryption. It ships both a command-line tool and a library crate, and runs on macOS, Linux, and Windows.
 
+> **ipakeep does not decrypt a downloaded IPA by itself.** A downloaded IPA is
+> still FairPlay-encrypted. Decryption needs the app running on a real device
+> that you can attach Frida to; ipakeep drives that dump and patches the result.
+
+### Workflow: Who Does What
+
+| Stage | What happens | Needs |
+|-------|--------------|-------|
+| **1. Download & patch** | `auth login`, license (`purchase` / automatic), `download`. The IPA is what Apple serves, plus `sinf` blobs and `iTunesMetadata.plist`. **Still FairPlay-encrypted.** | An Apple ID; any OS |
+| **2. Decrypt** | The app runs on a device, iOS decrypts its code in memory, and a dumper reads it. ipakeep orchestrates `decrypt dump` (builtin Frida dumper, or `--dumper frida-ios-dump`, `bagbak`, `r2flutch`) or `decrypt dump-mac`, patches the plaintext back (`decrypt patch`), and checks it (`decrypt verify`) | See below |
+| **3. Install / run decrypted** | Physical non-jailbroken device: `device install-ipa` re-signs with your development profile. Simulator: `simulator install-ipa` / `simulator run --inject-dylib` | Signing identity + profile (device), or Apple Silicon Mac (Simulator) |
+
+Stage 2 requirements — ipakeep cannot decrypt from the downloaded file alone:
+
+- A **jailbroken device** (or another route that gives `frida-server` access to the
+  app's memory, such as TrollStore). A stock, non-jailbroken iPhone cannot be
+  used to decrypt App Store apps. `decrypt dump-mac` is the alternative on an
+  Apple Silicon Mac with SIP disabled, for apps available as iOS-on-Mac.
+- Device iOS **≥ the app's `MinimumOSVersion`**, and the app must launch there.
+- The version **installed on the device must match the encrypted IPA** you pass
+  with `--ipa`; ipakeep rejects mismatched slice sizes.
+
+### Limitations
+
+- **Minimum iOS vs. jailbreakable devices.** Current apps often require an iOS
+  newer than any device you can jailbreak. `decrypt inspect` reports which iOS
+  majors satisfy each slice's minimum. `decrypt set-min-os` can lower the
+  declared minimum, but it does not backport APIs and often crashes —
+  downgrading is not a real fix. An older App Store version (`list-versions`,
+  `download --external-version-id`) is the better option when one exists.
+- **Entitlements.** A development re-sign can only grant what your profile
+  authorizes. App Groups, keychain access groups, push notifications,
+  associated domains, iCloud containers, and Apple-restricted entitlements from
+  the original team are not available to you, so features depending on them may
+  fail. `decrypt entitlements <App.app>` reports which ones will break.
+
 ### Key Features
 
 | Feature | Description |
@@ -36,8 +72,8 @@
 | **Legacy auth** | Classic App Store authentication flow with `-5000` retry handling |
 | **Search & lookup** | Public iTunes Search/Lookup by term or bundle identifier |
 | **Purchase** | Acquire a free-app license via `buyProduct` |
-| **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist` |
-| **Device decryption** | Builtin Frida dump orchestration, patching, and structural verification; requires access to the running app |
+| **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist`; output is **still FairPlay-encrypted** |
+| **Device decryption** | Orchestrates a Frida dump of the app **running on a jailbroken device** (or Apple Silicon Mac with SIP off), then patches and verifies; cannot decrypt the file alone |
 | **Physical-device install** | Match provisioning profiles per bundle, preserve authorized capabilities, sign and install decrypted IPAs |
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
@@ -49,7 +85,8 @@
 
 ```text
 Account / results   Text tables, JSON
-IPA artifacts       Patched .ipa (sinf + iTunesMetadata injected)
+IPA artifacts       Patched .ipa (sinf + iTunesMetadata injected, still encrypted)
+                    Decrypted .ipa (only via `decrypt dump` on a running device)
 Logging             tracing to stderr (`RUST_LOG`, `--verbose`, optional JSON)
 ```
 
@@ -375,6 +412,7 @@ ipakeep auth revoke
 | `ipakeep simulator run --bundle-id <id> [--inject-dylib <path>] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Launch an installed app on a selected booted Simulator, optionally injecting signed dylibs |
 | `ipakeep simulator install-ipa <ipa> [--run] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Extract, reject encrypted App Store IPAs, prepare, sign, install, and optionally launch a Simulator-compatible IPA. `--console` requires `--run` |
 | `ipakeep simulator unlock-runtime [path]` | Create a read-write overlay for a path inside an iOS `.simruntime`; defaults to the booted Simulator runtime root |
+| `ipakeep decrypt <inspect\|dump\|dump-mac\|patch\|verify\|entitlements\|set-min-os>` | Inspect encryption, dump a running app, patch dumped slices, verify, report entitlements that break after re-signing, lower the minimum OS |
 | `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--legacy-device`, `--run`) |
 
 ### Global Flags
