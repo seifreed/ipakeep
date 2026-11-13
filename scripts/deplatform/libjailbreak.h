@@ -34,6 +34,9 @@ uint32_t kread32(uint64_t kaddr);
 uint64_t kread64(uint64_t kaddr);
 int kreadbuf(uint64_t kaddr, void *buf, size_t size);
 
+/* Kernel pointer to the vnode backing an open fd of `proc`. 0 on failure. */
+uint64_t proc_get_vnode_for_fd(uint64_t proc, int fd);
+
 /*
  * Kernel memory writes. On Dopamine these are physical-write backed (physrw),
  * so they reach read-only-mapped kernel memory such as the proc_ro structure

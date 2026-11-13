@@ -1,75 +1,110 @@
-# Static on-device decrypt: de-platform helper
+# Static on-device decrypt — kernel RE notes (exploration, not the shipping path)
 
-The `--dumper fouldecrypt` backend does a static, no-launch FairPlay decrypt on a
-jailbroken device. On A11/t8015 under Dopamine (iPhone de Pau, iOS 16.7.16 /
-20H392) it is blocked by AMFI **library validation**:
+> **Bottom line:** the shipping decrypt is `ipakeep decrypt dump` (Frida, live
+> process; verified E2E) and `decrypt offline` (ipadecrypt). This directory is a
+> **documented dead end**: an attempt at a *static, no-launch* FairPlay decrypt
+> on a jailbroken device. It produced one genuinely useful kernel result (an
+> AMFI library-validation bypass) but cannot decrypt modern apps. Kept for the
+> research; not wired into any backend.
 
-- Our decrypter runs as a **platform binary with LV** (trust-cached; `csops`
-  reports `0x2680380d`). AMFI's `file_check_mmap` → library-validation hook
-  forbids a platform/LV process from creating an executable
-  (`PROT_READ|PROT_EXEC`) mapping of a **foreign-team** Apple-signed Mach-O.
-- `mremap_encrypted` needs exactly that `r-x` mapping, so it returns **EPERM**
-  (proven at every offset; a read-only mapping has no mremap fallback).
+Test device: "iPhone de Pau", iPhone10,1 (A11 / t8015, arm64), iOS 16.7.16
+(20H392), **Dopamine** (KFD/physrw) jailbreak. All addresses below are from IDA
+on the clean 16.7.16/t8015 kernelcache (unslid, imagebase `0xfffffff007004000`).
 
-The only known fix is to **de-platform our own process** with kernel R/W.
-Clearing `p_csflags` was proven insufficient. On this kernel (verified live
-against Dopamine's own offset database, `jbinfo_get_serialized`) the platform
-status that gates library validation is the **`TFRO_PLATFORM` (0x400)** bit in
-the read-only proc structure `proc_ro.t_flags_ro`:
+## The blocker, correctly diagnosed
+
+A separate process mapping an App Store binary executable (`PROT_READ|PROT_EXEC`,
+which `mremap_encrypted` needs) is denied **EPERM** by AMFI's `mmap` hook:
+
+```c
+// AMFI mpo_file_check_mmap hook (sub_FFFFFFF0056F6A8C)
+v12 = cs_require_lv(current_proc);
+if ((maxprot & VM_PROT_EXECUTE) && v12)
+    if (library_validation_check(...) == 0) return DENY;  // EPERM
+```
+
+Two facts settle the old "de-platform our process" theory as **wrong**:
+
+1. `_cs_require_lv` (`0xfffffff00759e710`) is literally `MOV W0,#1 ; RET` —
+   library validation is **unconditional**. No per-process flag (csflags,
+   `CS_REQUIRE_LV`, `csb_platform_binary`, `TFRO_PLATFORM`) can switch it off.
+2. The LV check (`sub_FFFFFFF0056F6B10`) compares the **mapped file** vs the
+   **mapping process**. De-platforming ourselves only moves us between reject
+   branches (`"mapping process is a platform binary…"` →
+   `"…has no Team ID / different Team IDs"`): a foreign-team app never passes
+   that way.
+
+The one branch that *allows* a foreign file: when the **file** is a platform
+binary (`csfg_get_platform_binary(file) == 1`).
+
+## The useful result — a KTRR-safe library-validation bypass (PROVEN live)
+
+`csfg_get_platform_binary` (`0xfffffff00759ef54`) reads a single heap bit:
 
 ```
-proc -> proc_ro (@+24) -> t_flags_ro (@+120)  &= ~0x400
+file vnode -> +0x78 (v_ubcinfo) -> +0x50 (cs_blobs) -> cs_blob
+cs_blob + 0xAC, bit 0   ==   csb_platform_binary
 ```
 
-`proc_ro` is read-only-mapped kernel memory, so the write must go through a
-physical-write-backed primitive (libjailbreak's `kwrite32` / `physwritebuf`),
-not an ordinary virtual write. (The generic XNU `cs_blob.csb_platform_binary`
-chain — `proc -> p_textvp -> ubc_info -> cs_blobs` — does not apply here:
-`proc_find_main_binary_code_dir` is arm64e-gated and returns -1 on A11.)
+The `cs_blob` lives in kalloc heap (writable via libjailbreak physrw — **no
+KTRR**, unlike kernel `__TEXT_EXEC`, which on this Dopamine/KFD/A11 device is
+AMCC-locked and would **panic** if written). Setting that one bit on the target
+app's own blob makes AMFI treat the file as platform, so any process may map it
+executable. Reach the file's vnode with libjailbreak `proc_get_vnode_for_fd`.
 
-## Hard constraints (verified by research wf_7d2faab6-116)
+`lvmap.c` does this and it was **verified on the live kernel** (Ludo Star):
+pre-patch `mmap(RX)` = EPERM → set `cs_blob+0xAC` bit 0 → post-patch `mmap(RX)` =
+OK. (This is why the earlier `jbclient_trust_file_by_path` failed: a *dynamic*
+trust cache sets `csb_validated`, not `csb_platform_binary`; the direct kwrite
+does.)
 
-- Kernel R/W must come from **Dopamine's own libjailbreak** — all three kfd PUAF
-  exploits (physpuppet/smith/landa) are patched on 20H392.
-- The offsets for 20H392/t8015 are **not published** anywhere; they must be
-  derived on-device. Dopamine's ready `proc_find_main_binary_code_dir` helper is
-  arm64e-gated and bails on A11, so we walk the chain ourselves.
+## Why the static decrypt still fails (the real dead end)
 
-## Running a helper on the device (the non-obvious parts)
+Modern FairPlay encrypts a **single 4K page at a 4K-granular (non-16K) offset**
+— confirmed on both Ludo Star (`cryptoff=0x1049000`) and Candy Crush
+(`cryptoff=0xcdd000`), each `cryptsize=0x1000`. `mremap_encrypted` operates at
+the **calling process's page granularity**, which is 16K for every iOS-16 arm64
+process. A 16K process cannot express "decrypt this 4K page":
 
-1. **Build + sign** on macOS: `LIBJAILBREAK=<dylib> ./build.sh src out`
-   (repoints to `/var/jb/basebin/libjailbreak.dylib`, signs with `ldid`).
-2. **Trust-cache** the cdhash: `sudo jbctl trustcache add <CDHash>` (hex from
-   `codesign -dvvv`, NOT a path).
-3. **Run from a jbroot path**: `sudo cp` it to `/var/jb/usr/bin/` and run it
-   there. A trust-cached binary under `/var/mobile` is still SIGKILLed at exec
-   by the sandbox (`failed to apply exec policy`); under `/var/jb` the platform
-   sandbox profile applies and it runs.
-4. **Run as root**: `jbclient_initialize_primitives` only grants kernel R/W to
-   a root process. (`kalloc/kmap/kcall` also need an IOSurface entitlement, but
-   de-platforming needs only `kread`/`kwrite`, which work without it.)
-5. SSH to the device throttles hard on repeated password auth; use an
-   `ssh -M`/`ControlMaster` multiplexed connection to avoid re-auth.
+- raw call at the 4K offset → `EINVAL`;
+- rounding the window to 16K → wrong `crypto_backing_offset`/range → corrupt
+  output **and a wedged apple-protect pager** on that vnode (recovered by reboot).
 
-## Staged plan (each stage commits + pushes)
-
-1. ✅ **Probe (read-only)** — `deplatform_probe.c`: dumps `jbinfo` offsets,
-   tests `proc_find_main_binary_code_dir`, walks the chain, `csops`. No writes.
-2. ✅ **Offsets pinned** from Dopamine's live offset DB (see above).
-3. ✅ **Clear helper** — `deplatform.c`: validates `proc -> proc_ro ->
-   t_flags_ro`, then clears `TFRO_PLATFORM` via `kwrite32`. Dry-run by default;
-   writes only with `--commit` after validation.
-4. Self-de-platform, then `mmap(PROT_EXEC)` + `mremap_encrypted` the installed
-   binary in-process (no `exec`, which would re-platformize us); write plaintext.
-5. Wire into `run.sh` / the `fouldecrypt` backend and add EPERM detection.
+A 4K-paged helper is not creatable on iOS 16. So the static mmap+`mremap_encrypted`
+approach (old flexdecrypt/bfdecrypt style) is obsolete for modern apps. The live
+process already has its `__TEXT` decrypted by the kernel's apple-protect pager,
+which is exactly why the **Frida live-process dump is the right tool** and why
+`ipakeep decrypt dump` works.
 
 ## Files
 
-- `deplatform_probe.c` — stage 1, read-only offset/chain discovery.
-- `deplatform.c` — stage 3, the TFRO_PLATFORM clear (dry-run unless `--commit`).
+- `lvmap.c` — the proven LV bypass (set file `csb_platform_binary`) + a decrypt
+  attempt that demonstrates the 4K/16K `mremap_encrypted` wall.
+- `lvpatch.c` — read-only probe that resolves the kernel slide from `jbinfo`
+  and validates `cs_require_lv`; a `--patch` to flip it to `return 0` exists but
+  is **unsafe on this device** (KTRR → kernel-text write panics) and must not be
+  run on Dopamine/KFD/A11.
 - `libjailbreak.h` — minimal decls for the libjailbreak exports we call.
-- `build.sh` — cross-compile on macOS (iPhoneOS SDK) + link libjailbreak + sign.
-- `ent.plist` — ad-hoc signing entitlements (optional; trust cache suffices).
+- `build.sh` — cross-compile (iPhoneOS SDK) + repoint to
+  `/var/jb/basebin/libjailbreak.dylib` + `ldid` sign.
+- `ent.plist` — ad-hoc entitlements.
 
-Safety rule (user's personal device): no blind kernel writes — read-validate
-every offset against the live values before any write; dry-run is the default.
+## Running a helper on the device (the non-obvious parts)
+
+1. Build: `LIBJAILBREAK=<dylib> ./build.sh lvmap.c out`.
+2. Trust-cache the **sha256 cdhash** (hex from `codesign -dvvv`, not a path):
+   `sudo jbctl trustcache add <CDHash>`.
+3. Run from a **jbroot** path (`sudo cp` to `/var/jb/usr/bin/`): a trust-cached
+   binary under `/var/mobile` is SIGKILLed at exec by the sandbox; under
+   `/var/jb` the platform profile applies.
+4. Run as **root** — `jbclient_initialize_primitives` grants kernel R/W only to
+   root (raw `kread`/`kwrite` work even though `kalloc/kmap/kcall` need an
+   IOSurface entitlement this helper lacks).
+5. SSH throttles on repeated password auth; use one `ssh -M`/`ControlMaster`
+   multiplexed connection.
+
+Kernel slide: parse `jbinfo_get_serialized` → `kernelConstant.slide` (the value
+is the **decimal** after the xpc pointer, not the `0x…` pointer itself).
+
+Safety rule (user's personal device): read-validate every offset against live
+values before any write; never write kernel text on a KTRR-locked kernel.
