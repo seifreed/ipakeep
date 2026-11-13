@@ -6,9 +6,11 @@
 //! declares the tool set, validates arguments, runs the use case, and maps the
 //! result (or failure) to MCP content.
 
-use crate::domain::entity::{Account, App, AppVersion, DownloadMetadata, metadata_string};
+use crate::domain::entity::{
+    Account, App, AppVersion, DownloadMetadata, OwnedApp, metadata_string,
+};
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
-use crate::domain::usecase::{AuthInfo, Download, ListVersions, Search};
+use crate::domain::usecase::{AuthInfo, Download, ListVersions, Purchases, Search};
 use crate::infrastructure::ipa::{patch_ipa, verify_md5};
 use crate::infrastructure::mcp::{
     CallToolResult, Implementation, ToolDefinition, ToolInvoker, serve,
@@ -79,7 +81,7 @@ where
             "list_versions" => self.list_versions(arguments).await,
             "auth_info" => self.auth_info().await,
             "download" => self.download(arguments).await,
-            "purchases" => Self::purchases(arguments),
+            "purchases" => self.purchases(arguments).await,
             other => Err(format!("unknown tool: {other}")),
         };
 
@@ -189,35 +191,36 @@ where
         })
     }
 
-    // TODO(orchestrator): wire this to the `list_purchases` use case being added
-    // by the parallel purchases agent. The tool name and input schema are final;
-    // only the body below needs replacing, for example:
-    //
-    //     let args: PurchasesArgs = parse_args(arguments)?;
-    //     let output = crate::domain::usecase::ListPurchases::new(
-    //         self.app_store.clone(), self.credentials.clone(),
-    //     )
-    //     .execute(args.page, args.max_results)
-    //     .await
-    //     .map_err(|error| format!("purchases failed: {error}"))?;
-    //     to_value(&output)
-    //
-    // Until then the tool validates its arguments and returns a clear error so
-    // the server still compiles and runs without the parallel work.
-    fn purchases(arguments: Value) -> Result<Value, String> {
+    /// List the apps the authenticated account owns. The underlying use case
+    /// fetches up to `limit` owned apps; `page` beyond 1 is not supported and
+    /// `platform` is informational only (each `OwnedApp` reports its platforms).
+    async fn purchases(&self, arguments: Value) -> Result<Value, String> {
         let args: PurchasesArgs = parse_args(arguments)?;
         if args.page == Some(0) {
             return Err("page must be greater than 0".to_string());
         }
-        if args.max_results == Some(0) {
-            return Err("max_results must be greater than 0".to_string());
+        if args.page.is_some_and(|page| page > 1) {
+            return Err("pagination beyond page 1 is not supported".to_string());
         }
+        let limit = match args.max_results {
+            Some(0) => return Err("max_results must be greater than 0".to_string()),
+            Some(value) if value > 100 => {
+                return Err("max_results must not exceed 100".to_string());
+            }
+            Some(value) => value,
+            None => 10,
+        };
         let _ = args.platform.as_deref();
-        Err(
-            "the 'purchases' tool is not yet wired: the list_purchases use case is being added by \
-             a parallel agent"
-                .to_string(),
-        )
+
+        let apps = Purchases::new(self.app_store.clone(), self.credentials.clone())
+            .execute(limit)
+            .await
+            .map_err(|error| format!("purchases failed: {error}"))?;
+
+        to_value(&PurchasesOutput {
+            count: apps.len(),
+            apps,
+        })
     }
 }
 
@@ -428,6 +431,12 @@ struct SearchOutput {
 }
 
 #[derive(Debug, Serialize)]
+struct PurchasesOutput {
+    count: usize,
+    apps: Vec<OwnedApp>,
+}
+
+#[derive(Debug, Serialize)]
 struct VersionsOutput {
     app_id: i64,
     count: usize,
@@ -634,13 +643,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn purchases_tool_is_flagged_as_not_yet_wired() {
+    async fn purchases_tool_errors_when_not_logged_in() {
         let result = handler()
             .call_tool("purchases", serde_json::json!({}))
             .await;
         assert!(result.is_error);
+    }
+
+    #[tokio::test]
+    async fn purchases_tool_returns_owned_apps_as_json() {
+        let app_store =
+            FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![OwnedApp {
+                id: 42,
+                bundle_id: "com.example.app".into(),
+                name: "Example".into(),
+                version: "1.0".into(),
+                platforms: vec!["iphone".into()],
+                purchase_date: None,
+            }]));
+        let handler = McpToolHandler {
+            app_store,
+            credentials: InMemoryCredentialRepository::new().with_account(account()),
+        };
+
+        let result = handler
+            .call_tool("purchases", serde_json::json!({"max_results": 5}))
+            .await;
+
+        assert!(!result.is_error);
         let ToolContent::Text { text } = &result.content[0];
-        assert!(text.contains("not yet wired"));
+        let parsed: Value = serde_json::from_str(text).expect("json content");
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["apps"][0]["bundle_id"], "com.example.app");
+    }
+
+    #[tokio::test]
+    async fn purchases_tool_rejects_pagination_beyond_first_page() {
+        let result = handler()
+            .call_tool("purchases", serde_json::json!({"page": 2}))
+            .await;
+        assert!(result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        assert!(text.contains("page 1"));
     }
 
     #[test]
