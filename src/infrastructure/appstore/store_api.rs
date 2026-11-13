@@ -4,6 +4,8 @@ mod commerce;
 mod commerce_auth;
 mod grandslam_auth;
 mod parsing;
+#[cfg(ipakeep_modern_adi)]
+mod signed_commerce;
 mod transport;
 
 use crate::domain::entity::{Account, App, AppVersion, DownloadItem, TrustedPhoneNumber};
@@ -227,6 +229,10 @@ impl AppStoreRepository for AppleAppStoreRepository {
         app_id: i64,
         guid: &str,
     ) -> Result<(), AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login {
+            return signed_commerce::purchase(account, app_id).await;
+        }
         commerce::purchase(self, account, app_id, guid).await
     }
 
@@ -237,10 +243,20 @@ impl AppStoreRepository for AppleAppStoreRepository {
         guid: &str,
         version_id: Option<String>,
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login {
+            return signed_commerce::download(account, app_id, version_id.as_deref()).await;
+        }
         commerce::download(self, account, app_id, guid, version_id).await
     }
 
     async fn download_bytes(&self, url: &str) -> Result<Vec<u8>, AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login
+            && let Some(package) = signed_commerce::take_staged_package(url)
+        {
+            return package;
+        }
         self.client
             .download_file(url, None)
             .await
@@ -253,6 +269,10 @@ impl AppStoreRepository for AppleAppStoreRepository {
         app_id: i64,
         guid: &str,
     ) -> Result<Vec<AppVersion>, AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login {
+            return signed_commerce::list_versions(account, app_id).await;
+        }
         commerce::list_versions(self, account, app_id, guid).await
     }
 }

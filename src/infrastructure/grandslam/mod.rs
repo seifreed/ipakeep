@@ -20,4 +20,4 @@ mod modern_adi;
 pub use anisette::{AnisetteData, resolve_anisette};
 pub use client::{GrandSlamClient, SrpCompleteResult, SrpInitResponse};
 #[cfg(ipakeep_modern_adi)]
-pub use modern_adi::store_login;
+pub use modern_adi::{store_login, store_request};

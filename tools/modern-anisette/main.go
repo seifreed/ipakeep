@@ -43,8 +43,11 @@ func run() error {
 	}
 	defer unlockState(lock)
 
-	if len(os.Args) > 1 && os.Args[1] == "login" {
-		return runLogin(statePath, os.Stdin, os.Stdout)
+	if len(os.Args) > 1 {
+		if os.Args[1] == "login" {
+			return runLogin(statePath, os.Stdin, os.Stdout)
+		}
+		return runStore(os.Args[1], statePath, os.Stdin, os.Stdout)
 	}
 
 	state, err := readState(statePath)

@@ -12,11 +12,12 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_HELPER_OUTPUT: usize = 64 * 1024;
+const MAX_STORE_OUTPUT: usize = 4 * 1024 * 1024;
 const MAX_HEADER_VALUE: usize = 8192;
 const HELPER_BINARY: &[u8] = include_bytes!(env!("IPAKEEP_MODERN_ANISETTE_HELPER"));
 const DEVICE_MODEL: &str = "MacBookPro13,3";
@@ -126,28 +127,9 @@ pub async fn store_login(
 }
 
 fn run_login_helper(request: &[u8]) -> Result<Vec<u8>, AppStoreError> {
-    let mut child = Command::new(helper_path()?)
-        .arg("login")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            AppStoreError::NetworkError(format!("could not start App Store login helper: {error}"))
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(request).map_err(|error| {
-            AppStoreError::NetworkError(format!("send App Store login request: {error}"))
-        })?;
-    }
-    let output = child.wait_with_output().map_err(|error| {
-        AppStoreError::NetworkError(format!("App Store login helper failed: {error}"))
-    })?;
+    let output = run_helper_command("login", request)?;
     if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(AppStoreError::AuthenticationFailed(
-            error.trim().chars().take(512).collect(),
-        ));
+        return Err(AppStoreError::AuthenticationFailed(helper_error(&output)));
     }
     if output.stdout.len() > MAX_HELPER_OUTPUT {
         return Err(AppStoreError::NetworkError(
@@ -155,6 +137,77 @@ fn run_login_helper(request: &[u8]) -> Result<Vec<u8>, AppStoreError> {
         ));
     }
     Ok(output.stdout)
+}
+
+/// Run an App Store commerce `operation` (`purchase`, `list-versions` or
+/// `download`) through the bundled ipatool helper, which signs it with the
+/// Store AMD proof, kbsync and the session cookies saved at login.
+///
+/// The helper reports Apple-side failures inside the returned JSON object.
+///
+/// # Errors
+///
+/// Returns `NetworkError` if the helper cannot run or returns invalid JSON.
+pub async fn store_request(
+    operation: &'static str,
+    request: &Value,
+) -> Result<Value, AppStoreError> {
+    let request = serde_json::to_vec(request)
+        .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
+    let span = tracing::Span::current();
+    let output = tokio::task::spawn_blocking(move || {
+        span.in_scope(|| run_helper_command(operation, &request))
+    })
+    .await
+    .map_err(|error| {
+        AppStoreError::NetworkError(format!("App Store {operation} task failed: {error}"))
+    })??;
+    if !output.status.success() {
+        return Err(AppStoreError::NetworkError(format!(
+            "App Store {operation} helper failed: {}",
+            helper_error(&output)
+        )));
+    }
+    if output.stdout.len() > MAX_STORE_OUTPUT {
+        return Err(AppStoreError::NetworkError(format!(
+            "App Store {operation} helper output exceeds size limit"
+        )));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|error| {
+        AppStoreError::NetworkError(format!(
+            "App Store {operation} helper returned invalid JSON: {error}"
+        ))
+    })
+}
+
+fn run_helper_command(operation: &str, request: &[u8]) -> Result<Output, AppStoreError> {
+    let mut child = Command::new(helper_path()?)
+        .arg(operation)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            AppStoreError::NetworkError(format!(
+                "could not start App Store {operation} helper: {error}"
+            ))
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(request).map_err(|error| {
+            AppStoreError::NetworkError(format!("send App Store {operation} request: {error}"))
+        })?;
+    }
+    child.wait_with_output().map_err(|error| {
+        AppStoreError::NetworkError(format!("App Store {operation} helper failed: {error}"))
+    })
+}
+
+fn helper_error(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr)
+        .trim()
+        .chars()
+        .take(512)
+        .collect()
 }
 
 fn parse_store_login(output: &[u8]) -> Result<Account, AppStoreError> {

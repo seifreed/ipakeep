@@ -66,6 +66,27 @@ func (k *stateKeychain) Remove(key string) error {
 	return nil
 }
 
+// openStore builds an upstream App Store client over the shared anisette state
+// and the persistent Store cookie jar. The jar must survive between the
+// code-less login attempt that makes Apple push a 2FA code, the follow-up
+// attempt that submits it, and every later commerce request of the session.
+func openStore(statePath string) (appstore.AppStore, *cookiejar.Jar, error) {
+	jar, err := cookiejar.New(&cookiejar.Options{
+		Filename: filepath.Join(filepath.Dir(statePath), "store-cookies"),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("open Store cookie jar: %w", err)
+	}
+	system := operatingsystem.New()
+	store := appstore.NewAppStore(appstore.Args{
+		Keychain:        &stateKeychain{statePath: statePath, values: map[string][]byte{}},
+		CookieJar:       jar,
+		OperatingSystem: system,
+		Machine:         machine.New(machine.Args{OS: system}),
+	})
+	return store, jar, nil
+}
+
 func runLogin(statePath string, input io.Reader, output io.Writer) error {
 	var request loginRequest
 	if err := json.NewDecoder(io.LimitReader(input, maxLoginInputSize)).Decode(&request); err != nil {
@@ -75,21 +96,10 @@ func runLogin(statePath string, input io.Reader, output io.Writer) error {
 		return errors.New("login request requires email and password")
 	}
 
-	// The jar must survive between the code-less attempt that makes Apple push a
-	// 2FA code and the follow-up attempt that submits it.
-	jar, err := cookiejar.New(&cookiejar.Options{
-		Filename: filepath.Join(filepath.Dir(statePath), "store-cookies"),
-	})
+	store, jar, err := openStore(statePath)
 	if err != nil {
-		return fmt.Errorf("open Store cookie jar: %w", err)
+		return err
 	}
-	system := operatingsystem.New()
-	store := appstore.NewAppStore(appstore.Args{
-		Keychain:        &stateKeychain{statePath: statePath, values: map[string][]byte{}},
-		CookieJar:       jar,
-		OperatingSystem: system,
-		Machine:         machine.New(machine.Args{OS: system}),
-	})
 
 	result, err := store.Login(appstore.LoginInput{
 		Email:    request.Email,

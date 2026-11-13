@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/juju/persistent-cookiejar v1.0.0
 	github.com/majd/ipatool/v2 v2.8.1
+	howett.net/plist v1.0.1
 )
 
 require (
@@ -71,5 +72,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/errgo.v1 v1.0.1 // indirect
 	gopkg.in/retry.v1 v1.0.3 // indirect
-	howett.net/plist v1.0.1 // indirect
 )
