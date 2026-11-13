@@ -22,6 +22,7 @@ const KEYCHAIN_READ_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// Stores credentials as a generic password in the user's default
 /// macOS Keychain. The password payload is JSON-serialized `Account`.
+#[derive(Clone)]
 pub struct MacOSKeychain {
     service_name: String,
     account_name: String,

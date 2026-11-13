@@ -13,5 +13,6 @@ pub mod grandslam;
 pub mod http;
 pub mod ipa;
 pub mod keychain;
+pub mod mcp;
 pub mod observability;
 pub mod simulator;

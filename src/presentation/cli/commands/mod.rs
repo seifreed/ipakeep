@@ -5,6 +5,7 @@ pub mod decrypt;
 pub mod device;
 pub mod download;
 pub mod list_versions;
+pub mod mcp;
 pub mod purchase;
 pub mod purchases;
 pub mod search;

@@ -149,6 +149,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: DecryptCommands,
     },
+
+    /// Serve ipakeep's read/query and download tools over the Model Context
+    /// Protocol (MCP) using stdio, so an AI agent can drive it.
+    ///
+    /// Runs non-interactively; log in with `ipakeep auth login` beforehand.
+    /// Authentication tools are not exposed.
+    Mcp,
 }
 
 /// Physical-device commands.
