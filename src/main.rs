@@ -5,11 +5,14 @@ use ipakeep::domain::repository::CredentialRepository;
 use ipakeep::infrastructure::appstore::AppleAppStoreRepository;
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::keychain::FileKeychain;
+use ipakeep::infrastructure::observability;
 use ipakeep::presentation::cli::app::{
     AuthCommands, Cli, Commands, DecryptCommands, DeviceCommands, SimulatorCommands,
 };
 use ipakeep::presentation::cli::output::OutputFormat;
 use std::str::FromStr;
+use std::time::Instant;
+use tracing::Instrument;
 
 #[cfg(target_os = "macos")]
 use ipakeep::infrastructure::keychain::MacOSKeychain;
@@ -70,8 +73,44 @@ async fn main() {
 
 async fn run() -> Result<(), String> {
     let cli = Cli::parse();
-    init_logging(cli.verbose);
+    observability::init_logging(cli.verbose)?;
+    tracing::info!(
+        service = "ipakeep",
+        version = env!("CARGO_PKG_VERSION"),
+        event_name = "application.started",
+        "application started"
+    );
 
+    let operation = command_name(&cli.command);
+    let span = tracing::info_span!(
+        "cli.command",
+        service = "ipakeep",
+        environment = %observability::environment(),
+        operation,
+        outcome = tracing::field::Empty,
+        duration_ms = tracing::field::Empty,
+    );
+    let started = Instant::now();
+    tracing::info!(parent: &span, service = "ipakeep", operation, event_name = "command.started", "command started");
+    let result = run_command(cli).instrument(span.clone()).await;
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let outcome = if result.is_ok() { "success" } else { "failure" };
+    span.record("outcome", outcome);
+    span.record("duration_ms", duration_ms);
+    if result.is_ok() {
+        tracing::info!(parent: &span, service = "ipakeep", operation, event_name = "command.completed", outcome, duration_ms, "command completed");
+    } else {
+        tracing::error!(parent: &span, service = "ipakeep", operation, event_name = "command.failed", outcome, duration_ms, error_type = "command_error", "command failed; see stderr for details");
+    }
+    tracing::info!(
+        service = "ipakeep",
+        event_name = "application.stopped",
+        "application stopped"
+    );
+    result
+}
+
+async fn run_command(cli: Cli) -> Result<(), String> {
     let format = OutputFormat::from_str(&cli.format)?;
 
     let http_client =
@@ -352,17 +391,38 @@ async fn dispatch_auth(
     }
 }
 
-fn init_logging(verbose: bool) {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| default_log_filter(verbose).into()),
-        )
-        .init();
-}
-
-fn default_log_filter(verbose: bool) -> &'static str {
-    if verbose { "debug" } else { "warn" }
+fn command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Auth { action } => match action {
+            AuthCommands::Login { .. } => "auth.login",
+            AuthCommands::Info => "auth.info",
+            AuthCommands::Revoke => "auth.revoke",
+        },
+        Commands::Search { .. } => "search",
+        Commands::Purchase { .. } => "purchase",
+        Commands::Download { .. } => "download",
+        Commands::ListVersions { .. } => "list_versions",
+        Commands::Simulator { action } => match action {
+            SimulatorCommands::Prepare { .. } => "simulator.prepare",
+            SimulatorCommands::Run { .. } => "simulator.run",
+            SimulatorCommands::InstallIpa { .. } => "simulator.install_ipa",
+            SimulatorCommands::UnlockRuntime { .. } => "simulator.unlock_runtime",
+        },
+        Commands::Device { action } => match action {
+            DeviceCommands::InstallIpa { .. } => "device.install_ipa",
+        },
+        Commands::Decrypt { action } => match action {
+            DecryptCommands::Inspect { .. } => "decrypt.inspect",
+            DecryptCommands::Patch { .. } => "decrypt.patch",
+            DecryptCommands::Resign { .. } => "decrypt.resign",
+            DecryptCommands::Verify { .. } => "decrypt.verify",
+            DecryptCommands::Entitlements { .. } => "decrypt.entitlements",
+            DecryptCommands::SetMinOs { .. } => "decrypt.set_min_os",
+            DecryptCommands::Dump { .. } => "decrypt.dump",
+            DecryptCommands::DumpMac { .. } => "decrypt.dump_mac",
+            DecryptCommands::Provision { .. } => "decrypt.provision",
+        },
+    }
 }
 
 fn use_grandslam(cli: &Cli) -> bool {
@@ -374,9 +434,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verbose_switches_default_log_filter_to_debug() {
-        assert_eq!(default_log_filter(false), "warn");
-        assert_eq!(default_log_filter(true), "debug");
+    fn command_names_are_stable_and_do_not_include_user_arguments() {
+        let command =
+            Cli::try_parse_from(["ipakeep", "search", "secret query"]).expect("CLI options");
+        assert_eq!(command_name(&command.command), "search");
     }
 
     #[cfg(ipakeep_modern_adi)]

@@ -38,7 +38,7 @@ thiserror = "2"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # IPA manipulation — Apple IPAs only use Stored/Deflated; disabling the other
 # codecs (bzip2, lzma, zstd, xz, ppmd, aes-crypto) trims the transitive surface.

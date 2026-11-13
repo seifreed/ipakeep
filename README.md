@@ -50,7 +50,7 @@
 ```text
 Account / results   Text tables, JSON
 IPA artifacts       Patched .ipa (sinf + iTunesMetadata injected)
-Logging             tracing (set --verbose for debug detail)
+Logging             tracing to stderr (JSON via IPAKEEP_LOG_FORMAT=json)
 ```
 
 ---

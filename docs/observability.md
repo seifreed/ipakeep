@@ -107,4 +107,22 @@ untrusted input. Keep stdout exclusively for command results.
 
 ## Progress
 
-This section is updated with each implementation milestone and the final score.
+### Milestone 1 — centralized CLI logging
+
+The binary now uses `infrastructure::observability` for a single subscriber.
+It supports text or JSON stderr output (`IPAKEEP_LOG_FORMAT`), `RUST_LOG`
+filter directives, `--verbose` as the default-level override, and a sanitized
+`IPAKEEP_ENV` span field. Each command has a named root span and records
+start/completion, outcome, and elapsed milliseconds; command errors are
+recorded without copying arbitrary error strings into logs. JSON logs stay on
+stderr, separate from command JSON on stdout.
+
+Validation at this milestone: 268 tests pass, 1 ignored; `cargo check`,
+`cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check` pass.
+The initial score remains 4.4/10 until coverage and architecture work is
+complete.
+
+Remaining work: move instrumentation out of domain use cases; observe outbound
+HTTP, storage, filesystem, and subprocess boundaries; test structured output,
+secret handling, and concurrent events; finish the operator documentation and
+rescore.
