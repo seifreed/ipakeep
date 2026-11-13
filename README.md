@@ -184,8 +184,8 @@ ipakeep decrypt inspect MyApp.ipa
 # encrypted) bundle is pulled from the device, so versions always match.
 ipakeep decrypt dump com.example.MyApp --spawn
 
-# Event-driven extensions (notification services, widgets) often cannot be
-# launched for a dump; drop them instead of failing.
+# App extensions are started automatically; if iOS refuses one, drop it
+# instead of failing.
 ipakeep decrypt dump com.example.MyApp --spawn --drop-undumped-extensions
 
 # Validate that every Mach-O slice is structurally decrypted.
@@ -208,9 +208,12 @@ build. Omitting `--ipa` avoids the problem: ipakeep copies the installed bundle
 off the device through Frida's system session (no SSH needed) and patches that.
 
 Tested end to end on a jailbroken iPhone 8 (iOS 16.7.16, Dopamine, Frida 17):
-the main executable and all embedded frameworks were dumped and verified with
-`cryptid 0`; the app's notification-service extension could not be launched
-on demand and was removed with `--drop-undumped-extensions`.
+the main executable, all embedded frameworks and the notification-service
+extension were dumped and verified with `cryptid 0`. App extensions are started
+through `NSExtension` from SpringBoard while spawn gating is active, so
+event-driven extensions are dumped too; `--drop-undumped-extensions` remains a
+fallback for any extension iOS still refuses to start. The device must be
+unlocked so iOS can launch the app.
 
 A normal, non-jailbroken iPhone can install a properly re-signed **decrypted**
 IPA, but pairing it or enabling Developer Mode does not grant access to an
