@@ -11,8 +11,10 @@ pub mod purchases;
 pub mod search;
 pub mod simulator;
 
+use crate::domain::entity::DownloadItem;
 use crate::domain::repository::AppStoreRepository;
 use crate::domain::usecase::ResolveApp;
+use crate::infrastructure::ipa::prepare_download;
 use std::path::Path;
 use std::time::Instant;
 
@@ -54,6 +56,21 @@ fn save_artifact(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+async fn download_item_to_path<R: AppStoreRepository>(
+    app_store: &R,
+    item: &DownloadItem,
+    path: &Path,
+) -> Result<usize, String> {
+    let bytes = app_store
+        .download_bytes(&item.url)
+        .await
+        .map_err(|error| format!("download failed: {error}"))?;
+    let prepared = prepare_download(item, &bytes)?;
+    let size = prepared.len();
+    save_artifact(path, &prepared)?;
+    Ok(size)
 }
 
 /// Resolve a user-supplied app reference into a numeric App Store id.

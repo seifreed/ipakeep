@@ -11,7 +11,6 @@ use crate::domain::entity::{
 };
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthInfo, Download, ListVersions, Purchases, Search};
-use crate::infrastructure::ipa::prepare_download;
 use crate::infrastructure::mcp::{
     CallToolResult, Implementation, ToolDefinition, ToolInvoker, serve,
 };
@@ -162,17 +161,11 @@ where
 
         let mut files = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
-            let bytes = self
-                .app_store
-                .download_bytes(&item.url)
-                .await
-                .map_err(|error| format!("download failed: {error}"))?;
-            let patched = prepare_download(item, &bytes)?;
             let path = directory.join(ipa_filename(&item.metadata, app_id, index));
-            super::save_artifact(&path, &patched)?;
+            let size = super::download_item_to_path(&self.app_store, item, &path).await?;
             files.push(SavedFile {
                 path: path.to_string_lossy().into_owned(),
-                size: patched.len(),
+                size,
             });
         }
 
