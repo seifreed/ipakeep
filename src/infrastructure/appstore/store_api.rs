@@ -72,7 +72,13 @@ impl AppleAppStoreRepository {
         };
 
         let pod_url = format!("https://p{pod}-buy.itunes.apple.com{path}{query}");
-        tracing::debug!(%pod, "retrying store request on pod-specific host");
+        tracing::debug!(
+            component = "appstore",
+            operation = "store_request",
+            event_name = "appstore.request.retry",
+            outcome = "retrying",
+            "retrying store request on pod-specific host"
+        );
         self.client
             .post_plist(&pod_url, plist_body, Some(headers))
             .await

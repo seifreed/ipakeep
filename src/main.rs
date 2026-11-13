@@ -74,6 +74,7 @@ async fn main() {
 async fn run() -> Result<(), String> {
     let cli = Cli::parse();
     observability::init_logging(cli.verbose)?;
+    observability::install_panic_hook();
     tracing::info!(
         service = "ipakeep",
         version = env!("CARGO_PKG_VERSION"),

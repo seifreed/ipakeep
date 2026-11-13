@@ -93,6 +93,16 @@ async fn authenticate_with_attempt(
 
         if response.status.is_server_error() {
             if attempt < MAX_RETRIES - 1 {
+                tracing::warn!(
+                    component = "authentication",
+                    operation = "apple_login",
+                    event_name = "auth.retry.scheduled",
+                    attempt = attempt + 1,
+                    max_attempts = MAX_RETRIES,
+                    reason = "server_error",
+                    retry_after_ms = RETRY_DELAY_MS,
+                    "retrying Apple authentication"
+                );
                 tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                 continue;
             }
@@ -104,6 +114,16 @@ async fn authenticate_with_attempt(
 
         if response.status == reqwest::StatusCode::NO_CONTENT && response.body.is_null() {
             if attempt < MAX_RETRIES - 1 {
+                tracing::warn!(
+                    component = "authentication",
+                    operation = "apple_login",
+                    event_name = "auth.retry.scheduled",
+                    attempt = attempt + 1,
+                    max_attempts = MAX_RETRIES,
+                    reason = "no_auth_data",
+                    retry_after_ms = RETRY_DELAY_MS,
+                    "retrying Apple authentication"
+                );
                 tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                 continue;
             }

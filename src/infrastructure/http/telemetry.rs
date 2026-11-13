@@ -36,7 +36,9 @@ pub(crate) async fn send_with_observability(
             } else {
                 "http_error"
             };
-            if response.status().is_success() {
+            let expected_client_error =
+                response.status().is_client_error() && !matches!(status, 408 | 429);
+            if response.status().is_success() || expected_client_error {
                 tracing::debug!(
                     service = "ipakeep",
                     component = "http",

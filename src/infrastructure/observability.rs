@@ -1,6 +1,8 @@
 //! Process-level tracing setup for the CLI binary.
 
+use std::any::Any;
 use std::io;
+use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ENVIRONMENT: &str = "unspecified";
@@ -81,6 +83,39 @@ pub fn init_logging(verbose: bool) -> Result<(), String> {
     result.map_err(|_| "could not install the global logging subscriber".into())
 }
 
+/// Install a panic hook that records crash location without panic payload data.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let (source_file, line) = match info.location() {
+            Some(location) => (
+                Path::new(location.file())
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                location.line(),
+            ),
+            None => ("unknown".into(), 0),
+        };
+        tracing::error!(
+            component = "runtime",
+            event_name = "application.panic",
+            source_file,
+            line,
+            panic_payload_type = panic_payload_type(info.payload()),
+            "application panicked"
+        );
+    }));
+}
+
+fn panic_payload_type(payload: &(dyn Any + Send)) -> &'static str {
+    if payload.is::<String>() || payload.is::<&str>() {
+        "string"
+    } else {
+        "non_string"
+    }
+}
+
 /// Return a sanitized deployment environment label for structured spans.
 #[must_use]
 pub fn environment() -> String {
@@ -110,7 +145,7 @@ fn sanitize_environment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogFormat, LoggingConfig, sanitize_environment};
+    use super::{LogFormat, LoggingConfig, panic_payload_type, sanitize_environment};
 
     #[test]
     fn defaults_to_info_text_and_honors_verbose() {
@@ -146,5 +181,11 @@ mod tests {
     fn environment_label_is_safe_and_bounded() {
         assert_eq!(sanitize_environment("prod\n\u{1b}[31m!"), "prod31m");
         assert_eq!(sanitize_environment(&"a".repeat(100)).len(), 64);
+    }
+
+    #[test]
+    fn panic_payload_classification_never_returns_payload_content() {
+        let payload = String::from("credential-secret");
+        assert_eq!(panic_payload_type(&payload), "string");
     }
 }

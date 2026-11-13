@@ -190,3 +190,11 @@ reach callers. HTTP status and decoder errors remain available, but arbitrary
 response bodies and GrandSlam server text are no longer copied into diagnostic
 errors. Tests verify signed query values and response body sentinels stay out of
 logs and error text.
+
+### Milestone 9 — retries and panic boundary
+
+Apple login retries and App Store pod retries emit safe retry events with
+attempt count, reason, and configured delay. Ordinary 4xx responses log at
+DEBUG; 408, 429, and server errors remain WARN. The CLI panic hook emits a
+CRITICAL-equivalent `ERROR` event with source basename and line, never the panic
+payload.
