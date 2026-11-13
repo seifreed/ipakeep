@@ -6,6 +6,7 @@
 //! declares the tool set, validates arguments, runs the use case, and maps the
 //! result (or failure) to MCP content.
 
+use super::mcp_tools::tool_definitions;
 use crate::domain::entity::{
     Account, App, AppVersion, DownloadMetadata, OwnedApp, metadata_string,
 };
@@ -212,118 +213,6 @@ where
             apps,
         })
     }
-}
-
-/// Declare the MCP tool set and its JSON Schemas.
-///
-/// Kept as a free function so the schema shape can be asserted in tests without
-/// constructing a handler or any repositories.
-fn tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        ToolDefinition {
-            name: "search".to_string(),
-            description: "Search for apps on the App Store.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "term": {"type": "string", "description": "Search term."},
-                    "country": {
-                        "type": "string",
-                        "description": "ISO 3166-1 alpha-2 country code; defaults to 'us'."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Maximum number of results; defaults to 5."
-                    }
-                },
-                "required": ["term"]
-            }),
-        },
-        ToolDefinition {
-            name: "list_versions".to_string(),
-            description: "List available version identifiers for an app. Requires login."
-                .to_string(),
-            input_schema: app_reference_schema(),
-        },
-        ToolDefinition {
-            name: "auth_info".to_string(),
-            description: "Show the stored account (never exposes tokens or passwords).".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        },
-        ToolDefinition {
-            name: "download".to_string(),
-            description: "Download an app's IPA to the server's filesystem. Requires login."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "app": {
-                        "type": "string",
-                        "description": "App Store id, bundle identifier, or app name."
-                    },
-                    "country": {
-                        "type": "string",
-                        "description": "ISO 3166-1 alpha-2 country code; defaults to 'us'."
-                    },
-                    "external_version_id": {
-                        "type": "string",
-                        "description": "Specific external version id; defaults to the latest."
-                    },
-                    "output": {
-                        "type": "string",
-                        "description": "Output directory for the IPA(s); defaults to '.'."
-                    },
-                    "no_purchase": {
-                        "type": "boolean",
-                        "description": "Skip acquiring the free license automatically."
-                    }
-                },
-                "required": ["app"]
-            }),
-        },
-        ToolDefinition {
-            name: "purchases".to_string(),
-            description: "List apps owned by the authenticated account. Requires login."
-                .to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "page": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Page number starting at 1; defaults to 1."
-                    },
-                    "max_results": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Apps per page; defaults to the server default."
-                    },
-                    "platform": {
-                        "type": "string",
-                        "description": "Optional platform filter; defaults to all platforms."
-                    }
-                }
-            }),
-        },
-    ]
-}
-
-fn app_reference_schema() -> Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            "app": {
-                "type": "string",
-                "description": "App Store id, bundle identifier, or app name."
-            },
-            "country": {
-                "type": "string",
-                "description": "ISO 3166-1 alpha-2 country code; defaults to 'us'."
-            }
-        },
-        "required": ["app"]
-    })
 }
 
 fn parse_args<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T, String> {

@@ -6,6 +6,7 @@ pub mod device;
 pub mod download;
 pub mod list_versions;
 pub mod mcp;
+mod mcp_tools;
 pub mod purchase;
 pub mod purchases;
 pub mod search;
