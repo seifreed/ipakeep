@@ -221,6 +221,12 @@ async fn dispatch_command(
             )
             .await
         }
+        Commands::Purchases { limit } => {
+            ipakeep::presentation::cli::commands::purchases::handle_purchases(
+                limit, app_store, keychain, format,
+            )
+            .await
+        }
         Commands::Simulator { action } => dispatch_simulator(action),
         Commands::Device { action } => dispatch_device(action),
         Commands::Decrypt { action } => dispatch_decrypt(action, format, keychain).await,
@@ -419,6 +425,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Purchase { .. } => "purchase",
         Commands::Download { .. } => "download",
         Commands::ListVersions { .. } => "list_versions",
+        Commands::Purchases { .. } => "purchases",
         Commands::Simulator { action } => match action {
             SimulatorCommands::Prepare { .. } => "simulator.prepare",
             SimulatorCommands::Run { .. } => "simulator.run",

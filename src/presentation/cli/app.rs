@@ -122,6 +122,13 @@ pub enum Commands {
         country: String,
     },
 
+    /// List apps owned by the authenticated App Store account.
+    Purchases {
+        /// Maximum number of owned apps to return (most recent purchase first).
+        #[arg(short, long, default_value = "10", value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+    },
+
     /// Prepare and run extracted apps on iOS Simulator.
     Simulator {
         /// The simulator subcommand.

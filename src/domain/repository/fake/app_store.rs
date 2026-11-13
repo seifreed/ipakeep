@@ -4,7 +4,7 @@
 
 mod repository;
 
-use crate::domain::entity::{Account, App, AppVersion, DownloadItem, TrustedPhoneNumber};
+use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -28,6 +28,7 @@ struct FakeAppStoreRepositoryInner {
     download_result: Option<Result<Vec<DownloadItem>, AppStoreError>>,
     download_bytes_result: Option<Result<Vec<u8>, AppStoreError>>,
     list_versions_result: Option<Result<Vec<AppVersion>, AppStoreError>>,
+    list_purchases_result: Option<Result<Vec<OwnedApp>, AppStoreError>>,
 
     authenticate_calls: Vec<(String, String, String)>,
     authenticate_with_2fa_calls: Vec<(String, String, String, String)>,
@@ -43,6 +44,7 @@ struct FakeAppStoreRepositoryInner {
     download_calls: Vec<(Account, i64, String, Option<String>)>,
     download_bytes_calls: Vec<String>,
     list_versions_calls: Vec<(Account, i64, String)>,
+    list_purchases_calls: Vec<(Account, u32)>,
 }
 
 impl FakeAppStoreRepository {
@@ -141,6 +143,11 @@ impl FakeAppStoreRepository {
         self.with_inner(|inner| inner.list_versions_result = Some(result))
     }
 
+    /// Preconfigure the result of `list_purchases`.
+    pub fn with_list_purchases_result(&self, result: Result<Vec<OwnedApp>, AppStoreError>) -> Self {
+        self.with_inner(|inner| inner.list_purchases_result = Some(result))
+    }
+
     /// Return the recorded calls to `authenticate`.
     pub fn authenticate_calls(&self) -> Vec<(String, String, String)> {
         self.lock_inner().authenticate_calls.clone()
@@ -206,6 +213,11 @@ impl FakeAppStoreRepository {
     /// Return the recorded calls to `list_versions`.
     pub fn list_versions_calls(&self) -> Vec<(Account, i64, String)> {
         self.lock_inner().list_versions_calls.clone()
+    }
+
+    /// Return the recorded calls to `list_purchases`.
+    pub fn list_purchases_calls(&self) -> Vec<(Account, u32)> {
+        self.lock_inner().list_purchases_calls.clone()
     }
 }
 
@@ -277,7 +289,15 @@ mod tests {
             .with_purchase_result(Ok(()))
             .with_download_result(Ok(vec![item.clone()]))
             .with_download_bytes_result(Ok(vec![1, 2, 3]))
-            .with_list_versions_result(Ok(vec![version.clone()]));
+            .with_list_versions_result(Ok(vec![version.clone()]))
+            .with_list_purchases_result(Ok(vec![OwnedApp {
+                id: app.id,
+                bundle_id: app.bundle_id.clone(),
+                name: app.name.clone(),
+                version: app.version.clone(),
+                platforms: vec!["iphone".into()],
+                purchase_date: Some("2021-01-01T00:00:00Z".into()),
+            }]));
 
         (repo, account, app, item, version, phone)
     }
@@ -344,6 +364,10 @@ mod tests {
             repo.list_versions(&account, 42, "guid").await.unwrap()[0].external_version_id,
             version.external_version_id
         );
+        assert_eq!(
+            repo.list_purchases(&account, 10).await.unwrap()[0].id,
+            app.id
+        );
     }
 
     #[tokio::test]
@@ -372,6 +396,7 @@ mod tests {
             .await;
         let _ = repo.download_bytes("https://example.invalid/app.ipa").await;
         let _ = repo.list_versions(&account, 42, "guid").await;
+        let _ = repo.list_purchases(&account, 10).await;
 
         assert_eq!(repo.authenticate_calls().len(), 1);
         assert_eq!(repo.authenticate_with_2fa_calls().len(), 1);
@@ -385,6 +410,7 @@ mod tests {
         assert_eq!(repo.download_calls().len(), 1);
         assert_eq!(repo.download_bytes_calls().len(), 1);
         assert_eq!(repo.list_versions_calls().len(), 1);
+        assert_eq!(repo.list_purchases_calls().len(), 1);
         let inner = repo.lock_inner();
         assert_eq!(inner.request_trusted_device_notification_calls.len(), 1);
         assert_eq!(inner.request_sms_calls.len(), 1);

@@ -8,7 +8,7 @@ mod parsing;
 mod signed_commerce;
 mod transport;
 
-use crate::domain::entity::{Account, App, AppVersion, DownloadItem, TrustedPhoneNumber};
+use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::AppStoreRepository;
 use crate::infrastructure::appstore::config::AppleApiConfig;
@@ -274,6 +274,21 @@ impl AppStoreRepository for AppleAppStoreRepository {
             return signed_commerce::list_versions(account, app_id).await;
         }
         commerce::list_versions(self, account, app_id, guid).await
+    }
+
+    async fn list_purchases(
+        &self,
+        account: &Account,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login {
+            return signed_commerce::owned_apps(account, limit).await;
+        }
+        let _ = (account, limit);
+        Err(AppStoreError::Unexpected(
+            "listing purchases requires the signed App Store login available on modern macOS builds; this build cannot query owned apps".into(),
+        ))
     }
 }
 

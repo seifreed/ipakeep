@@ -6,7 +6,7 @@
 //! packages on disk and reports them with their path as the item URL.
 
 use super::parsing::parse_download_item;
-use crate::domain::entity::{Account, AppVersion, DownloadItem};
+use crate::domain::entity::{Account, AppVersion, DownloadItem, OwnedApp};
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::grandslam::store_request;
 use serde_json::{Value, json};
@@ -40,6 +40,15 @@ pub(super) async fn download(
     Ok(vec![staged_item(&response)?])
 }
 
+pub(super) async fn owned_apps(
+    account: &Account,
+    limit: u32,
+) -> Result<Vec<OwnedApp>, AppStoreError> {
+    let response = store_request("owned-apps", &owned_apps_request(account, limit)).await?;
+    check_failure(&response, 0, AppStoreError::Unexpected)?;
+    Ok(parse_owned_apps(&response))
+}
+
 /// Read and discard a package the helper staged, or `None` when `url` does
 /// not name one.
 pub(super) fn take_staged_package(url: &str) -> Option<Result<Vec<u8>, AppStoreError>> {
@@ -70,18 +79,29 @@ fn staged_package_directory(staging: &Path, package: &Path) -> Option<PathBuf> {
     (directory.parent()? == staging).then(|| directory.to_path_buf())
 }
 
+fn account_json(account: &Account) -> Value {
+    json!({
+        "email": account.email,
+        "name": account.name,
+        "passwordToken": account.password_token,
+        "directoryServicesIdentifier": account.directory_services_id,
+        "storeFront": account.store_front,
+        "pod": account.pod,
+    })
+}
+
 fn request(account: &Account, app_id: i64, version_id: Option<&str>) -> Value {
     json!({
-        "account": {
-            "email": account.email,
-            "name": account.name,
-            "passwordToken": account.password_token,
-            "directoryServicesIdentifier": account.directory_services_id,
-            "storeFront": account.store_front,
-            "pod": account.pod,
-        },
+        "account": account_json(account),
         "appId": app_id,
         "externalVersionId": version_id.unwrap_or_default(),
+    })
+}
+
+fn owned_apps_request(account: &Account, limit: u32) -> Value {
+    json!({
+        "account": account_json(account),
+        "limit": limit,
     })
 }
 
@@ -125,6 +145,56 @@ fn parse_versions(response: &Value) -> Vec<AppVersion> {
             version_string: version_string.to_string(),
         })
         .collect()
+}
+
+/// Parse the owned-apps listing the helper returns, mapping each `apps` entry
+/// to an [`OwnedApp`]. Entries without a numeric `trackId` are skipped so a
+/// single malformed row never drops the whole listing.
+fn parse_owned_apps(response: &Value) -> Vec<OwnedApp> {
+    response
+        .get("apps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(parse_owned_app)
+        .collect()
+}
+
+fn parse_owned_app(item: &Value) -> Option<OwnedApp> {
+    Some(OwnedApp {
+        id: item.get("trackId").and_then(Value::as_i64)?,
+        bundle_id: item
+            .get("bundleId")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        name: item
+            .get("trackName")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        version: item
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        platforms: item
+            .get("platforms")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        purchase_date: item
+            .get("purchaseDate")
+            .and_then(Value::as_str)
+            .filter(|date| !date.is_empty())
+            .map(str::to_string),
+    })
 }
 
 fn staged_item(response: &Value) -> Result<DownloadItem, AppStoreError> {
@@ -172,6 +242,54 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].external_version_id, "894490049");
         assert_eq!(versions[1].version_string, "1.377");
+    }
+
+    #[test]
+    fn parses_owned_apps_from_the_helper_listing() {
+        let apps = parse_owned_apps(&json!({
+            "totalCount": 2,
+            "apps": [
+                {
+                    "trackId": 894_490_049_i64,
+                    "bundleId": "com.example.ludostar",
+                    "trackName": "Ludo Star",
+                    "version": "1.376",
+                    "platforms": ["iphone", "ipad"],
+                    "purchaseDate": "2021-01-01T00:00:00Z",
+                },
+                {
+                    "trackId": 1_234_i64,
+                    "bundleId": "com.example.other",
+                    "trackName": "Other",
+                    "version": "2.0",
+                },
+            ],
+        }));
+
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].id, 894_490_049);
+        assert_eq!(apps[0].bundle_id, "com.example.ludostar");
+        assert_eq!(apps[0].platforms, vec!["iphone", "ipad"]);
+        assert_eq!(
+            apps[0].purchase_date.as_deref(),
+            Some("2021-01-01T00:00:00Z")
+        );
+        assert!(apps[1].platforms.is_empty());
+        assert!(apps[1].purchase_date.is_none());
+    }
+
+    #[test]
+    fn skips_owned_apps_without_a_track_id() {
+        let apps = parse_owned_apps(&json!({
+            "apps": [
+                {"bundleId": "com.example.missingid"},
+                {"trackId": 7_i64, "bundleId": "com.example.kept"},
+            ],
+        }));
+
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].id, 7);
+        assert!(parse_owned_apps(&json!({})).is_empty());
     }
 
     #[test]

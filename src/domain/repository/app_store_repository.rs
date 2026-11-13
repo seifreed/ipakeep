@@ -1,6 +1,6 @@
 //! App Store repository trait — the port for all Apple App Store operations.
 
-use crate::domain::entity::{Account, App, AppVersion, DownloadItem, TrustedPhoneNumber};
+use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
 
 /// Repository trait for Apple App Store operations.
@@ -134,4 +134,18 @@ pub trait AppStoreRepository: Send + Sync {
         app_id: i64,
         guid: &str,
     ) -> Result<Vec<AppVersion>, AppStoreError>;
+
+    /// List the apps the authenticated account already owns (purchase history).
+    ///
+    /// `limit` caps the number of apps returned, most recent purchase first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppStoreError::AuthenticationFailed` if the session token has
+    /// expired, or another `AppStoreError` if the request fails.
+    async fn list_purchases(
+        &self,
+        account: &Account,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError>;
 }
