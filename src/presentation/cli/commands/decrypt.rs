@@ -4,7 +4,7 @@ use crate::domain::repository::CredentialRepository;
 use crate::infrastructure::decrypt::{
     DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport,
     VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
-    set_min_os, verify_ipa,
+    run_offline, set_min_os, verify_ipa,
 };
 use crate::infrastructure::developer::{self, ProvisionRequest};
 use crate::presentation::cli::output::OutputFormat;
@@ -170,6 +170,24 @@ pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
     let out = args
         .output
         .map_or_else(|| dump_output(args.ipa, args.bundle_id), Path::to_path_buf);
+    std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+    println!("Wrote decrypted IPA: {}", out.display());
+    Ok(())
+}
+
+/// Decrypt a local encrypted IPA offline with `ipadecrypt`, then verify it.
+///
+/// # Errors
+///
+/// Returns an error if `ipadecrypt` is missing or not bootstrapped, decryption
+/// fails, the result does not verify, or the output cannot be written.
+pub fn handle_offline(
+    ipa: &Path,
+    output: Option<&Path>,
+    allow_on_device: bool,
+) -> Result<(), String> {
+    let bytes = run_offline(ipa, allow_on_device)?;
+    let out = output.map_or_else(|| default_output(ipa), Path::to_path_buf);
     std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("Wrote decrypted IPA: {}", out.display());
     Ok(())

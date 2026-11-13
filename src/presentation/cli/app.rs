@@ -282,6 +282,21 @@ pub enum DecryptCommands {
         drop_undumped_extensions: bool,
     },
 
+    /// Decrypt a local encrypted IPA on this computer with `ipadecrypt`
+    /// (no running app needed; run `ipadecrypt bootstrap` once first).
+    Offline {
+        /// Path to the encrypted IPA.
+        ipa: PathBuf,
+
+        /// Output IPA path (default: `<ipa-stem>-decrypted.ipa`).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Never let ipadecrypt fall back to decrypting on its jailbroken device.
+        #[arg(long)]
+        no_on_device: bool,
+    },
+
     /// Dump an iOS app on this Apple Silicon Mac (no jailbreak; needs SIP disabled).
     DumpMac {
         /// Mac bundle id of the iOS-on-Mac app.

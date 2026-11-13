@@ -295,6 +295,11 @@ async fn dispatch_decrypt(
             output: output.as_deref(),
             drop_undumped_extensions,
         }),
+        DecryptCommands::Offline {
+            ipa,
+            output,
+            no_on_device,
+        } => decrypt::handle_offline(&ipa, output.as_deref(), !no_on_device),
         DecryptCommands::DumpMac {
             bundle_id,
             ipa,
@@ -425,6 +430,7 @@ fn command_name(command: &Commands) -> &'static str {
             DecryptCommands::Entitlements { .. } => "decrypt.entitlements",
             DecryptCommands::SetMinOs { .. } => "decrypt.set_min_os",
             DecryptCommands::Dump { .. } => "decrypt.dump",
+            DecryptCommands::Offline { .. } => "decrypt.offline",
             DecryptCommands::DumpMac { .. } => "decrypt.dump_mac",
             DecryptCommands::Provision { .. } => "decrypt.provision",
         },

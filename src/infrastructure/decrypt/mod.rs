@@ -1,7 +1,8 @@
 //! `FairPlay` decrypt bridge — inspect, patch, and re-sign.
 //!
 //! ipakeep never decrypts on its own: an external on-device dumper (see
-//! `scripts/frida/`) produces the plaintext bytes per slice. This module reports
+//! `scripts/frida/`) produces the plaintext bytes per slice, or `ipadecrypt`
+//! decrypts a local IPA offline ([`run_offline`]). This module reports
 //! exactly what is encrypted and where ([`inspect_ipa`]), patches dumped bytes
 //! back into the archive while zeroing `cryptid` ([`patch_ipa_decrypted`]), and
 //! re-signs a bundle preserving its entitlements ([`resign_app`]).
@@ -10,9 +11,11 @@ pub mod dump;
 mod entitlements;
 mod ios;
 mod macho;
+mod offline;
 
 pub use dump::{DumpDevice, DumpRequest, Dumper, run_dump};
 pub use entitlements::{EntitlementRisk, EntitlementVerdict};
+pub use offline::run_offline;
 
 use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
