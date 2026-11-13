@@ -30,20 +30,20 @@
 > **ipakeep does not decrypt a downloaded IPA by itself.** A downloaded IPA is
 > still FairPlay-encrypted. Decryption needs either the app running on a real
 > device that you can attach Frida to (ipakeep drives that dump and patches the
-> result), or the external [ipadecrypt](https://github.com/londek/ipadecrypt)
-> tool, which `decrypt offline` drives on the computer after its one-time
-> per-account `ipadecrypt bootstrap`.
+> result), or `decrypt offline`, which decrypts the IPA on the computer
+> natively — no app run, no external tool — given a one-time 16-byte
+> per-account FairPlay credential minted once from a jailbroken device.
 
 ### Workflow: Who Does What
 
 | Stage | What happens | Needs |
 |-------|--------------|-------|
 | **1. Download & patch** | `auth login`, license (`purchase` / automatic), `download`. The IPA is what Apple serves, plus `sinf` blobs and `iTunesMetadata.plist`. **Still FairPlay-encrypted.** | An Apple ID; any OS |
-| **2. Decrypt** | The app runs on a device, iOS decrypts its code in memory, and a dumper reads it. ipakeep orchestrates `decrypt dump` (builtin Frida dumper, or `--dumper frida-ios-dump`, `bagbak`, `r2flutch`) or `decrypt dump-mac`, or decrypts offline with `decrypt offline` (drives ipadecrypt), patches the plaintext back (`decrypt patch`), and checks it (`decrypt verify`) | See below |
+| **2. Decrypt** | The app runs on a device, iOS decrypts its code in memory, and a dumper reads it. ipakeep orchestrates `decrypt dump` (builtin Frida dumper, or `--dumper frida-ios-dump`, `bagbak`, `r2flutch`) or `decrypt dump-mac`, or decrypts offline with `decrypt offline` (native, no app run, needs a per-account credential), patches the plaintext back (`decrypt patch`), and checks it (`decrypt verify`) | See below |
 | **3. Install / run decrypted** | Physical non-jailbroken device: `device install-ipa` re-signs with your development profile. Simulator: `simulator install-ipa` / `simulator run --inject-dylib` | Signing identity + profile (device), or Apple Silicon Mac (Simulator) |
 
 Stage 2 requirements for the on-device dumpers (`decrypt offline` instead needs
-ipadecrypt and a credential minted once from a jailbroken device):
+only a 16-byte per-account credential minted once from a jailbroken device):
 
 - A **jailbroken device** (or another route that gives `frida-server` access to the
   app's memory, such as TrollStore). A stock, non-jailbroken iPhone cannot be
@@ -61,22 +61,22 @@ ipadecrypt and a credential minted once from a jailbroken device):
   code from a *running* app, so it needs the app to launch on the device; an
   older App Store version (`list-versions`, `download --external-version-id`)
   is the simplest workaround when one exists. Otherwise use `decrypt offline`:
-  it hands the encrypted IPA to [ipadecrypt](https://github.com/londek/ipadecrypt),
-  which decrypts it on the computer without running the app, so the app's
-  minimum iOS does not matter. That needs ipadecrypt installed and
-  `ipadecrypt bootstrap` run once for the Apple ID that owns the app (it signs
-  in to the App Store and mints a credential from a jailbroken device). Only
-  license formats ipadecrypt supports decrypt offline, and fat binaries are
-  thinned to one slice. `decrypt set-min-os` lowers the declared minimum, but it
-  does not backport APIs, so the app may still crash at launch.
+  it decrypts the encrypted IPA natively on the computer without running the
+  app, so the app's minimum iOS does not matter. That needs a 16-byte
+  per-account FairPlay credential minted once from a jailbroken device (see
+  [Offline decryption](#offline-decryption)); supported license formats are
+  the standard SINF + SUPF/SUPP page-key files, and fat binaries are thinned to
+  one slice. `decrypt set-min-os` lowers the declared minimum, but it does not
+  backport APIs, so the app may still crash at launch.
 - **Which decrypt path.** `decrypt dump` reads any app installed on the device,
   regardless of which Apple ID bought it, but needs the app to launch.
-  `decrypt offline` never launches the app but its ipadecrypt credential is
+  `decrypt offline` never launches the app but its credential is
   **per Apple account**: it only decrypts apps owned by the account you minted
   with. So for an app bought on a *different* account, use `decrypt dump` on a
-  device where it is installed. The newest iOS 26 license formats
-  (`.v4.supp`/`.v5.supf`) do not decrypt offline yet and fall back to the
-  on-device path.
+  device where it is installed. The native decryptor handles the SUPF (f-class,
+  `.supf`/`.v5.supf`) and SUPP (p-class, `.supp`/`.v4.supp`) page-key formats;
+  a page-key generation it does not recognize errors out and you fall back to
+  the on-device path.
 - **No-jailbreak decryption.** On iOS, decryption always needs a jailbreak (the
   kernel read/write `decrypt dump` and `mremap_encrypted`-style static tools
   rely on). The only no-jailbreak route is an older Apple Silicon Mac
@@ -104,7 +104,7 @@ ipadecrypt and a credential minted once from a jailbroken device):
 | **Purchase** | Acquire a free-app license via `buyProduct` |
 | **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist`; output is **still FairPlay-encrypted** |
 | **Device decryption** | Orchestrates a Frida dump of the app **running on a jailbroken device** (or Apple Silicon Mac with SIP off), then patches and verifies; cannot decrypt the file alone |
-| **Offline decryption** | `decrypt offline` drives the external ipadecrypt on a local encrypted IPA (no running app, any minimum iOS) and verifies the result |
+| **Offline decryption** | `decrypt offline` decrypts a local encrypted IPA natively (no running app, no external tool, any minimum iOS) with a per-account credential, and verifies the result |
 | **Physical-device install** | Match provisioning profiles per bundle, preserve authorized capabilities, sign and install decrypted IPAs |
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
@@ -118,7 +118,7 @@ ipadecrypt and a credential minted once from a jailbroken device):
 Account / results   Text tables, JSON
 IPA artifacts       Patched .ipa (sinf + iTunesMetadata injected, still encrypted)
                     Decrypted .ipa (via `decrypt dump` on a running device, or
-                    `decrypt offline` with ipadecrypt)
+                    `decrypt offline`, native, with a per-account credential)
 Logging             tracing to stderr (`RUST_LOG`, `--verbose`, optional JSON)
 ```
 
@@ -207,7 +207,7 @@ The on-device dumpers need the app to run on a compatible target so its code
 is decrypted in memory. ipakeep coordinates that dump and patches the dumped
 bytes back into the IPA; it does not decrypt an IPA from the downloaded file
 alone. For apps that cannot run on your device, see
-[Offline decryption with ipadecrypt](#offline-decryption-with-ipadecrypt).
+[Offline decryption](#offline-decryption).
 
 ```bash
 # Inspect encrypted slices and the exact dump filenames.
@@ -270,33 +270,36 @@ those slices, collect additional process dumps into the same directory with the
 [Frida bridge](scripts/frida/README.md), then use `decrypt patch` and
 `decrypt verify`.
 
-### Offline decryption with ipadecrypt
+### Offline decryption
 
-`decrypt offline` decrypts a local encrypted IPA on this computer by driving
-[ipadecrypt](https://github.com/londek/ipadecrypt) (MIT, installed separately).
-The app never runs, so its `MinimumOSVersion` can exceed every device you have.
+`decrypt offline` decrypts a local encrypted IPA on this computer **natively** —
+no external tool, no emulator, and the app never runs, so its `MinimumOSVersion`
+can exceed every device you have. It is a Rust reimplementation of the
+credential-based FairPlay decrypt (verified byte-identical to londek/ipadecrypt
+on real App Store data).
 
 ```bash
-go install github.com/londek/ipadecrypt/cmd/ipadecrypt@latest
-ipadecrypt bootstrap            # once per Apple ID; needs a jailbroken device
-
 ipakeep download com.example.MyApp --output MyApp.ipa
-ipakeep decrypt offline MyApp.ipa -o MyApp-decrypted.ipa --no-on-device
+IPAKEEP_FAIRPLAY_CREDENTIAL=~/path/to/credential.bin \
+  ipakeep decrypt offline MyApp.ipa -o MyApp-decrypted.ipa
 ```
 
-ipakeep runs `ipadecrypt decrypt <ipa> --output <temp>` with
-`IPADECRYPT_NO_UPDATE_CHECK=1`, then applies its own `decrypt verify` checks and
+It unwraps each binary's SINF license with the credential, derives the per-page
+keys from the IPA's SUPF/SUPP records, AES-decrypts every FairPlay page, clears
+`cryptid`, thins each fat binary to one slice, strips `SC_Info` /
+`iTunesMetadata.plist` / the Watch app, then runs its own `decrypt verify` and
 refuses an IPA that still has an encrypted slice. Only local `.ipa` paths are
-accepted, so ipadecrypt never downloads anything itself. For a local IPA,
-decrypting needs no network or App Store login at that time, but it does need
-the account and credential that `ipadecrypt bootstrap` stored in
-`~/.ipadecrypt/` (the bootstrap signs in to the App Store; `--skip-login`
-leaves no account to decrypt with). The credential must belong to the Apple ID
-that owns the app, so download the IPA with that same account. If ipadecrypt cannot decrypt an app offline (unsupported
-license format, Arcade app without an Arcade credential), it falls back to
-decrypting on its configured jailbroken device over SSH; `--no-on-device`
-disables that fallback. ipadecrypt thins each fat binary to one slice and
-removes the Watch app from its output.
+accepted; decrypting needs no network or App Store login.
+
+It needs a **16-byte per-account FairPlay credential**, resolved from
+`$IPAKEEP_FAIRPLAY_CREDENTIAL` or the sole `*.bin` under
+`~/Library/Application Support/ipakeep/credentials/` (or `~/.ipadecrypt/credentials/`).
+The credential belongs to the Apple ID that owns the app (download the IPA with
+that same account); a credential from a different account is rejected up front.
+`$IPAKEEP_FAIRPLAY_ARCADE_CREDENTIAL` supplies the separate Apple Arcade
+credential when decrypting an Arcade title. The credential is minted once from a
+jailbroken device; `--no-on-device` is accepted for compatibility but is a no-op
+(the native path is always offline and never touches a device).
 
 `decrypt verify` proves that `cryptid` is cleared and the dumped regions are
 not obvious filler. It cannot prove that the app will launch on another device.
