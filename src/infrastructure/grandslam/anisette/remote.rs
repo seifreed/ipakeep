@@ -139,6 +139,7 @@ mod tests {
 
         let cpd = data.cpd.as_object().unwrap();
         assert_eq!(cpd["X-Apple-I-Locale"], "es_ES");
+        assert_eq!(cpd["svct"], "iTunes");
         assert_eq!(
             cpd.get("X-Apple-I-MD").unwrap().as_str().unwrap(),
             "remote-md"
