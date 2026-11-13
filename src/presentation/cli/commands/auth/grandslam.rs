@@ -140,11 +140,19 @@ where
     let phones = match use_case.list_trusted_phone_numbers(dsid, idms_token).await {
         Ok(phones) if !phones.is_empty() => phones,
         Ok(_) => {
-            tracing::warn!("no trusted phone numbers returned; defaulting to phone id 1");
+            tracing::warn!(
+                event_name = "auth.two_factor.phone_list_fallback",
+                outcome = "empty",
+                "no trusted phone numbers returned; defaulting to phone id 1"
+            );
             return Ok(DEFAULT_PHONE_ID);
         }
         Err(e) => {
-            tracing::warn!(error = %e, "failed to list trusted phone numbers; defaulting to phone id 1");
+            tracing::warn!(
+                event_name = "auth.two_factor.phone_list_fallback",
+                error_type = app_store_error_type(&e),
+                "failed to list trusted phone numbers; defaulting to phone id 1"
+            );
             return Ok(DEFAULT_PHONE_ID);
         }
     };
@@ -163,4 +171,37 @@ where
         .map_err(|e| format!("failed to select phone number: {e}"))?;
 
     Ok(phones[selected].id)
+}
+
+fn app_store_error_type(error: &crate::domain::error::AppStoreError) -> &'static str {
+    use crate::domain::error::AppStoreError;
+
+    match error {
+        AppStoreError::AuthenticationFailed(_) | AppStoreError::InvalidCredentials => {
+            "authentication"
+        }
+        AppStoreError::AuthCodeRequired { .. } => "two_factor_required",
+        AppStoreError::AccountDisabled => "account_disabled",
+        AppStoreError::AppNotFound(_) => "app_not_found",
+        AppStoreError::AppNotFree(_) => "app_not_free",
+        AppStoreError::NoLicense(_) => "no_license",
+        AppStoreError::VersionNotAvailable(_) => "version_unavailable",
+        AppStoreError::PurchaseFailed(_) => "purchase",
+        AppStoreError::DownloadFailed(_) => "download",
+        AppStoreError::IpaPatchingFailed(_) => "ipa_patching",
+        AppStoreError::NetworkError(_) => "network",
+        AppStoreError::Unexpected(_) => "unexpected",
+    }
+}
+
+#[cfg(test)]
+mod observability_tests {
+    use super::app_store_error_type;
+    use crate::domain::error::AppStoreError;
+
+    #[test]
+    fn error_classification_does_not_include_error_content() {
+        let error = AppStoreError::NetworkError("secret-token-in-url".into());
+        assert_eq!(app_store_error_type(&error), "network");
+    }
 }

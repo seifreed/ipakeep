@@ -23,11 +23,18 @@ pub use runtime::unlock_runtime_path;
 ///
 /// Returns an error if the path cannot be scanned or a Mach-O write fails.
 pub fn prepare_path(path: &Path) -> Result<Vec<PathBuf>, String> {
-    tracing::debug!(path = %path.display(), "preparing simulator path");
+    tracing::debug!(
+        component = "simulator",
+        operation = "prepare_path",
+        event_name = "simulator.prepare.started",
+        "preparing simulator path"
+    );
     let mut converted = Vec::new();
     prepare_path_inner(path, &mut converted)?;
     tracing::debug!(
-        path = %path.display(),
+        component = "simulator",
+        operation = "prepare_path",
+        event_name = "simulator.prepare.completed",
         converted_count = converted.len(),
         "simulator path prepared"
     );
@@ -48,14 +55,21 @@ pub fn install_ipa(
     entitlements: Option<&Path>,
 ) -> Result<PathBuf, String> {
     tracing::debug!(
-        ipa = %ipa.display(),
+        component = "simulator",
+        operation = "install_ipa",
+        event_name = "simulator.install.started",
         run_after_install,
         console,
         entitlements_present = entitlements.is_some(),
         "installing ipa in simulator"
     );
     let app = installer::install_ipa(ipa, run_after_install, console, target, entitlements)?;
-    tracing::debug!(app = %app.display(), "ipa installed in simulator");
+    tracing::debug!(
+        component = "simulator",
+        operation = "install_ipa",
+        event_name = "simulator.install.completed",
+        "ipa installed in simulator"
+    );
     Ok(app)
 }
 
@@ -115,6 +129,9 @@ pub fn run_app(
     entitlements: Option<&Path>,
 ) -> Result<(), String> {
     tracing::debug!(
+        component = "simulator",
+        operation = "run_app",
+        event_name = "simulator.launch.started",
         bundle_id,
         dylib_count = dylibs.len(),
         console,

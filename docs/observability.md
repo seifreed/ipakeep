@@ -141,3 +141,11 @@ Validation at this milestone: 267 tests pass, 1 ignored; `cargo check`,
 HTTP telemetry tests cover secret omission and overlapping async requests.
 The initial score remains 4.4/10 pending the remaining I/O boundaries, security
 review, and integration-level logger tests.
+
+### Milestone 3 — safer authentication and simulator events
+
+The trusted-phone fallback now reports a stable error category instead of the
+error's free-form text, which can contain a URL or server-provided detail.
+Simulator debug events identify the operation and conversion count without
+recording user file paths. A regression unit test checks that classifying a
+network error does not return its embedded content.
