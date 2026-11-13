@@ -174,3 +174,11 @@ process event path. A Linux target check was attempted, but this Mac lacks a
 cross-target OpenSSL installation required by `openssl-sys`; therefore the
 non-macOS module could not be fully type-checked here. Native macOS tests and
 build remain the validation for this milestone.
+
+### Milestone 7 — full HTTP response reads
+
+HTTP telemetry now distinguishes response-header latency from response-body
+consumption. JSON/plist/text responses and binary downloads use safe body-read
+events with status, duration, outcome, and byte count when available; body
+content remains excluded. This makes IPA transfer time observable beyond the
+initial response headers.

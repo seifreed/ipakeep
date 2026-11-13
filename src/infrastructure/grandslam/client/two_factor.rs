@@ -7,7 +7,7 @@ use crate::infrastructure::grandslam::client::http::{
 };
 use crate::infrastructure::grandslam::client::response::parse_trusted_phone_numbers;
 use crate::infrastructure::grandslam::resolve_anisette;
-use crate::infrastructure::http::telemetry::send_with_observability;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use crate::infrastructure::http::{decode_plist, response_snippet};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -85,7 +85,7 @@ pub(super) async fn validate_trusted_device_code(
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("validate code request failed: {e}")))?;
     let status = response.status();
-    let body = response.bytes().await.map_err(|e| {
+    let body = read_response_bytes(response).await.map_err(|e| {
         AppStoreError::NetworkError(format!("validate code response read failed: {e}"))
     })?;
     validate_trusted_device_response(status, &body)

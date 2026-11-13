@@ -3,7 +3,7 @@
 use super::AnisetteData;
 use super::fields::{AnisetteFields, build_cpd, build_headers};
 use crate::domain::error::AppStoreError;
-use crate::infrastructure::http::telemetry::send_with_observability;
+use crate::infrastructure::http::telemetry::{read_response_json, send_with_observability};
 use serde_json::Value as JsonValue;
 
 pub(super) async fn fetch_remote(
@@ -24,7 +24,7 @@ pub(super) async fn fetch_remote(
         )));
     }
 
-    let body: JsonValue = response.json().await.map_err(|e| {
+    let body: JsonValue = read_response_json(response).await.map_err(|e| {
         AppStoreError::NetworkError(format!("anisette server response decode failed: {e}"))
     })?;
     let obj = body.as_object().ok_or_else(|| {
@@ -61,7 +61,7 @@ async fn fetch_remote_user_agent(
     let response = response.error_for_status().map_err(|e| {
         AppStoreError::NetworkError(format!("anisette client info request failed: {e}"))
     })?;
-    let body: JsonValue = response.json().await.map_err(|e| {
+    let body: JsonValue = read_response_json(response).await.map_err(|e| {
         AppStoreError::NetworkError(format!("anisette client info decode failed: {e}"))
     })?;
     let info = body.get("client_info").and_then(JsonValue::as_str);

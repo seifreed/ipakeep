@@ -1,6 +1,8 @@
 //! Safe metadata logging for outbound HTTP requests.
 
 use reqwest::{Client, RequestBuilder, Response};
+#[cfg(not(ipakeep_modern_adi))]
+use serde::de::DeserializeOwned;
 use std::time::Instant;
 
 /// Send an HTTP request and log its method, host, status, and elapsed time.
@@ -36,25 +38,25 @@ pub(crate) async fn send_with_observability(
                 tracing::debug!(
                     service = "ipakeep",
                     component = "http",
-                    event_name = "http.request.completed",
+                    event_name = "http.response.headers_received",
                     method,
                     host,
                     status,
                     outcome,
                     duration_ms,
-                    "HTTP request completed"
+                    "HTTP response headers received"
                 );
             } else {
                 tracing::warn!(
                     service = "ipakeep",
                     component = "http",
-                    event_name = "http.request.completed",
+                    event_name = "http.response.headers_received",
                     method,
                     host,
                     status,
                     outcome,
                     duration_ms,
-                    "HTTP request returned a non-success status"
+                    "HTTP response returned a non-success status"
                 );
             }
             Ok(response)
@@ -73,6 +75,83 @@ pub(crate) async fn send_with_observability(
             );
             Err(error)
         }
+    }
+}
+
+pub(crate) async fn read_response_bytes(response: Response) -> Result<Vec<u8>, reqwest::Error> {
+    let status = response.status().as_u16();
+    let started = Instant::now();
+    let result = response.bytes().await;
+    match &result {
+        Ok(body) => record_body_read(status, started, Some(body.len()), None),
+        Err(error) => record_body_read(status, started, None, Some(error)),
+    }
+    result.map(|body| body.to_vec())
+}
+
+pub(crate) async fn read_response_text(response: Response) -> Result<String, reqwest::Error> {
+    let status = response.status().as_u16();
+    let started = Instant::now();
+    let result = response.text().await;
+    match &result {
+        Ok(body) => record_body_read(status, started, Some(body.len()), None),
+        Err(error) => record_body_read(status, started, None, Some(error)),
+    }
+    result
+}
+
+#[cfg(not(ipakeep_modern_adi))]
+pub(crate) async fn read_response_json<T: DeserializeOwned>(
+    response: Response,
+) -> Result<T, reqwest::Error> {
+    let status = response.status().as_u16();
+    let started = Instant::now();
+    let result = response.json().await;
+    match &result {
+        Ok(_) => record_body_read(status, started, None, None),
+        Err(error) => record_body_read(status, started, None, Some(error)),
+    }
+    result
+}
+
+fn record_body_read(
+    status: u16,
+    started: Instant,
+    body_bytes: Option<usize>,
+    error: Option<&reqwest::Error>,
+) {
+    let duration_ms = elapsed_ms(started);
+    if let Some(error) = error {
+        tracing::warn!(
+            component = "http",
+            event_name = "http.response.body_read_failed",
+            status,
+            outcome = "failure",
+            duration_ms,
+            error_type = request_error_type(error),
+            "HTTP response body could not be read"
+        );
+        return;
+    }
+    if let Some(body_bytes) = body_bytes {
+        tracing::debug!(
+            component = "http",
+            event_name = "http.response.body_read",
+            status,
+            outcome = "success",
+            duration_ms,
+            body_bytes,
+            "HTTP response body read"
+        );
+    } else {
+        tracing::debug!(
+            component = "http",
+            event_name = "http.response.body_read",
+            status,
+            outcome = "success",
+            duration_ms,
+            "HTTP response body read"
+        );
     }
 }
 
@@ -96,7 +175,7 @@ fn request_error_type(error: &reqwest::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::send_with_observability;
+    use super::{read_response_bytes, send_with_observability};
     use crate::infrastructure::observability::log_capture::LogCapture;
     use reqwest::Client;
     use wiremock::matchers::{method, path};
@@ -118,10 +197,12 @@ mod tests {
         let response = send_with_observability(&client, request)
             .await
             .expect("HTTP response");
+        let body = read_response_bytes(response).await.expect("response body");
         let logs = capture.contents();
 
-        assert_eq!(response.status().as_u16(), 503);
-        assert!(logs.contains("http.request.completed"));
+        assert_eq!(body.len(), "response-secret".len());
+        assert!(logs.contains("http.response.headers_received"));
+        assert!(logs.contains("http.response.body_read"));
         assert!(logs.contains("status=503"));
         assert!(logs.contains("duration_ms="));
         assert!(!logs.contains("query-secret"));
@@ -152,10 +233,10 @@ mod tests {
         let event = logs
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .find(|event| event["event_name"] == "http.request.completed")
+            .find(|event| event["event_name"] == "http.response.headers_received")
             .expect("HTTP JSON event");
         assert_eq!(event["level"], "DEBUG");
-        assert_eq!(event["event_name"], "http.request.completed");
+        assert_eq!(event["event_name"], "http.response.headers_received");
         assert_eq!(event["method"], "GET");
         assert_eq!(event["status"], 200);
         assert!(event["duration_ms"].is_number());
@@ -179,7 +260,10 @@ mod tests {
 
         assert!(first.is_ok() && second.is_ok());
         assert_eq!(
-            capture.contents().matches("http.request.completed").count(),
+            capture
+                .contents()
+                .matches("http.response.headers_received")
+                .count(),
             2
         );
     }

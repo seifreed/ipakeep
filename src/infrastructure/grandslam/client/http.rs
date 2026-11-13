@@ -3,7 +3,7 @@
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::http::plist_codec::{decode_plist, encode_plist};
 use crate::infrastructure::http::response_snippet;
-use crate::infrastructure::http::telemetry::send_with_observability;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -35,8 +35,7 @@ pub(super) async fn post_plist(
         .map_err(|e| AppStoreError::NetworkError(format!("HTTP POST failed: {e}")))?;
 
     let status = response.status();
-    let bytes = response
-        .bytes()
+    let bytes = read_response_bytes(response)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("failed to read response: {e}")))?;
 
@@ -76,7 +75,7 @@ pub(super) async fn ensure_success_status(
     operation: &str,
 ) -> Result<(), AppStoreError> {
     let status = response.status();
-    let body = response.bytes().await.map_err(|e| {
+    let body = read_response_bytes(response).await.map_err(|e| {
         AppStoreError::NetworkError(format!("{operation} response read failed: {e}"))
     })?;
 

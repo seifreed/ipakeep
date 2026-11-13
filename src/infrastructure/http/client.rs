@@ -3,7 +3,7 @@
 mod response;
 
 use super::response_snippet;
-use super::telemetry::send_with_observability;
+use super::telemetry::{read_response_bytes, read_response_text, send_with_observability};
 use reqwest::cookie::Jar;
 use reqwest::{Client, ClientBuilder, Url};
 pub use response::HttpResponse;
@@ -102,8 +102,7 @@ impl AppleHttpClient {
 
         let status = response.status();
         let headers = response.headers().clone();
-        let text = response
-            .text()
+        let text = read_response_text(response)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -165,8 +164,7 @@ impl AppleHttpClient {
 
         let status = response.status();
         let headers = response.headers().clone();
-        let text = response
-            .text()
+        let text = read_response_text(response)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -272,8 +270,7 @@ impl AppleHttpClient {
 
         let status = response.status();
         let resp_headers = response.headers().clone();
-        let body_bytes = response
-            .bytes()
+        let body_bytes = read_response_bytes(response)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -342,8 +339,7 @@ impl AppleHttpClient {
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
         let status = response.status();
 
-        let bytes = response
-            .bytes()
+        let bytes = read_response_bytes(response)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -351,7 +347,7 @@ impl AppleHttpClient {
             return Err(http_status_error("download", status, &bytes));
         }
 
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
     /// Get the underlying reqwest client reference.
