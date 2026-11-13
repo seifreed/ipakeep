@@ -72,7 +72,7 @@ pub(super) fn build_headers(fields: &AnisetteFields) -> HashMap<String, String> 
     HashMap::from([
         ("X-Apple-I-Client-Time".into(), fields.time.clone()),
         ("X-Apple-I-TimeZone".into(), fields.timezone.clone()),
-        ("X-Apple-I-Locale".into(), fields.locale.clone()),
+        ("X-Apple-Locale".into(), fields.locale.clone()),
         ("X-Apple-I-MD".into(), fields.md.clone()),
         ("X-Apple-I-MD-LU".into(), fields.md_lu.clone()),
         ("X-Apple-I-MD-M".into(), fields.md_m.clone()),

@@ -127,7 +127,8 @@ mod tests {
             data.headers.get("X-Apple-I-SRL-NO").unwrap(),
             "REMOTE-SERIAL"
         );
-        assert_eq!(data.headers.get("X-Apple-I-Locale").unwrap(), "es_ES");
+        assert_eq!(data.headers.get("X-Apple-Locale").unwrap(), "es_ES");
+        assert!(!data.headers.contains_key("X-Apple-I-Locale"));
         assert_eq!(
             data.headers.get("X-MMe-Client-Info").unwrap(),
             "REMOTE-CLIENT-INFO"
@@ -137,6 +138,7 @@ mod tests {
         assert_eq!(data.headers.get("X-Apple-I-MD-RINFO").unwrap(), "50660608");
 
         let cpd = data.cpd.as_object().unwrap();
+        assert_eq!(cpd["X-Apple-I-Locale"], "es_ES");
         assert_eq!(
             cpd.get("X-Apple-I-MD").unwrap().as_str().unwrap(),
             "remote-md"
