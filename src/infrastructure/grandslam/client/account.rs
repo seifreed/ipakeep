@@ -5,16 +5,20 @@ use serde_json::Value as JsonValue;
 
 /// Parse an [`Account`] from decrypted SPD plist data.
 pub(super) fn parse_spd_account(spd: &JsonValue) -> Account {
+    let tokens = spd.get("Token").unwrap_or(spd);
     // The numeric account DSID (`DsPrsId`) is what MZFinance commerce expects in
     // X-Dsid. It is a plist integer, so it must be read number-aware; reading it
     // as a string only would fall through to `adsid` (the long GrandSlam identity
     // id), which MZFinance rejects with failureType 2001 ("account could not be
     // found"). `adsid` is deliberately not a fallback here.
     let dsid = string_or_number_from_keys(spd, &["dsid", "DsPrsId", "DirectoryServicesID"]);
-    let idms_token = optional_string_from_keys(spd, &["idms-token", "IDMSToken", "GsIdmsToken"]);
+    let idms_token = optional_string_from_keys(tokens, &["idms-token", "IDMSToken", "GsIdmsToken"])
+        .or_else(|| optional_string_from_keys(spd, &["idms-token", "IDMSToken", "GsIdmsToken"]));
     let adsid = optional_string_from_keys(spd, &["adsid"]);
-    let grandslam_session_key = optional_string_from_keys(spd, &["sk"]);
-    let grandslam_continuation = optional_string_from_keys(spd, &["c"]);
+    let grandslam_session_key = optional_string_from_keys(tokens, &["sk"])
+        .or_else(|| optional_string_from_keys(spd, &["sk"]));
+    let grandslam_continuation = optional_string_from_keys(tokens, &["c"])
+        .or_else(|| optional_string_from_keys(spd, &["c"]));
     let email = string_from_keys(spd, &["accountName", "acname", "primaryEmail"]);
     let first_name = string_from_keys(spd, &["firstName", "fn"]);
     let last_name = string_from_keys(spd, &["lastName", "ln"]);
@@ -148,6 +152,27 @@ mod tests {
         assert_eq!(account.idms_token, Some("idms-token".into()));
         assert_eq!(account.dsid, Some("67890".into()));
         assert_eq!(account.adsid, Some("adsid-def".into()));
+        assert!(account.grandslam_session_key.is_some());
+        assert!(account.grandslam_continuation.is_some());
+    }
+
+    #[test]
+    fn parse_spd_account_reads_nested_grandslam_token_dictionary() {
+        let spd = serde_json::json!({
+            "DsPrsId": 67890,
+            "adsid": "adsid-def",
+            "Token": {
+                "GsIdmsToken": "nested-idms-token",
+                "sk": BASE64.encode([3_u8; 32]),
+                "c": BASE64.encode([4_u8; 16]),
+            }
+        });
+
+        let account = parse_spd_account(&spd);
+
+        assert_eq!(account.dsid.as_deref(), Some("67890"));
+        assert_eq!(account.adsid.as_deref(), Some("adsid-def"));
+        assert_eq!(account.idms_token.as_deref(), Some("nested-idms-token"));
         assert!(account.grandslam_session_key.is_some());
         assert!(account.grandslam_continuation.is_some());
     }
