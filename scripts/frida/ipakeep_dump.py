@@ -20,9 +20,9 @@ Requires: pip install frida frida-tools
 """
 
 import argparse
+import logging
 import os
 import plistlib
-import sys
 import threading
 import time
 import zipfile
@@ -31,6 +31,28 @@ from pathlib import PurePosixPath
 import frida
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LOGGER = logging.getLogger("ipakeep.frida")
+
+
+def configure_logging() -> None:
+    level_name = os.environ.get("IPAKEEP_FRIDA_LOG_LEVEL", "INFO").upper()
+    level = logging.getLevelName(level_name)
+    valid_level = isinstance(level, int)
+    if not valid_level:
+        level = logging.INFO
+
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)sZ %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+    logging.basicConfig(level=level, handlers=[handler], force=True)
+    if not valid_level:
+        LOGGER.warning(
+            "service=ipakeep component=frida event_name=logging.invalid_level; using INFO"
+        )
 
 
 def get_device(kind: str):
@@ -96,7 +118,10 @@ def load_agent(session, agent_path: str, out_dir: str, written: list[str]):
 
     def on_message(message, data):
         if message["type"] != "send":
-            print(message, file=sys.stderr)
+            LOGGER.error(
+                "service=ipakeep component=frida event_name=frida.script.message_failed message_type=%r",
+                message.get("type"),
+            )
             return
         payload = message["payload"]
         if payload.get("event") == "slice" and data is not None:
@@ -104,9 +129,16 @@ def load_agent(session, agent_path: str, out_dir: str, written: list[str]):
             with open(path, "wb") as output:
                 output.write(data)
             written.append(payload["name"])
-            print(f"dumped {payload['name']} ({payload['cryptsize']} bytes)")
+            LOGGER.info(
+                "service=ipakeep component=frida event_name=frida.slice.dumped artifact=%r bytes=%d",
+                payload["name"],
+                payload["cryptsize"],
+            )
         elif payload.get("event") == "done":
-            print(f"final sweep: {payload['dumped']} slice(s) total")
+            LOGGER.info(
+                "service=ipakeep component=frida event_name=frida.sweep.completed slices=%d",
+                payload["dumped"],
+            )
 
     script.on("message", on_message)
     script.load()
@@ -118,7 +150,10 @@ def attach_extension(device, pid: int, agent_path: str, out_dir: str, written: l
     try:
         script = load_agent(session, agent_path, out_dir, written)
         root = script.exports_sync.arm()
-        print(f"attached to extension PID {pid}; bundle root: {root}")
+        LOGGER.info(
+            "service=ipakeep component=frida event_name=frida.extension.attached pid=%d",
+            pid,
+        )
         return session, script
     except Exception:
         detach_session(session)
@@ -174,9 +209,17 @@ def watch_extensions(device, process_names, agent_path, out_dir, written, second
             if is_extension_process(spawn.identifier, process_names):
                 attached = attach_extension(device, spawn.pid, agent_path, out_dir, written)
         except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
-            print(f"cannot attach to extension PID {spawn.pid}: {error}", file=sys.stderr)
+            LOGGER.warning(
+                "service=ipakeep component=frida event_name=frida.extension.attach_failed pid=%d error_type=%s",
+                spawn.pid,
+                type(error).__name__,
+            )
         except Exception as error:
-            print(f"cannot instrument spawned PID {spawn.pid}: {error}", file=sys.stderr)
+            LOGGER.error(
+                "service=ipakeep component=frida event_name=frida.extension.instrumentation_failed pid=%d error_type=%s",
+                spawn.pid,
+                type(error).__name__,
+            )
         finally:
             with state_changed:
                 if attached is not None:
@@ -206,7 +249,11 @@ def watch_extensions(device, process_names, agent_path, out_dir, written, second
             try:
                 attached = attach_extension(device, process.pid, agent_path, out_dir, written)
             except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
-                print(f"cannot attach to extension PID {process.pid}: {error}", file=sys.stderr)
+                LOGGER.warning(
+                    "service=ipakeep component=frida event_name=frida.extension.attach_failed pid=%d error_type=%s",
+                    process.pid,
+                    type(error).__name__,
+                )
             finally:
                 with state_changed:
                     if attached is not None:
@@ -249,11 +296,45 @@ def main() -> int:
         help="Seconds to wait for frameworks and running app extensions before the final sweep.",
     )
     args = parser.parse_args()
+    configure_logging()
+    started = time.monotonic()
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.command.started operation=dump"
+    )
+    try:
+        status = run_dump(args)
+    except KeyboardInterrupt:
+        status = 130
+        LOGGER.warning(
+            "service=ipakeep component=frida event_name=frida.command.cancelled operation=dump"
+        )
+    except Exception as error:
+        LOGGER.error(
+            "service=ipakeep component=frida event_name=frida.command.failed operation=dump error_type=%s duration_ms=%d",
+            type(error).__name__,
+            round((time.monotonic() - started) * 1000),
+        )
+        raise
+    duration_ms = round((time.monotonic() - started) * 1000)
+    LOGGER.log(
+        logging.INFO if status == 0 else logging.ERROR,
+        "service=ipakeep component=frida event_name=frida.command.completed operation=dump outcome=%s status=%d duration_ms=%d",
+        "success" if status == 0 else "failure",
+        status,
+        duration_ms,
+    )
+    return status
+
+
+def run_dump(args) -> int:
 
     try:
         process_names = extension_process_names(args.ipa)
     except (OSError, ValueError, zipfile.BadZipFile) as error:
-        print(f"cannot inspect app extensions in {args.ipa}: {error}", file=sys.stderr)
+        LOGGER.error(
+            "service=ipakeep component=frida event_name=frida.ipa.inspect_failed error_type=%s",
+            type(error).__name__,
+        )
         return 2
 
     os.makedirs(args.out, exist_ok=True)
@@ -269,16 +350,15 @@ def main() -> int:
     except frida.PermissionDeniedError:
         # macOS with SIP enabled won't let a normal user attach to another app
         # (no get-task-allow). Re-run as root, or boot with SIP disabled.
-        print(
-            "permission denied attaching to the target.\n"
-            "On a SIP-enabled Mac, run this as root:\n"
-            f"    sudo {sys.executable} {os.path.abspath(__file__)} --ipa {args.ipa} "
-            f"--device {args.device} --out {args.out} {args.target}",
-            file=sys.stderr,
+        LOGGER.error(
+            "service=ipakeep component=frida event_name=frida.attach.permission_denied retry_as_root=true"
         )
         return 2
     except (ValueError, frida.ProcessNotFoundError) as exc:
-        print(f"cannot attach to {args.target}: {exc}", file=sys.stderr)
+        LOGGER.error(
+            "service=ipakeep component=frida event_name=frida.attach.failed error_type=%s",
+            type(exc).__name__,
+        )
         return 2
 
     written = []
@@ -288,15 +368,26 @@ def main() -> int:
         device.resume(pid)
 
     root = script.exports_sync.arm()
-    print(f"armed; bundle root: {root}")
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.target.armed target_type=%s",
+        type(root).__name__,
+    )
     if process_names:
-        print("watching app extension processes during --settle")
+        LOGGER.info(
+            "service=ipakeep component=frida event_name=frida.extensions.watch_started settle_seconds=%.3f",
+            args.settle,
+        )
     watch_extensions(device, process_names, agent_path, args.out, written, args.settle)
     script.exports_sync.sweep()
     session.detach()
 
-    print(f"\nwrote {len(written)} slice(s) to {args.out}")
-    print("next: ipakeep decrypt patch <ipa> --from", args.out)
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.dump.completed slices=%d",
+        len(written),
+    )
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.next_step command=decrypt.patch"
+    )
     return 0 if written else 1
 
 

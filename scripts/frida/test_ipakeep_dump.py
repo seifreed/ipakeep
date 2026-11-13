@@ -1,20 +1,28 @@
 """Tests for the dependency-free target selection in the Frida runner."""
 
+from contextlib import redirect_stderr
+from io import StringIO
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
+
+import plistlib
 import shutil
 import subprocess
 import sys
-import plistlib
 import tempfile
 import unittest
 import zipfile
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
 
 sys.modules["frida"] = ModuleType("frida")
 from ipakeep_dump import (
+    LOGGER,
     attach_target,
+    configure_logging,
     extension_process_names,
     is_extension_process,
+    load_agent,
+    main,
     watch_extensions,
 )
 
@@ -30,10 +38,11 @@ class FakeDevice:
 class FakeScript:
     def __init__(self):
         self.sweeps = 0
+        self.message_handler = None
         self.exports_sync = SimpleNamespace(arm=lambda: "bundle-root", sweep=self.sweep)
 
-    def on(self, _event, _callback):
-        pass
+    def on(self, _event, callback):
+        self.message_handler = callback
 
     def load(self):
         pass
@@ -89,6 +98,35 @@ class FakeProcessDevice:
 
 
 class AttachTargetTests(unittest.TestCase):
+    def test_configured_logger_writes_utc_text_to_stderr(self):
+        stderr = StringIO()
+        with (
+            patch.dict("os.environ", {"IPAKEEP_FRIDA_LOG_LEVEL": "INFO"}),
+            redirect_stderr(stderr),
+        ):
+            configure_logging()
+            LOGGER.info("service=ipakeep component=frida event_name=test.stderr")
+
+        self.assertRegex(
+            stderr.getvalue(),
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z INFO ipakeep\.frida .*event_name=test\.stderr",
+        )
+
+    def test_log_level_is_configurable_from_environment(self):
+        with patch.dict("os.environ", {"IPAKEEP_FRIDA_LOG_LEVEL": "DEBUG"}):
+            with self.assertLogs("ipakeep.frida", level="DEBUG") as capture:
+                configure_logging()
+                LOGGER.debug("event_name=test.debug")
+
+        self.assertIn("event_name=test.debug", capture.output[0])
+
+    def test_invalid_log_level_falls_back_to_info(self):
+        with patch.dict("os.environ", {"IPAKEEP_FRIDA_LOG_LEVEL": "invalid"}):
+            with self.assertLogs("ipakeep.frida", level="WARNING") as capture:
+                configure_logging()
+
+        self.assertIn("logging.invalid_level", capture.output[0])
+
     def test_bundle_id_resolves_to_running_process_id(self):
         device = FakeDevice(
             [SimpleNamespace(identifier="com.example.app", name="Example", pid=1234)]
@@ -130,6 +168,79 @@ class AttachTargetTests(unittest.TestCase):
                 {"NotificationService", "com.example.NotificationService"},
             )
 
+    def test_agent_messages_use_safe_structured_logging(self):
+        session = FakeSession()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            agent = Path(temp_dir) / "agent.js"
+            agent.write_text("agent", encoding="utf-8")
+            script = load_agent(session, str(agent), temp_dir, [])
+
+            with self.assertLogs("ipakeep.frida", level="INFO") as capture:
+                session.script.message_handler(
+                    {
+                        "type": "send",
+                        "payload": {
+                            "event": "slice",
+                            "name": "slice\nname.bin",
+                            "cryptsize": 3,
+                        },
+                    },
+                    b"abc",
+                )
+
+            self.assertEqual(Path(temp_dir, "slice\nname.bin").read_bytes(), b"abc")
+            self.assertIs(session.script, script)
+            self.assertIn("event_name=frida.slice.dumped", capture.output[0])
+            self.assertIn("artifact='slice\\nname.bin'", capture.output[0])
+            self.assertNotIn("\nslice name.bin", capture.output[0])
+
+    def test_command_failure_records_safe_lifecycle_event(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_ipa = str(Path(temp_dir) / "private-path.ipa")
+            args = SimpleNamespace(
+                target="com.example.app",
+                out=temp_dir,
+                ipa=missing_ipa,
+                device="usb",
+                spawn=False,
+                settle=0.0,
+            )
+            with (
+                patch.dict("os.environ", {"IPAKEEP_FRIDA_LOG_LEVEL": "INFO"}),
+                patch("ipakeep_dump.argparse.ArgumentParser.parse_args", return_value=args),
+                self.assertLogs("ipakeep.frida", level="INFO") as capture,
+            ):
+                self.assertEqual(main(), 2)
+
+            self.assertIn("event_name=frida.command.started", capture.output[0])
+            self.assertIn("event_name=frida.ipa.inspect_failed", "\n".join(capture.output))
+            self.assertIn("event_name=frida.command.completed", capture.output[-1])
+            self.assertIn("duration_ms=", capture.output[-1])
+            self.assertNotIn("private-path.ipa", "\n".join(capture.output))
+
+    def test_unexpected_failure_is_logged_without_losing_original_cause(self):
+        args = SimpleNamespace(
+            target="com.example.app",
+            out="dump",
+            ipa="private-path.ipa",
+            device="usb",
+            spawn=False,
+            settle=0.0,
+        )
+        with (
+            patch.dict("os.environ", {"IPAKEEP_FRIDA_LOG_LEVEL": "INFO"}),
+            patch("ipakeep_dump.argparse.ArgumentParser.parse_args", return_value=args),
+            patch("ipakeep_dump.run_dump", side_effect=ValueError("private error details")),
+            self.assertLogs("ipakeep.frida", level="INFO") as capture,
+        ):
+            with self.assertRaisesRegex(ValueError, "private error details"):
+                main()
+
+        failure = next(line for line in capture.output if "frida.command.failed" in line)
+        self.assertIn("error_type=ValueError", failure)
+        self.assertIn("duration_ms=", failure)
+        self.assertNotIn("private error details", "\n".join(capture.output))
+
     def test_extension_process_matches_executable_or_qualified_name(self):
         executables = {"NotificationService"}
         self.assertTrue(is_extension_process("NotificationService", executables))
@@ -150,14 +261,15 @@ class AttachTargetTests(unittest.TestCase):
     def test_running_and_spawned_extensions_are_attached_and_swept(self):
         device = FakeProcessDevice()
         with tempfile.TemporaryDirectory() as temp_dir:
-            watch_extensions(
-                device,
-                {"Notify"},
-                str(Path(__file__).with_name("ipakeep_dump.js")),
-                temp_dir,
-                [],
-                0.01,
-            )
+            with self.assertLogs("ipakeep.frida", level="INFO"):
+                watch_extensions(
+                    device,
+                    {"Notify"},
+                    str(Path(__file__).with_name("ipakeep_dump.js")),
+                    temp_dir,
+                    [],
+                    0.01,
+                )
 
         self.assertEqual(device.attached, [43, 42])
         self.assertEqual(device.resumed, [43, 44])
