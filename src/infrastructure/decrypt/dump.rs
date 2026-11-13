@@ -10,7 +10,7 @@
 
 use super::{ensure_decrypted, patch_ipa_decrypted};
 use crate::infrastructure::exec::{
-    find_in_path, newest_ipa, observed_output, require_program, run_inherit, temp_dir,
+    newest_ipa, observed_output, require_program, run_inherit, temp_dir,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -123,23 +123,60 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
 }
 
+const PYTHON_OVERRIDE_ENV: &str = "IPAKEEP_PYTHON";
+const FRIDA_LAUNCHERS: [&str; 2] = ["frida-ps", "frida"];
+
 fn python_with_frida() -> Result<String, String> {
-    let mut candidates = vec!["python3".to_string()];
-    if let Some(frida_ps) = find_in_path("frida-ps")
-        && let Ok(contents) = std::fs::read_to_string(frida_ps)
-        && let Some(interpreter) = contents.lines().next().and_then(interpreter_from_shebang)
-    {
-        candidates.push(interpreter);
-    }
-    candidates.dedup();
-    for candidate in candidates {
-        let mut command = Command::new(&candidate);
+    let override_python = std::env::var(PYTHON_OVERRIDE_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let launchers = launcher_interpreters(std::env::var_os("PATH").as_deref());
+    let candidates = python_candidates(override_python, &launchers);
+    for candidate in &candidates {
+        let mut command = Command::new(candidate);
         command.args(["-c", "import frida"]);
         if observed_output(&mut command).is_ok_and(|output| output.status.success()) {
-            return Ok(candidate);
+            tracing::info!(
+                service = "ipakeep",
+                component = "decrypt",
+                event_name = "frida.interpreter.selected",
+                interpreter = candidate.as_str(),
+                "selected Python interpreter for the Frida runner"
+            );
+            return Ok(candidate.clone());
         }
     }
-    Err("cannot import Frida from `python3` or the interpreter used by `frida-ps`; install `frida` and `frida-tools` in the same Python environment".into())
+    Err(format!(
+        "cannot import Frida from any of {candidates:?}; set {PYTHON_OVERRIDE_ENV} or install `frida` and `frida-tools` in the same Python environment"
+    ))
+}
+
+fn python_candidates(override_python: Option<String>, launchers: &[String]) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    for candidate in override_python
+        .into_iter()
+        .chain(std::iter::once("python3".to_string()))
+        .chain(launchers.iter().cloned())
+    {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn launcher_interpreters(path: Option<&std::ffi::OsStr>) -> Vec<String> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+    std::env::split_paths(path)
+        .flat_map(|dir| FRIDA_LAUNCHERS.map(|launcher| dir.join(launcher)))
+        .filter_map(|launcher| std::fs::read(launcher).ok())
+        .filter_map(|contents| {
+            let first_line = contents.split(|byte| *byte == b'\n').next()?;
+            interpreter_from_shebang(std::str::from_utf8(first_line).ok()?)
+        })
+        .collect()
 }
 
 fn interpreter_from_shebang(line: &str) -> Option<String> {
@@ -297,6 +334,40 @@ mod tests {
             interpreter_from_shebang("#!/usr/bin/env python3.14"),
             Some("python3.14".into())
         );
+    }
+
+    #[test]
+    fn override_python_is_tried_first_and_duplicates_are_dropped() {
+        let launchers = vec!["/opt/a/python3.13".to_string(), "python3".to_string()];
+        assert_eq!(
+            python_candidates(Some("/venv/bin/python".into()), &launchers),
+            ["/venv/bin/python", "python3", "/opt/a/python3.13"]
+        );
+        assert_eq!(python_candidates(None, &[]), ["python3"]);
+    }
+
+    #[test]
+    fn every_frida_launcher_on_path_contributes_its_interpreter() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        std::fs::write(
+            first.path().join("frida-ps"),
+            "#!/opt/first/bin/python3\nimport frida\n",
+        )
+        .unwrap();
+        std::fs::write(
+            second.path().join("frida-ps"),
+            "#!/usr/bin/env python3.14\n",
+        )
+        .unwrap();
+        std::fs::write(second.path().join("frida"), "#!/opt/second/python\n").unwrap();
+        let path = std::env::join_paths([first.path(), second.path()]).unwrap();
+
+        assert_eq!(
+            launcher_interpreters(Some(&path)),
+            ["/opt/first/bin/python3", "python3.14", "/opt/second/python"]
+        );
+        assert!(launcher_interpreters(None).is_empty());
     }
 
     #[test]

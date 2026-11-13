@@ -18,9 +18,12 @@ sys.modules["frida"] = ModuleType("frida")
 from ipakeep_dump import (
     LOGGER,
     attach_target,
+    bundles_to_launch,
     configure_logging,
+    extension_bundles,
     extension_process_names,
     is_extension_process,
+    launch_extensions,
     load_agent,
     main,
     watch_extensions,
@@ -71,6 +74,7 @@ class FakeProcessDevice:
         self.resumed = []
         self.spawn_handler = None
         self.gating = False
+        self.attached_during_callback = None
 
     def on(self, _event, callback):
         self.spawn_handler = callback
@@ -82,6 +86,7 @@ class FakeProcessDevice:
         self.gating = True
         self.spawn_handler(SimpleNamespace(pid=43, identifier="com.example.Notify"))
         self.spawn_handler(SimpleNamespace(pid=44, identifier="com.other.App"))
+        self.attached_during_callback = list(self.attached)
 
     def disable_spawn_gating(self):
         self.gating = False
@@ -271,11 +276,71 @@ class AttachTargetTests(unittest.TestCase):
                     0.01,
                 )
 
+        self.assertEqual(device.attached_during_callback, [])
         self.assertEqual(device.attached, [43, 42])
         self.assertEqual(device.resumed, [43, 44])
         self.assertFalse(device.gating)
         self.assertTrue(device.session.script.sweeps >= 1)
         self.assertTrue(device.session.detached)
+
+    def test_spawn_identifier_path_matches_by_basename(self):
+        self.assertTrue(
+            is_extension_process("/private/var/containers/X/Notify.appex/Notify", {"Notify"})
+        )
+        self.assertFalse(is_extension_process("/usr/libexec/other", {"Notify"}))
+
+    def test_extension_bundles_report_identifier_and_executable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ipa_path = Path(temp_dir) / "app.ipa"
+            with zipfile.ZipFile(ipa_path, "w") as ipa:
+                ipa.writestr(
+                    "Payload/Example.app/PlugIns/Notify.appex/Info.plist",
+                    plistlib.dumps(
+                        {"CFBundleExecutable": "Notify", "CFBundleIdentifier": "com.x.Notify"}
+                    ),
+                )
+            self.assertEqual(extension_bundles(str(ipa_path)), [("com.x.Notify", "Notify")])
+
+    def test_only_extensions_not_seen_running_are_launched(self):
+        bundles = [("com.x.Notify", "Notify"), ("com.x.Widget", "Widget"), ("", "Nameless")]
+        self.assertEqual(bundles_to_launch(bundles, {"com.x.Notify"}), ["com.x.Widget"])
+
+    def test_extension_launch_failure_is_reported_and_spawned_process_killed(self):
+        class LaunchDevice:
+            def __init__(self):
+                self.killed = []
+                self.session = FakeSession()
+
+            def spawn(self, identifier):
+                if identifier == "com.x.Broken":
+                    raise RuntimeError("unable to launch extension")
+                return 77
+
+            def attach(self, pid):
+                return self.session
+
+            def resume(self, pid):
+                pass
+
+            def kill(self, pid):
+                self.killed.append(pid)
+
+        device = LaunchDevice()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            agent = Path(temp_dir) / "agent.js"
+            agent.write_text("agent", encoding="utf-8")
+            with self.assertLogs("ipakeep.frida", level="INFO") as capture:
+                failed = launch_extensions(
+                    device, ["com.x.Broken", "com.x.Widget"], str(agent), temp_dir, [], 0
+                )
+
+        log = "\n".join(capture.output)
+        self.assertEqual(failed, ["com.x.Broken"])
+        self.assertIn("unable to launch extension", log)
+        self.assertIn("frida.extensions.not_dumped", log)
+        self.assertEqual(device.killed, [77])
+        self.assertTrue(device.session.detached)
+        self.assertEqual(device.session.script.sweeps, 1)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not installed")
     def test_agent_dumps_regions_after_ios_clears_cryptid(self):

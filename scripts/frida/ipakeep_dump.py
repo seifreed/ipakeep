@@ -3,7 +3,8 @@
 
 Loads ipakeep_dump.js into the target app, lets it settle (so lazily `dlopen`'d
 frameworks map and get dumped), and watches for app extensions from the IPA to
-run in their own process. It writes each decrypted slice to <out>/<name>, where
+run in their own process. Extensions that did not run on their own are then
+spawned by bundle id and dumped; any that cannot be launched are reported. It writes each decrypted slice to <out>/<name>, where
 <name> is exactly what `ipakeep decrypt inspect` prints. Feed <out> to
 `ipakeep decrypt patch --from`.
 
@@ -23,7 +24,7 @@ import argparse
 import logging
 import os
 import plistlib
-import threading
+import queue
 import time
 import zipfile
 from pathlib import PurePosixPath
@@ -74,41 +75,53 @@ def attach_target(device, target: str):
     return application.pid
 
 
-def extension_process_names(ipa_path: str) -> set[str]:
-    process_names = set()
+def extension_bundles(ipa_path: str) -> list[tuple[str, str]]:
+    """(CFBundleIdentifier, CFBundleExecutable) of every .appex; missing values are ''."""
+    bundles = []
     with zipfile.ZipFile(ipa_path) as ipa:
         for entry in ipa.infolist():
-            parts = PurePosixPath(entry.filename).parts
-            plugin = next(
-                (
-                    parts[index + 2]
-                    for index, part in enumerate(parts[:-3])
-                    if part.endswith(".app")
-                    and parts[index + 1] == "PlugIns"
-                    and parts[index + 2].endswith(".appex")
-                    and parts[index + 3] == "Info.plist"
-                ),
-                None,
-            )
-            if plugin is None:
+            if not is_extension_info_plist(entry.filename):
                 continue
             try:
                 metadata = plistlib.loads(ipa.read(entry))
             except Exception as error:
                 raise ValueError(f"invalid extension plist {entry.filename}: {error}") from error
             if isinstance(metadata, dict):
-                process_names.update(
-                    value
-                    for key in ("CFBundleExecutable", "CFBundleIdentifier")
-                    if isinstance((value := metadata.get(key)), str) and value
+                bundles.append(
+                    tuple(
+                        value if isinstance((value := metadata.get(key)), str) else ""
+                        for key in ("CFBundleIdentifier", "CFBundleExecutable")
+                    )
                 )
-    return process_names
+    return bundles
+
+
+def is_extension_info_plist(filename: str) -> bool:
+    parts = PurePosixPath(filename).parts
+    return any(
+        part.endswith(".app")
+        and parts[index + 1] == "PlugIns"
+        and parts[index + 2].endswith(".appex")
+        and parts[index + 3] == "Info.plist"
+        for index, part in enumerate(parts[:-3])
+    )
+
+
+def extension_process_names(ipa_path: str) -> set[str]:
+    return bundle_process_names(extension_bundles(ipa_path))
+
+
+def bundle_process_names(bundles) -> set[str]:
+    return {value for bundle in bundles for value in bundle if value}
 
 
 def is_extension_process(process_name: str, extension_names: set[str]) -> bool:
+    candidates = {process_name, os.path.basename(process_name)}
     return any(
-        process_name == executable or process_name.endswith(f".{executable}")
+        candidate == executable or candidate.endswith(f".{executable}")
+        for candidate in candidates
         for executable in extension_names
+        if executable
     )
 
 
@@ -149,7 +162,7 @@ def attach_extension(device, pid: int, agent_path: str, out_dir: str, written: l
     session = device.attach(pid)
     try:
         script = load_agent(session, agent_path, out_dir, written)
-        root = script.exports_sync.arm()
+        script.exports_sync.arm()
         LOGGER.info(
             "service=ipakeep component=frida event_name=frida.extension.attached pid=%d",
             pid,
@@ -158,6 +171,19 @@ def attach_extension(device, pid: int, agent_path: str, out_dir: str, written: l
     except Exception:
         detach_session(session)
         raise
+
+
+def try_attach_extension(device, pid: int, agent_path: str, out_dir: str, written: list[str]):
+    try:
+        return attach_extension(device, pid, agent_path, out_dir, written)
+    except Exception as error:
+        LOGGER.warning(
+            "service=ipakeep component=frida event_name=frida.extension.attach_failed pid=%d error_type=%s error=%r",
+            pid,
+            type(error).__name__,
+            str(error),
+        )
+        return None
 
 
 def sweep_extension(script) -> bool:
@@ -182,51 +208,64 @@ def resume_spawn(device, pid: int) -> None:
         pass
 
 
-def watch_extensions(device, process_names, agent_path, out_dir, written, seconds: float):
+def kill_process(device, pid: int) -> None:
+    try:
+        device.kill(pid)
+    except Exception as error:
+        LOGGER.warning(
+            "service=ipakeep component=frida event_name=frida.process.kill_failed pid=%d error_type=%s error=%r",
+            pid,
+            type(error).__name__,
+            str(error),
+        )
+
+
+def watch_extensions(device, process_names, agent_path, out_dir, written, seconds: float) -> set[str]:
+    """Attach to extension processes for `seconds`; returns the matched process names.
+
+    Frida delivers `spawn-added` on its own thread, where blocking device calls can
+    deadlock, so the callback only enqueues. This thread attaches, arms and resumes.
+    """
+    matched = set()
     if not process_names:
         time.sleep(seconds)
-        return
+        return matched
 
     deadline = time.monotonic() + seconds
+    pending_spawns = queue.Queue()
     seen_pids = set()
-    attaching_pids = set()
     sessions = {}
-    state_changed = threading.Condition()
 
     def on_spawn(spawn):
-        with state_changed:
-            duplicate = spawn.pid in seen_pids
-            if not duplicate:
-                seen_pids.add(spawn.pid)
-                attaching_pids.add(spawn.pid)
-            while duplicate and spawn.pid in attaching_pids:
-                state_changed.wait()
-        if duplicate:
-            resume_spawn(device, spawn.pid)
-            return
-        attached = None
+        pending_spawns.put(spawn)
+
+    def track(pid: int, name: str) -> None:
+        seen_pids.add(pid)
+        attached = try_attach_extension(device, pid, agent_path, out_dir, written)
+        if attached is not None:
+            sessions[pid] = attached
+            matched.add(name)
+
+    def handle_spawn(spawn) -> None:
         try:
-            if is_extension_process(spawn.identifier, process_names):
-                attached = attach_extension(device, spawn.pid, agent_path, out_dir, written)
-        except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
-            LOGGER.warning(
-                "service=ipakeep component=frida event_name=frida.extension.attach_failed pid=%d error_type=%s",
-                spawn.pid,
-                type(error).__name__,
-            )
-        except Exception as error:
-            LOGGER.error(
-                "service=ipakeep component=frida event_name=frida.extension.instrumentation_failed pid=%d error_type=%s",
-                spawn.pid,
-                type(error).__name__,
-            )
+            if spawn.pid not in seen_pids and is_extension_process(
+                spawn.identifier, process_names
+            ):
+                track(spawn.pid, spawn.identifier)
         finally:
-            with state_changed:
-                if attached is not None:
-                    sessions[spawn.pid] = attached
-                attaching_pids.discard(spawn.pid)
-                state_changed.notify_all()
             resume_spawn(device, spawn.pid)
+
+    def drain_spawns(timeout: float) -> None:
+        try:
+            spawn = pending_spawns.get(timeout=timeout) if timeout > 0 else pending_spawns.get_nowait()
+        except queue.Empty:
+            return
+        while True:
+            handle_spawn(spawn)
+            try:
+                spawn = pending_spawns.get_nowait()
+            except queue.Empty:
+                return
 
     device.on("spawn-added", on_spawn)
     try:
@@ -235,51 +274,87 @@ def watch_extensions(device, process_names, agent_path, out_dir, written, second
         device.off("spawn-added", on_spawn)
         raise
     try:
+        drain_spawns(0)
         for process in device.enumerate_processes():
-            if not is_extension_process(process.name, process_names):
-                continue
-            with state_changed:
-                if process.pid in seen_pids:
-                    while process.pid in attaching_pids:
-                        state_changed.wait()
-                    continue
-                seen_pids.add(process.pid)
-                attaching_pids.add(process.pid)
-            attached = None
-            try:
-                attached = attach_extension(device, process.pid, agent_path, out_dir, written)
-            except (frida.ProcessNotFoundError, frida.PermissionDeniedError) as error:
-                LOGGER.warning(
-                    "service=ipakeep component=frida event_name=frida.extension.attach_failed pid=%d error_type=%s",
-                    process.pid,
-                    type(error).__name__,
-                )
-            finally:
-                with state_changed:
-                    if attached is not None:
-                        sessions[process.pid] = attached
-                    attaching_pids.discard(process.pid)
-                    state_changed.notify_all()
+            if process.pid not in seen_pids and is_extension_process(process.name, process_names):
+                track(process.pid, process.name)
 
-        while time.monotonic() < deadline:
-            with state_changed:
-                active_sessions = list(sessions.items())
-            for pid, (session, script) in active_sessions:
+        while (remaining := deadline - time.monotonic()) > 0:
+            drain_spawns(min(0.1, remaining))
+            for pid, (session, script) in list(sessions.items()):
                 if not sweep_extension(script):
                     detach_session(session)
-                    with state_changed:
-                        sessions.pop(pid, None)
-            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+                    sessions.pop(pid, None)
     finally:
         try:
             device.disable_spawn_gating()
         finally:
             device.off("spawn-added", on_spawn)
-            with state_changed:
-                remaining_sessions = list(sessions.values())
-            for session, script in remaining_sessions:
+            while True:
+                try:
+                    resume_spawn(device, pending_spawns.get_nowait().pid)
+                except queue.Empty:
+                    break
+            for session, script in sessions.values():
                 sweep_extension(script)
                 detach_session(session)
+    return matched
+
+
+def bundles_to_launch(bundles, matched_names: set[str]) -> list[str]:
+    """Bundle ids of extensions that were not already dumped from a running process."""
+    return [
+        identifier
+        for identifier, executable in bundles
+        if identifier
+        and not any(
+            is_extension_process(name, {identifier, executable}) for name in matched_names
+        )
+    ]
+
+
+def dump_launched_extension(device, identifier: str, agent_path, out_dir, written, settle: float):
+    pid = device.spawn(identifier)
+    try:
+        session = device.attach(pid)
+        try:
+            script = load_agent(session, agent_path, out_dir, written)
+            script.exports_sync.arm()
+            resume_spawn(device, pid)
+            LOGGER.info(
+                "service=ipakeep component=frida event_name=frida.extension.launched bundle_id=%r pid=%d",
+                identifier,
+                pid,
+            )
+            time.sleep(settle)
+            sweep_extension(script)
+        finally:
+            detach_session(session)
+    finally:
+        kill_process(device, pid)
+
+
+def launch_extensions(device, identifiers, agent_path, out_dir, written, settle: float) -> list[str]:
+    """Spawn each extension by bundle id and dump it; returns the ids that failed."""
+    failed = []
+    for identifier in identifiers:
+        try:
+            dump_launched_extension(device, identifier, agent_path, out_dir, written, settle)
+        except Exception as error:
+            failed.append(identifier)
+            LOGGER.warning(
+                "service=ipakeep component=frida event_name=frida.extension.launch_failed bundle_id=%r error_type=%s error=%r",
+                identifier,
+                type(error).__name__,
+                str(error),
+            )
+    if failed:
+        LOGGER.warning(
+            "service=ipakeep component=frida event_name=frida.extensions.not_dumped bundle_ids=%r hint=%r",
+            failed,
+            "trigger these extensions on the device and re-run while they are active",
+        )
+    return failed
 
 
 def main() -> int:
@@ -327,15 +402,15 @@ def main() -> int:
 
 
 def run_dump(args) -> int:
-
     try:
-        process_names = extension_process_names(args.ipa)
+        bundles = extension_bundles(args.ipa)
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         LOGGER.error(
             "service=ipakeep component=frida event_name=frida.ipa.inspect_failed error_type=%s",
             type(error).__name__,
         )
         return 2
+    process_names = bundle_process_names(bundles)
 
     os.makedirs(args.out, exist_ok=True)
     device = get_device(args.device)
@@ -347,22 +422,52 @@ def run_dump(args) -> int:
             session = device.attach(pid)
         else:
             session = device.attach(attach_target(device, args.target))
-    except frida.PermissionDeniedError:
+    except frida.PermissionDeniedError as error:
         # macOS with SIP enabled won't let a normal user attach to another app
         # (no get-task-allow). Re-run as root, or boot with SIP disabled.
         LOGGER.error(
-            "service=ipakeep component=frida event_name=frida.attach.permission_denied retry_as_root=true"
+            "service=ipakeep component=frida event_name=frida.attach.permission_denied retry_as_root=true error=%r",
+            str(error),
         )
+        if pid is not None:
+            kill_process(device, pid)
         return 2
-    except (ValueError, frida.ProcessNotFoundError) as exc:
+    except (ValueError, frida.ProcessNotFoundError, frida.ExecutableNotFoundError) as error:
         LOGGER.error(
-            "service=ipakeep component=frida event_name=frida.attach.failed error_type=%s",
-            type(exc).__name__,
+            "service=ipakeep component=frida event_name=frida.attach.failed error_type=%s error=%r",
+            type(error).__name__,
+            str(error),
         )
+        if pid is not None:
+            kill_process(device, pid)
         return 2
 
     written = []
     agent_path = os.path.join(HERE, "ipakeep_dump.js")
+    try:
+        matched = dump_main_app(device, session, pid, process_names, agent_path, args, written)
+    except BaseException:
+        if pid is not None:
+            kill_process(device, pid)
+        raise
+    finally:
+        detach_session(session)
+
+    launch_extensions(
+        device, bundles_to_launch(bundles, matched), agent_path, args.out, written, args.settle
+    )
+
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.dump.completed slices=%d",
+        len(written),
+    )
+    LOGGER.info(
+        "service=ipakeep component=frida event_name=frida.next_step command=decrypt.patch"
+    )
+    return 0 if written else 1
+
+
+def dump_main_app(device, session, pid, process_names, agent_path, args, written) -> set[str]:
     script = load_agent(session, agent_path, args.out, written)
     if pid is not None:
         device.resume(pid)
@@ -377,18 +482,9 @@ def run_dump(args) -> int:
             "service=ipakeep component=frida event_name=frida.extensions.watch_started settle_seconds=%.3f",
             args.settle,
         )
-    watch_extensions(device, process_names, agent_path, args.out, written, args.settle)
+    matched = watch_extensions(device, process_names, agent_path, args.out, written, args.settle)
     script.exports_sync.sweep()
-    session.detach()
-
-    LOGGER.info(
-        "service=ipakeep component=frida event_name=frida.dump.completed slices=%d",
-        len(written),
-    )
-    LOGGER.info(
-        "service=ipakeep component=frida event_name=frida.next_step command=decrypt.patch"
-    )
-    return 0 if written else 1
+    return matched
 
 
 if __name__ == "__main__":
