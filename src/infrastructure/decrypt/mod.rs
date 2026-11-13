@@ -13,7 +13,7 @@ mod ios;
 mod macho;
 mod offline;
 
-pub use dump::{DumpDevice, DumpRequest, Dumper, run_dump};
+pub use dump::{DumpDevice, DumpRequest, Dumper, SshParams, run_dump};
 pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 pub use offline::run_offline;
 

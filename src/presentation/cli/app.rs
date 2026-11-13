@@ -241,18 +241,25 @@ pub enum DecryptCommands {
         output: Option<PathBuf>,
     },
 
-    /// Drive a dumper (builtin/frida-ios-dump/bagbak/r2flutch) to decrypt an app.
+    /// Drive a dumper to decrypt an app.
+    ///
+    /// Backends: `builtin`, `frida-ios-dump`, `bagbak`, `r2flutch` (all launch
+    /// the app), and `fouldecrypt` (static, no-launch: decrypts the installed
+    /// app's Mach-O on disk over SSH on a jailbroken device, so it works with
+    /// the device locked, when `MinimumOSVersion` exceeds the device iOS, and for
+    /// apps from any Apple account).
     Dump {
         /// App bundle id to dump on the device.
         #[arg(value_parser = parse_non_empty)]
         bundle_id: String,
 
-        /// Dumper backend.
+        /// Dumper backend: builtin|frida-ios-dump|bagbak|r2flutch|fouldecrypt.
         #[arg(long, default_value = "builtin", value_parser = parse_non_empty)]
         dumper: String,
 
         /// Encrypted IPA to patch; when omitted on a USB device, the installed
-        /// (still encrypted) bundle is pulled from the device instead.
+        /// (still encrypted) bundle is pulled from the device instead. Ignored
+        /// by the `fouldecrypt` backend, which decrypts the installed app.
         #[arg(long)]
         ipa: Option<PathBuf>,
 
@@ -280,6 +287,18 @@ pub enum DecryptCommands {
         /// (e.g. notification services that only run when iOS triggers them).
         #[arg(long)]
         drop_undumped_extensions: bool,
+
+        /// SSH host of the jailbroken device (fouldecrypt backend).
+        #[arg(long, default_value = "127.0.0.1", value_parser = parse_non_empty)]
+        ssh_host: String,
+
+        /// SSH port (fouldecrypt backend; 2222 is the usual iproxy forward).
+        #[arg(long, default_value_t = 2222)]
+        ssh_port: u16,
+
+        /// SSH user (fouldecrypt backend). Password: env `IPAKEEP_SSH_PASSWORD`.
+        #[arg(long, default_value = "mobile", value_parser = parse_non_empty)]
+        ssh_user: String,
     },
 
     /// Decrypt a local encrypted IPA on this computer with `ipadecrypt`

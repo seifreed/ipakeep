@@ -10,10 +10,11 @@
 
 use super::{ensure_decrypted, patch_ipa_decrypted_with};
 use crate::infrastructure::exec::{
-    newest_ipa, observed_output, require_program, run_inherit, temp_dir,
+    newest_ipa, observed_output, observed_status, require_program, run_inherit, temp_dir,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 /// Which dumper backend to drive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +27,9 @@ pub enum Dumper {
     Bagbak,
     /// r2flutch.
     R2flutch,
+    /// `NyaMisty`'s `FoulDecrypt`: static, no-launch decryption on a jailbroken
+    /// device over SSH.
+    FoulDecrypt,
 }
 
 impl Dumper {
@@ -40,8 +44,9 @@ impl Dumper {
             "frida-ios-dump" => Ok(Self::FridaIosDump),
             "bagbak" => Ok(Self::Bagbak),
             "r2flutch" => Ok(Self::R2flutch),
+            "fouldecrypt" => Ok(Self::FoulDecrypt),
             other => Err(format!(
-                "unknown dumper {other:?} (expected builtin|frida-ios-dump|bagbak|r2flutch)"
+                "unknown dumper {other:?} (expected builtin|frida-ios-dump|bagbak|r2flutch|fouldecrypt)"
             )),
         }
     }
@@ -65,12 +70,29 @@ impl DumpDevice {
     }
 }
 
+/// SSH connection parameters for on-device backends (`FoulDecrypt`).
+///
+/// The password is never carried here or on argv; it is read from the
+/// `IPAKEEP_SSH_PASSWORD` environment variable and fed to `sshpass` via its own
+/// `SSHPASS` env. When unset, key auth / interactive prompting is used.
+#[derive(Clone, Copy, Debug)]
+pub struct SshParams<'a> {
+    /// Host to reach the device on (default `127.0.0.1` for USB via iproxy).
+    pub host: &'a str,
+    /// SSH port (default `2222`, the usual iproxy forward of device port 22).
+    pub port: u16,
+    /// SSH user (default `mobile`).
+    pub user: &'a str,
+}
+
 /// Everything needed to produce a decrypted IPA.
 pub struct DumpRequest<'a> {
     /// Backend to drive.
     pub dumper: Dumper,
     /// App bundle id (target on the device/Mac).
     pub bundle_id: &'a str,
+    /// SSH connection used by the `FoulDecrypt` backend (ignored otherwise).
+    pub ssh: SshParams<'a>,
     /// Encrypted IPA to patch — required by the builtin backend.
     pub ipa: Option<&'a Path>,
     /// Frida device for the builtin backend.
@@ -95,6 +117,7 @@ pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
     let work = temp_dir("dump")?;
     let result = match req.dumper {
         Dumper::Builtin => run_builtin(req, &work),
+        Dumper::FoulDecrypt => run_fouldecrypt(req, &work),
         external => run_external(external, req.bundle_id, &work),
     };
     let _ = std::fs::remove_dir_all(&work);
@@ -270,6 +293,176 @@ fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>,
     ensure_decrypted(bytes)
 }
 
+const SSH_PASSWORD_ENV: &str = "IPAKEEP_SSH_PASSWORD";
+const REMOTE_SCRIPT: &str = "/tmp/ipakeep_fouldecrypt.sh";
+const REMOTE_OUT_IPA: &str = "/tmp/ipakeep-fouldecrypt.ipa";
+/// sshd rate-limits rapid auth attempts; pause between connections.
+const SSH_PAUSE: Duration = Duration::from_millis(1500);
+
+/// Decrypt an installed app's Mach-O slices ON DISK with `FoulDecrypt` (no app
+/// launch), repackage into an IPA on the device, pull it, and verify.
+fn run_fouldecrypt(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
+    let password = std::env::var(SSH_PASSWORD_ENV)
+        .ok()
+        .filter(|value| !value.is_empty());
+    let use_password = password.is_some();
+    require_program("ssh")?;
+    require_program("scp")?;
+    if use_password {
+        require_program("sshpass").map_err(|error| {
+            format!("{error}; or unset {SSH_PASSWORD_ENV} to use key auth / prompting")
+        })?;
+    }
+
+    let local_script = work.join("run.sh");
+    std::fs::write(
+        &local_script,
+        include_str!("../../../scripts/fouldecrypt/run.sh"),
+    )
+    .map_err(|error| format!("{}: {error}", local_script.display()))?;
+    let local_script = local_script.to_string_lossy().into_owned();
+
+    run_remote(
+        scp_argv(
+            req.ssh,
+            use_password,
+            &local_script,
+            &remote_spec(req.ssh, REMOTE_SCRIPT),
+        ),
+        password.as_deref(),
+    )?;
+    std::thread::sleep(SSH_PAUSE);
+    run_remote(
+        ssh_argv(
+            req.ssh,
+            use_password,
+            &remote_command(REMOTE_SCRIPT, req.bundle_id, REMOTE_OUT_IPA),
+        ),
+        password.as_deref(),
+    )?;
+    std::thread::sleep(SSH_PAUSE);
+
+    let local_ipa = work.join("fouldecrypt.ipa");
+    run_remote(
+        scp_argv(
+            req.ssh,
+            use_password,
+            &remote_spec(req.ssh, REMOTE_OUT_IPA),
+            &local_ipa.to_string_lossy(),
+        ),
+        password.as_deref(),
+    )?;
+    let bytes = std::fs::read(&local_ipa).map_err(|error| {
+        format!(
+            "{}: {error} (FoulDecrypt produced no IPA; see the device-side output above)",
+            local_ipa.display()
+        )
+    })?;
+    ensure_decrypted(bytes)
+}
+
+/// Run a prepared ssh/scp command, feeding the password through `SSHPASS` (never
+/// on argv) when one is configured.
+fn run_remote(
+    (program, args): (String, Vec<String>),
+    password: Option<&str>,
+) -> Result<(), String> {
+    let mut command = Command::new(&program);
+    command.args(&args);
+    if let Some(password) = password {
+        command.env("SSHPASS", password);
+    }
+    // Do not use `run_inherit`: it Debug-formats the whole `Command`, which would
+    // print the `SSHPASS` value. Report only the program name on failure.
+    let status = observed_status(&mut command)
+        .map_err(|error| format!("failed to run {program}: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}"))
+    }
+}
+
+/// `user@host:path` spec for scp.
+fn remote_spec(ssh: SshParams<'_>, path: &str) -> String {
+    format!("{}@{}:{}", ssh.user, ssh.host, path)
+}
+
+/// The remote shell command that runs the device-side runner on `bundle_id`.
+fn remote_command(script: &str, bundle_id: &str, out_ipa: &str) -> String {
+    format!(
+        "sh {} {} {}",
+        shell_quote(script),
+        shell_quote(bundle_id),
+        shell_quote(out_ipa)
+    )
+}
+
+/// POSIX single-quote a token so the remote shell treats it literally.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Shared ssh/scp hardening options. Pure for testing.
+fn ssh_options(use_password: bool) -> Vec<String> {
+    let mut options = vec![
+        "-o".into(),
+        "StrictHostKeyChecking=no".into(),
+        "-o".into(),
+        "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(),
+        "LogLevel=ERROR".into(),
+    ];
+    if use_password {
+        options.extend([
+            "-o".into(),
+            "NumberOfPasswordPrompts=1".into(),
+            "-o".into(),
+            "PreferredAuthentications=password,keyboard-interactive".into(),
+            "-o".into(),
+            "PubkeyAuthentication=no".into(),
+        ]);
+    }
+    options
+}
+
+/// Argv to run `remote_command` on the device over ssh. Pure for testing.
+fn ssh_argv(ssh: SshParams<'_>, use_password: bool, remote_command: &str) -> (String, Vec<String>) {
+    let (program, mut args) = sshpass_prefix(use_password, "ssh");
+    args.extend(ssh_options(use_password));
+    args.push("-p".into());
+    args.push(ssh.port.to_string());
+    args.push(format!("{}@{}", ssh.user, ssh.host));
+    args.push(remote_command.to_string());
+    (program, args)
+}
+
+/// Argv to copy `source` to `dest` with scp. Pure for testing.
+fn scp_argv(
+    ssh: SshParams<'_>,
+    use_password: bool,
+    source: &str,
+    dest: &str,
+) -> (String, Vec<String>) {
+    let (program, mut args) = sshpass_prefix(use_password, "scp");
+    args.extend(ssh_options(use_password));
+    args.push("-P".into());
+    args.push(ssh.port.to_string());
+    args.push(source.to_string());
+    args.push(dest.to_string());
+    (program, args)
+}
+
+/// Pick the launcher: `sshpass -e <tool>` when a password is used (keeping it
+/// off argv), otherwise the tool directly.
+fn sshpass_prefix(use_password: bool, tool: &str) -> (String, Vec<String>) {
+    if use_password {
+        ("sshpass".into(), vec!["-e".into(), tool.into()])
+    } else {
+        (tool.into(), Vec::new())
+    }
+}
+
 /// Argv for the builtin Python runner. Pure for testing.
 #[derive(Clone, Copy)]
 struct BuiltinArgv<'a> {
@@ -335,7 +528,9 @@ pub(super) fn external_argv(
             "r2flutch".into(),
             vec!["-o".into(), dir, bundle_id.to_string()],
         ),
-        Dumper::Builtin => return Err("builtin has no external argv".into()),
+        Dumper::Builtin | Dumper::FoulDecrypt => {
+            return Err("this dumper has no host-tool external argv".into());
+        }
     })
 }
 
@@ -347,7 +542,66 @@ mod tests {
     fn parses_known_dumpers_and_rejects_unknown() {
         assert_eq!(Dumper::parse("builtin").unwrap(), Dumper::Builtin);
         assert_eq!(Dumper::parse("bagbak").unwrap(), Dumper::Bagbak);
+        assert_eq!(Dumper::parse("fouldecrypt").unwrap(), Dumper::FoulDecrypt);
         assert!(Dumper::parse("nope").is_err());
+    }
+
+    const SSH: SshParams<'static> = SshParams {
+        host: "127.0.0.1",
+        port: 2222,
+        user: "mobile",
+    };
+
+    #[test]
+    fn ssh_argv_uses_ssh_directly_without_a_password() {
+        let (program, args) = ssh_argv(SSH, false, "sh /tmp/run.sh 'com.x.App'");
+        assert_eq!(program, "ssh");
+        assert!(args.windows(2).any(|w| w == ["-p", "2222"]));
+        assert_eq!(args[args.len() - 2], "mobile@127.0.0.1");
+        assert_eq!(args.last().unwrap(), "sh /tmp/run.sh 'com.x.App'");
+        assert!(!args.iter().any(|a| a == "PubkeyAuthentication=no"));
+    }
+
+    #[test]
+    fn ssh_argv_wraps_sshpass_and_forces_password_auth() {
+        let (program, args) = ssh_argv(SSH, true, "true");
+        assert_eq!(program, "sshpass");
+        assert_eq!(&args[0..2], ["-e", "ssh"]);
+        assert!(args.iter().any(|a| a == "PubkeyAuthentication=no"));
+        assert!(args.iter().any(|a| a == "NumberOfPasswordPrompts=1"));
+        // The password itself never appears on argv.
+        assert!(!args.iter().any(|a| a.contains("IPAKEEP") || a == "0000"));
+    }
+
+    #[test]
+    fn scp_argv_threads_port_and_remote_spec() {
+        let (program, args) = scp_argv(
+            SSH,
+            false,
+            &remote_spec(SSH, "/tmp/out.ipa"),
+            "/host/out.ipa",
+        );
+        assert_eq!(program, "scp");
+        assert!(args.windows(2).any(|w| w == ["-P", "2222"]));
+        assert_eq!(args[args.len() - 2], "mobile@127.0.0.1:/tmp/out.ipa");
+        assert_eq!(args.last().unwrap(), "/host/out.ipa");
+    }
+
+    #[test]
+    fn scp_argv_wraps_sshpass_when_a_password_is_used() {
+        let (program, args) = scp_argv(SSH, true, "/host/run.sh", "mobile@127.0.0.1:/tmp/run.sh");
+        assert_eq!(program, "sshpass");
+        assert_eq!(&args[0..2], ["-e", "scp"]);
+    }
+
+    #[test]
+    fn remote_command_single_quotes_each_token() {
+        assert_eq!(
+            remote_command("/tmp/run.sh", "com.x.App", "/tmp/out.ipa"),
+            "sh '/tmp/run.sh' 'com.x.App' '/tmp/out.ipa'"
+        );
+        // Embedded quotes are escaped, not left to break out of the string.
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
 
     #[test]

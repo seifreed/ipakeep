@@ -2,7 +2,7 @@
 
 use crate::domain::repository::CredentialRepository;
 use crate::infrastructure::decrypt::{
-    DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport,
+    DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport, SshParams,
     VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
     run_offline, set_min_os, verify_ipa,
 };
@@ -143,6 +143,12 @@ pub struct DumpArgs<'a> {
     pub output: Option<&'a Path>,
     /// Remove app extensions that could not be dumped instead of failing.
     pub drop_undumped_extensions: bool,
+    /// SSH host for the on-device `fouldecrypt` backend.
+    pub ssh_host: &'a str,
+    /// SSH port for the on-device `fouldecrypt` backend.
+    pub ssh_port: u16,
+    /// SSH user for the on-device `fouldecrypt` backend.
+    pub ssh_user: &'a str,
 }
 
 /// Drive a dumper to produce a decrypted IPA.
@@ -159,6 +165,11 @@ pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
     let req = DumpRequest {
         dumper: Dumper::parse(args.dumper)?,
         bundle_id: args.bundle_id,
+        ssh: SshParams {
+            host: args.ssh_host,
+            port: args.ssh_port,
+            user: args.ssh_user,
+        },
         ipa: args.ipa,
         device,
         agent: args.agent,
@@ -215,6 +226,9 @@ pub fn handle_dump_mac(
         settle,
         output,
         drop_undumped_extensions: false,
+        ssh_host: "127.0.0.1",
+        ssh_port: 2222,
+        ssh_user: "mobile",
     })
 }
 

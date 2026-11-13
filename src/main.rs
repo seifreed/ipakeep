@@ -284,6 +284,9 @@ async fn dispatch_decrypt(
             settle,
             output,
             drop_undumped_extensions,
+            ssh_host,
+            ssh_port,
+            ssh_user,
         } => decrypt::handle_dump(&decrypt::DumpArgs {
             bundle_id: &bundle_id,
             dumper: &dumper,
@@ -294,6 +297,9 @@ async fn dispatch_decrypt(
             settle,
             output: output.as_deref(),
             drop_undumped_extensions,
+            ssh_host: &ssh_host,
+            ssh_port,
+            ssh_user: &ssh_user,
         }),
         DecryptCommands::Offline {
             ipa,
