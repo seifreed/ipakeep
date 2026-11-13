@@ -7,6 +7,7 @@ use crate::infrastructure::grandslam::client::http::{
 };
 use crate::infrastructure::grandslam::client::response::parse_trusted_phone_numbers;
 use crate::infrastructure::grandslam::resolve_anisette;
+use crate::infrastructure::http::{decode_plist, response_snippet};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -76,16 +77,17 @@ pub(super) async fn validate_trusted_device_code(
     headers.insert("Accept".into(), "text/x-xml-plist".into());
     headers.insert("security-code".into(), code.into());
 
-    client
+    let response = client
         .get(VALIDATE_URL)
         .headers(build_header_map(&headers)?)
         .send()
         .await
-        .map_err(|e| AppStoreError::NetworkError(format!("validate code request failed: {e}")))?
-        .error_for_status()
-        .map_err(|e| AppStoreError::AuthenticationFailed(format!("invalid 2FA code: {e}")))?;
-
-    Ok(())
+        .map_err(|e| AppStoreError::NetworkError(format!("validate code request failed: {e}")))?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(|e| {
+        AppStoreError::NetworkError(format!("validate code response read failed: {e}"))
+    })?;
+    validate_trusted_device_response(status, &body)
 }
 
 pub(super) async fn request_sms(
@@ -163,10 +165,45 @@ fn add_auth_headers(headers: &mut HashMap<String, String>, dsid: &str, idms_toke
     headers.insert("X-Xcode-Version".into(), XCODE_VERSION.into());
 }
 
+fn validate_trusted_device_response(
+    status: reqwest::StatusCode,
+    body: &[u8],
+) -> Result<(), AppStoreError> {
+    if !status.is_success() {
+        return Err(AppStoreError::AuthenticationFailed(format!(
+            "trusted-device code validation failed with HTTP {status}: {}",
+            response_snippet(body)
+        )));
+    }
+
+    let response = decode_plist(body).map_err(|error| {
+        AppStoreError::NetworkError(format!(
+            "trusted-device response plist decode failed: {error}"
+        ))
+    })?;
+    let error_code = response
+        .get("ec")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| {
+            AppStoreError::NetworkError(
+                "trusted-device response plist is missing error code".into(),
+            )
+        })?;
+    if error_code != 0 {
+        return Err(AppStoreError::AuthenticationFailed(format!(
+            "trusted-device code validation failed with error code {error_code}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::add_auth_headers;
+    use super::validate_trusted_device_response;
+    use crate::domain::error::AppStoreError;
     use crate::infrastructure::grandslam::client::http::identity_token;
+    use crate::infrastructure::http::encode_plist;
     use std::collections::HashMap;
 
     #[test]
@@ -188,5 +225,22 @@ mod tests {
             headers.get("X-Apple-App-Info").map(String::as_str),
             Some("com.apple.gs.xcode.auth")
         );
+    }
+
+    #[test]
+    fn trusted_device_validation_requires_success_error_code() {
+        let success = encode_plist(&serde_json::json!({ "ec": 0 })).expect("success plist");
+        let invalid_code =
+            encode_plist(&serde_json::json!({ "ec": -21669 })).expect("invalid-code plist");
+
+        assert!(validate_trusted_device_response(reqwest::StatusCode::OK, &success).is_ok());
+        assert!(matches!(
+            validate_trusted_device_response(reqwest::StatusCode::OK, &invalid_code),
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
+        assert!(matches!(
+            validate_trusted_device_response(reqwest::StatusCode::OK, b"not a plist"),
+            Err(AppStoreError::NetworkError(_))
+        ));
     }
 }
