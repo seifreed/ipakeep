@@ -251,7 +251,8 @@ pub enum DecryptCommands {
         #[arg(long, default_value = "builtin", value_parser = parse_non_empty)]
         dumper: String,
 
-        /// Encrypted IPA to patch (required by the builtin dumper).
+        /// Encrypted IPA to patch; when omitted on a USB device, the installed
+        /// (still encrypted) bundle is pulled from the device instead.
         #[arg(long)]
         ipa: Option<PathBuf>,
 

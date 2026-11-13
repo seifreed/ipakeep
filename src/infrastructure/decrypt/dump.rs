@@ -100,10 +100,18 @@ pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
 }
 
 fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
-    let ipa = req
-        .ipa
-        .ok_or("builtin dumper needs --ipa <encrypted.ipa> to patch")?;
     let python = python_with_frida()?;
+    let pulled;
+    let ipa = match (req.ipa, req.device) {
+        (Some(ipa), _) => ipa,
+        (None, DumpDevice::Usb) => {
+            pulled = pull_installed_bundle(&python, req.bundle_id, work)?;
+            &pulled
+        }
+        (None, DumpDevice::Local) => {
+            return Err("dumping on this Mac needs --ipa <encrypted.ipa> to patch".into());
+        }
+    };
     let agent = prepare_agent(req.agent, work)?;
     let (program, args) = builtin_argv(BuiltinArgv {
         python: &python,
@@ -121,6 +129,35 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
 
     let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
+}
+
+/// Copy the installed, still-encrypted bundle off the device so the patch base
+/// is always the exact build that gets dumped, not an App Store download that
+/// may be a different version.
+fn pull_installed_bundle(python: &str, bundle_id: &str, work: &Path) -> Result<PathBuf, String> {
+    let directory = work.join("pull");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    for (name, contents) in [
+        (
+            "ipakeep_pull.py",
+            include_str!("../../../scripts/frida/ipakeep_pull.py"),
+        ),
+        (
+            "ipakeep_pull.js",
+            include_str!("../../../scripts/frida/ipakeep_pull.js"),
+        ),
+    ] {
+        std::fs::write(directory.join(name), contents).map_err(|error| error.to_string())?;
+    }
+    let ipa = work.join("installed-encrypted.ipa");
+    let mut command = Command::new(python);
+    command
+        .arg(directory.join("ipakeep_pull.py"))
+        .arg("--out")
+        .arg(&ipa)
+        .arg(bundle_id);
+    run_inherit(command)?;
+    Ok(ipa)
 }
 
 const PYTHON_OVERRIDE_ENV: &str = "IPAKEEP_PYTHON";
