@@ -108,7 +108,7 @@ fn two_factor_required_result_extracts_identity_from_encrypted_spd() {
     let session_key = b"0123456789abcdef0123456789abcdef";
     let spd = encode_plist(&serde_json::json!({
         "adsid": "adsid-xyz",
-        "GsIdmsToken": "idms-xyz",
+        "Token": { "GsIdmsToken": "idms-xyz" },
     }))
     .expect("encode spd plist");
     let inner = serde_json::json!({
