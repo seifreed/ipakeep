@@ -96,7 +96,7 @@ pub(super) fn build_cpd(fields: &AnisetteFields) -> JsonValue {
         "pbe": "false",
         "prkgen": "true",
         "sv": "24C5089c",
-        "svct": "iTunes",
+        "svct": "iCloud",
         "tk": "01",
         "v": "2",
         "X-Apple-I-Client-Time": fields.time,
