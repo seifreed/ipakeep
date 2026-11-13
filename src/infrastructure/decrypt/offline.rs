@@ -1,57 +1,130 @@
-//! Offline decryption through londek's `ipadecrypt`.
+//! Native offline `FairPlay` decryption.
 //!
-//! `ipadecrypt` decrypts an encrypted IPA on this computer with a per-account
-//! credential minted once by `ipadecrypt bootstrap`, so the app never has to run
-//! on a device. ipakeep drives it on a local IPA, then verifies the result
-//! itself before accepting it.
+//! Decrypts an encrypted App Store IPA on this computer with a 16-byte
+//! per-account `FairPlay` credential, so the app never has to run on a device.
+//! This is a native Rust reimplementation of londek's `ipadecrypt` credential
+//! path (the `internal/fairplay` package): no external binary, no emulator.
+//! The hard crypto lives in [`super::fairplay`]; the IPA zip planning and
+//! repack in [`super::fairplay_ipa`]. ipakeep verifies the result itself
+//! before accepting it.
 
 use super::ensure_decrypted;
-use crate::infrastructure::exec::{find_in_path, run_inherit, temp_dir};
+use super::fairplay::{self, CREDENTIAL_SIZE};
+use super::fairplay_ipa::{self, PlanEntry};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-const PROGRAM: &str = "ipadecrypt";
-const NO_UPDATE_CHECK_ENV: &str = "IPADECRYPT_NO_UPDATE_CHECK";
-const OUTPUT_NAME: &str = "ipadecrypt-output.ipa";
-const SETUP_HINT: &str = "install it (`go install github.com/londek/ipadecrypt/cmd/ipadecrypt@latest` \
-     or a release from https://github.com/londek/ipadecrypt/releases) and run \
-     `ipadecrypt bootstrap` once for the Apple ID that owns the app";
+/// Environment overrides pointing at raw 16-byte credential files.
+const STANDARD_ENV: &str = "IPAKEEP_FAIRPLAY_CREDENTIAL";
+const ARCADE_ENV: &str = "IPAKEEP_FAIRPLAY_ARCADE_CREDENTIAL";
 
-/// Decrypt `ipa` with `ipadecrypt` and return the verified decrypted IPA bytes.
+/// The account's `FairPlay` credentials: `standard` decodes regular App Store
+/// licenses, `arcade` (optional) decodes Apple Arcade ones.
+struct Credentials {
+    standard: Vec<u8>,
+    arcade: Option<Vec<u8>>,
+}
+
+/// Decrypt `ipa` natively and return the verified decrypted IPA bytes.
 ///
-/// With `allow_on_device`, `ipadecrypt` may fall back to its own jailbroken
-/// device when the offline decryptor cannot handle the app.
+/// `allow_on_device` is accepted for CLI compatibility but is a no-op: the
+/// native decryptor is always offline and never touches a device.
 ///
 /// # Errors
 ///
-/// Returns an error if `ipadecrypt` is missing or not bootstrapped, the input is
-/// not a local `.ipa`, or the produced IPA does not verify as decrypted.
+/// Returns an error if the input is not a local `.ipa`, no credential is
+/// available, the credential does not match the app's account, the IPA has no
+/// decryptable binary, or the produced IPA does not verify as decrypted.
 pub fn run_offline(ipa: &Path, allow_on_device: bool) -> Result<Vec<u8>, String> {
+    let _ = allow_on_device;
     let ipa = local_ipa(ipa)?;
-    if find_in_path(PROGRAM).is_none() {
-        return Err(format!("`{PROGRAM}` not found on PATH — {SETUP_HINT}"));
-    }
-    let work = temp_dir("offline")?;
-    let result = decrypt_into(&ipa, &work, allow_on_device);
-    let _ = std::fs::remove_dir_all(&work);
-    result
-}
-
-fn decrypt_into(ipa: &Path, work: &Path, allow_on_device: bool) -> Result<Vec<u8>, String> {
-    let output = work.join(OUTPUT_NAME);
-    let mut command = Command::new(PROGRAM);
-    command
-        .args(offline_argv(ipa, &output, allow_on_device))
-        .env(NO_UPDATE_CHECK_ENV, "1");
-    run_inherit(command)?;
-
-    let produced = produced_ipa(&output)?;
-    let bytes = std::fs::read(&produced).map_err(|e| format!("{}: {e}", produced.display()))?;
+    let creds = load_credentials()?;
+    let bytes = decrypt_ipa(&ipa, &creds, false, false)?;
     ensure_decrypted(bytes)
 }
 
-/// `ipadecrypt` treats any argument not ending in `.ipa` as an App Store
-/// identifier and downloads it, so only an existing local `.ipa` is accepted.
+/// Decrypt every `FairPlay`-protected binary in the IPA whose SINF the loaded
+/// credential decodes, and repack a decrypted IPA. Mirrors `ipa.go` `Decrypt`.
+fn decrypt_ipa(
+    ipa: &Path,
+    creds: &Credentials,
+    skip_appex: bool,
+    keep_watch: bool,
+) -> Result<Vec<u8>, String> {
+    let members = fairplay_ipa::read_members(ipa)?;
+    let names: BTreeSet<String> = members.keys().cloned().collect();
+    let entries = fairplay_ipa::plan_entries(&names)?;
+
+    let mut replacements: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+
+    for entry in entries {
+        if skip_appex && entry.binary_path.contains(".appex/") {
+            continue;
+        }
+        if !keep_watch && entry.binary_path.contains("/Watch/") {
+            continue;
+        }
+
+        let Some(source) = members.get(&entry.binary_path) else {
+            return Err(format!("missing binary member {}", entry.binary_path));
+        };
+
+        let sinf = read_entry_sinf(&members, &names, &entry)?;
+        let Some(supf) = members.get(&entry.supf_path) else {
+            return Err(format!("missing page-key member {}", entry.supf_path));
+        };
+
+        let credential = if fairplay::is_arcade_sinf(sinf) {
+            creds
+                .arcade
+                .as_deref()
+                .ok_or("this Apple Arcade app needs the account's Arcade credential")?
+        } else {
+            creds.standard.as_slice()
+        };
+
+        if !fairplay::credential_decodes(credential, sinf) {
+            return Err(format!(
+                "the loaded credential does not decode {}'s license — it is from a \
+                 different Apple ID than the one that owns this app",
+                entry.binary_path
+            ));
+        }
+
+        // `Ok(None)` means the slice is not encrypted — skip it.
+        if let Some((decrypted, _pages)) = fairplay::decrypt_binary(source, sinf, supf, credential)?
+        {
+            replacements.insert(entry.binary_path, decrypted);
+        }
+    }
+
+    if replacements.is_empty() {
+        return Err("no encrypted binaries with supported SINF/SUPF/SUPP".to_string());
+    }
+
+    fairplay_ipa::assemble(ipa, &replacements, keep_watch)
+}
+
+/// The SINF bytes for an entry: its own, else a fallback from the enclosing
+/// `.app` (frameworks and extensions share the app's SINF). Mirrors `ipa.go`.
+fn read_entry_sinf<'a>(
+    members: &'a BTreeMap<String, Vec<u8>>,
+    names: &BTreeSet<String>,
+    entry: &PlanEntry,
+) -> Result<&'a [u8], String> {
+    let sinf_path = if names.contains(&entry.sinf_path) {
+        entry.sinf_path.clone()
+    } else {
+        fairplay_ipa::enclosing_app_sinf(names, &entry.bundle)
+            .ok_or_else(|| format!("SUPF/SUPP lacks binary/SINF: {}", entry.supf_path))?
+    };
+    members
+        .get(&sinf_path)
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("missing SINF member {sinf_path}"))
+}
+
+/// Accept only an existing local `.ipa`.
 fn local_ipa(ipa: &Path) -> Result<PathBuf, String> {
     let is_ipa = ipa
         .extension()
@@ -65,61 +138,81 @@ fn local_ipa(ipa: &Path) -> Result<PathBuf, String> {
     std::path::absolute(ipa).map_err(|e| format!("{}: {e}", ipa.display()))
 }
 
-/// Argv for `ipadecrypt decrypt` on a local IPA. Pure for testing.
-fn offline_argv(ipa: &Path, output: &Path, allow_on_device: bool) -> Vec<String> {
-    let mut args = vec![
-        "decrypt".to_string(),
-        ipa.to_string_lossy().into_owned(),
-        "--output".to_string(),
-        output.to_string_lossy().into_owned(),
-    ];
-    if !allow_on_device {
-        args.push("--no-on-device".to_string());
-    }
-    args
+/// Resolve the account credential(s). Order: the `IPAKEEP_FAIRPLAY_CREDENTIAL`
+/// env path, else the single `*.bin` under a known credential directory.
+fn load_credentials() -> Result<Credentials, String> {
+    let standard = match std::env::var_os(STANDARD_ENV) {
+        Some(path) => read_credential(Path::new(&path))?,
+        None => read_credential(&sole_credential_file()?)?,
+    };
+    let arcade = match std::env::var_os(ARCADE_ENV) {
+        Some(path) => Some(read_credential(Path::new(&path))?),
+        None => None,
+    };
+    Ok(Credentials { standard, arcade })
 }
 
-/// `ipadecrypt` reports failures (including a missing account or credential)
-/// and still exits 0, removing its partial output; the IPA at the requested
-/// output path is the only reliable success signal.
-fn produced_ipa(output: &Path) -> Result<PathBuf, String> {
-    if output.is_file() {
-        Ok(output.to_path_buf())
-    } else {
-        Err(format!(
-            "{PROGRAM} produced no decrypted IPA (see its messages above). If it reported \
-             no Apple account or no decryption credential, run `ipadecrypt bootstrap` once \
-             for the Apple ID that owns the app"
-        ))
+/// Read and validate a raw 16-byte credential file.
+fn read_credential(path: &Path) -> Result<Vec<u8>, String> {
+    let data =
+        std::fs::read(path).map_err(|e| format!("read credential {}: {e}", path.display()))?;
+    if data.len() != CREDENTIAL_SIZE {
+        return Err(format!(
+            "credential {} must be exactly {CREDENTIAL_SIZE} bytes, got {}",
+            path.display(),
+            data.len()
+        ));
     }
+    Ok(data)
+}
+
+/// The one `*.bin` credential in a known directory, or an actionable error.
+fn sole_credential_file() -> Result<PathBuf, String> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in credential_dirs() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "bin") {
+                found.push(path);
+            }
+        }
+        if !found.is_empty() {
+            break;
+        }
+    }
+    match found.len() {
+        0 => Err(format!(
+            "no FairPlay credential found; set {STANDARD_ENV}=/path/to/credential.bin \
+             (a 16-byte per-account credential)"
+        )),
+        1 => Ok(found.remove(0)),
+        _ => Err(format!(
+            "multiple credentials found; pick one with {STANDARD_ENV}=/path/to/credential.bin"
+        )),
+    }
+}
+
+/// Directories searched for a cached credential, best first.
+fn credential_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        dirs.push(
+            home.join("Library")
+                .join("Application Support")
+                .join("ipakeep")
+                .join("credentials"),
+        );
+        dirs.push(home.join(".ipadecrypt").join("credentials"));
+    }
+    dirs
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn argv_decrypts_the_local_ipa_into_the_requested_output() {
-        let args = offline_argv(Path::new("/in/App.ipa"), Path::new("/w/out.ipa"), true);
-        assert_eq!(args, ["decrypt", "/in/App.ipa", "--output", "/w/out.ipa"]);
-    }
-
-    #[test]
-    fn argv_suppresses_the_device_fallback_on_request() {
-        let args = offline_argv(Path::new("/in/App.ipa"), Path::new("/w/out.ipa"), false);
-        assert_eq!(args.last().unwrap(), "--no-on-device");
-    }
-
-    #[test]
-    fn produced_ipa_is_the_requested_output_file() {
-        let work = tempfile::tempdir().unwrap();
-        let output = work.path().join(OUTPUT_NAME);
-        let missing = produced_ipa(&output).unwrap_err();
-        assert!(missing.contains("ipadecrypt bootstrap"));
-
-        std::fs::write(&output, b"PK").unwrap();
-        assert_eq!(produced_ipa(&output).unwrap(), output);
-    }
 
     #[test]
     fn only_existing_local_ipas_are_accepted() {
@@ -134,5 +227,17 @@ mod tests {
                 .unwrap_err()
                 .contains("not an .ipa")
         );
+    }
+
+    #[test]
+    fn credential_must_be_sixteen_bytes() {
+        let work = tempfile::tempdir().unwrap();
+        let short = work.path().join("c.bin");
+        std::fs::write(&short, [0u8; 8]).unwrap();
+        assert!(read_credential(&short).unwrap_err().contains("16 bytes"));
+
+        let ok = work.path().join("ok.bin");
+        std::fs::write(&ok, [7u8; 16]).unwrap();
+        assert_eq!(read_credential(&ok).unwrap(), vec![7u8; 16]);
     }
 }

@@ -9,6 +9,8 @@
 
 pub mod dump;
 mod entitlements;
+mod fairplay;
+mod fairplay_ipa;
 mod ios;
 mod macho;
 mod offline;
