@@ -271,7 +271,16 @@ impl AppleHttpClient {
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
-        if preserve_server_errors && status.is_server_error() {
+        // Apple's login edge sometimes rejects an under-attested request before it
+        // reaches account processing: a 5xx, an un-followable 3xx (a 301/302 with
+        // no usable `Location`, which reqwest leaves for us), or a generic 404
+        // HTML page. These carry no account data; surface them with a null body so
+        // the caller can retry instead of failing on the undecodable HTML.
+        if preserve_server_errors
+            && (status.is_server_error()
+                || status.is_redirection()
+                || status == reqwest::StatusCode::NOT_FOUND)
+        {
             return Ok(HttpResponse {
                 status,
                 headers: resp_headers,

@@ -13,6 +13,64 @@ const MAX_RETRIES: u32 = 3;
 const RETRY_DELAY_MS: u64 = 1000;
 /// Spurious `failureType` Apple sometimes returns on the first attempt; retried.
 const SPURIOUS_FAILURE_TYPE: &str = "-5000";
+
+/// A transient, retryable outcome from Apple's login endpoint that carries no
+/// account data, as opposed to a real answer (success or a credential failure).
+#[derive(Clone, Copy)]
+enum TransientReason {
+    /// 5xx from the endpoint.
+    ServerError,
+    /// An un-followable redirect (a 301/302 with no usable `Location`) or a
+    /// generic 404 page: Apple's edge rejecting the request before it reaches
+    /// account processing, often because the request was under-attested.
+    EdgeRejection,
+    /// 204 with an empty body: no answer either way.
+    NoContent,
+}
+
+impl TransientReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ServerError => "server_error",
+            Self::EdgeRejection => "edge_rejection",
+            Self::NoContent => "no_auth_data",
+        }
+    }
+
+    fn exhausted_error(self, status: reqwest::StatusCode) -> AppStoreError {
+        match self {
+            Self::ServerError => AppStoreError::NetworkError(format!(
+                "Apple authentication endpoint returned HTTP {status} after retries"
+            )),
+            Self::EdgeRejection => AppStoreError::NetworkError(format!(
+                "Apple's login endpoint rejected the request with HTTP {status} before evaluating \
+                 the account, returning no account data. This is a transient edge rejection (often \
+                 an under-attested request); retry, or use the signed Store login, which is the \
+                 default on macOS."
+            )),
+            Self::NoContent => AppStoreError::NetworkError(
+                "Apple returned HTTP 204 without authentication data; this does not confirm whether the password is correct".into(),
+            ),
+        }
+    }
+}
+
+/// Classify a login response status (and whether its body was empty) as a
+/// transient, retryable outcome. Returns `None` for a real answer to parse.
+fn transient_retry_reason(
+    status: reqwest::StatusCode,
+    body_is_null: bool,
+) -> Option<TransientReason> {
+    if status.is_server_error() {
+        Some(TransientReason::ServerError)
+    } else if status.is_redirection() || status == reqwest::StatusCode::NOT_FOUND {
+        Some(TransientReason::EdgeRejection)
+    } else if status == reqwest::StatusCode::NO_CONTENT && body_is_null {
+        Some(TransientReason::NoContent)
+    } else {
+        None
+    }
+}
 #[cfg(target_os = "macos")]
 pub(super) const CONFIGURATOR_USER_AGENT: &str =
     "Configurator/2.21 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6";
@@ -81,7 +139,7 @@ async fn authenticate_with_attempt(
             .await
             .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
 
-        if response.status.is_server_error() {
+        if let Some(reason) = transient_retry_reason(response.status, response.body.is_null()) {
             if attempt < MAX_RETRIES - 1 {
                 tracing::warn!(
                     service = "ipakeep",
@@ -90,38 +148,15 @@ async fn authenticate_with_attempt(
                     event_name = "auth.retry.scheduled",
                     attempt = attempt + 1,
                     max_attempts = MAX_RETRIES,
-                    reason = "server_error",
+                    reason = reason.label(),
+                    status = %response.status,
                     retry_after_ms = RETRY_DELAY_MS,
                     "retrying Apple authentication"
                 );
                 tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                 continue;
             }
-            return Err(AppStoreError::NetworkError(format!(
-                "Apple authentication endpoint returned HTTP {} after retries",
-                response.status
-            )));
-        }
-
-        if response.status == reqwest::StatusCode::NO_CONTENT && response.body.is_null() {
-            if attempt < MAX_RETRIES - 1 {
-                tracing::warn!(
-                    service = "ipakeep",
-                    component = "authentication",
-                    operation = "apple_login",
-                    event_name = "auth.retry.scheduled",
-                    attempt = attempt + 1,
-                    max_attempts = MAX_RETRIES,
-                    reason = "no_auth_data",
-                    retry_after_ms = RETRY_DELAY_MS,
-                    "retrying Apple authentication"
-                );
-                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                continue;
-            }
-            return Err(AppStoreError::NetworkError(
-                "Apple returned HTTP 204 without authentication data; this does not confirm whether the password is correct".into(),
-            ));
+            return Err(reason.exhausted_error(response.status));
         }
 
         let failure_type = response
@@ -339,6 +374,31 @@ mod tests {
         assert!(matches!(
             result,
             Err(AppStoreError::AuthenticationFailed(_))
+        ));
+    }
+
+    #[test]
+    fn edge_rejections_are_classified_for_retry() {
+        use reqwest::StatusCode;
+        let is_edge = |s| {
+            matches!(
+                transient_retry_reason(s, true),
+                Some(TransientReason::EdgeRejection)
+            )
+        };
+        assert!(is_edge(StatusCode::MOVED_PERMANENTLY));
+        assert!(is_edge(StatusCode::FOUND));
+        assert!(is_edge(StatusCode::NOT_FOUND));
+        assert!(transient_retry_reason(StatusCode::OK, true).is_none());
+        assert!(transient_retry_reason(StatusCode::UNAUTHORIZED, true).is_none());
+        assert!(matches!(
+            transient_retry_reason(StatusCode::NO_CONTENT, true),
+            Some(TransientReason::NoContent)
+        ));
+        assert!(transient_retry_reason(StatusCode::NO_CONTENT, false).is_none());
+        assert!(matches!(
+            transient_retry_reason(StatusCode::INTERNAL_SERVER_ERROR, true),
+            Some(TransientReason::ServerError)
         ));
     }
 }
