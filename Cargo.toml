@@ -42,7 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # IPA manipulation — Apple IPAs only use Stored/Deflated; disabling the other
 # codecs (bzip2, lzma, zstd, xz, ppmd, aes-crypto) trims the transitive surface.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9.3", default-features = false, features = ["deflate"] }
 
 # Interactive prompts
 dialoguer = "0.12"

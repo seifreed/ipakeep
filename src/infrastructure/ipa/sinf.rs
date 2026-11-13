@@ -107,7 +107,7 @@ fn find_app_bundle_prefix<R: Read + Seek>(
 ) -> Result<String, String> {
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name();
+        let name = file.name().map_err(|error| error.to_string())?;
         if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
             return Ok(name.trim_end_matches("Info.plist").to_string());
         }

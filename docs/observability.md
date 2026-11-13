@@ -218,6 +218,25 @@ Validation: 277 tests pass, 1 ignored; `cargo check`, `cargo build`,
 macOS. `cargo check --target aarch64-unknown-linux-gnu` passes in a Rust 1.94
 Linux container without warnings.
 
+### Milestone 12 — dependency advisory remediation
+
+GitHub reported five open advisories for the direct `zip` 8.6.0 dependency.
+The project reads untrusted IPA archives and calls `ZipArchive::extract` in
+both device and simulator installers, so those advisories were reachable.
+`zip` is updated to 9.5.1. The v9 fallible entry-name API is handled by
+propagating decode errors at all seven read/write call sites. The same audit
+also found vulnerable `h2` and `quick-xml` transitive versions, so compatible
+parent/lockfile updates moved them to patched releases. Tokio, rustix,
+chacha20, and anyhow were updated to resolve current audit findings.
+
+Validation: `cargo audit` reports no vulnerabilities or warnings; all 277
+tests pass with 1 ignored, and `cargo check`, `cargo build`, Clippy, formatting,
+and Linux cross-compilation pass. The critical ZIP parser advisory is patched
+in 9.0.5 and later ([upstream advisory](https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj));
+the high-severity `quick-xml` issues are fixed in 0.41.0 and later
+([namespace allocation](https://rustsec.org/advisories/RUSTSEC-2026-0195.html),
+[duplicate-attribute parsing](https://rustsec.org/advisories/RUSTSEC-2026-0194.html)).
+
 ## Operator guide
 
 ### Configuration and destination

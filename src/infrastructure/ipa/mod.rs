@@ -56,7 +56,7 @@ pub fn patch_ipa(
 
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name().to_string();
+        let name = file.name().map_err(|error| error.to_string())?.into_owned();
 
         if sinf_target_names.contains(&name) {
             continue;
@@ -114,7 +114,7 @@ pub(crate) fn copy_zip_entry<W: Write + Seek, R: Read>(
     writer: &mut zip::ZipWriter<W>,
     mut file: zip::read::ZipFile<'_, R>,
 ) -> zip::result::ZipResult<()> {
-    let name = file.name().to_string();
+    let name = file.name()?.into_owned();
 
     if file.is_dir() {
         let options = entry_options(&file, 0o755);

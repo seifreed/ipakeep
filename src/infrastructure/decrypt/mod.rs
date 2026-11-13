@@ -233,7 +233,7 @@ fn repack(ipa_bytes: &[u8], patched: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u
 
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| e.to_string())?;
-        let name = file.name().to_string();
+        let name = file.name().map_err(|error| error.to_string())?.into_owned();
         if let Some(bytes) = patched.get(&name) {
             let options = entry_options(&file, 0o755);
             writer
@@ -318,7 +318,7 @@ fn read_if_macho<R: Read + Seek>(
     index: usize,
 ) -> Result<Option<(String, Vec<u8>)>, String> {
     let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
-    let name = file.name().to_string();
+    let name = file.name().map_err(|error| error.to_string())?.into_owned();
     if !file.is_file() {
         return Ok(None);
     }
@@ -345,7 +345,8 @@ fn read_app_info<R: Read + Seek>(
             .by_index(i)
             .map_err(|e| e.to_string())?
             .name()
-            .to_string();
+            .map_err(|error| error.to_string())?
+            .into_owned();
         if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
             info_name = Some(name);
             break;
@@ -638,7 +639,8 @@ fn find_info_plist_name<R: Read + Seek>(
             .by_index(i)
             .map_err(|e| e.to_string())?
             .name()
-            .to_string();
+            .map_err(|error| error.to_string())?
+            .into_owned();
         if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
             return Ok(Some(name));
         }
