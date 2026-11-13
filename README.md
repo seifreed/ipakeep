@@ -102,6 +102,7 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 | **Legacy auth** | Classic App Store authentication flow with `-5000` retry handling |
 | **Search & lookup** | Public iTunes Search/Lookup by term or bundle identifier |
 | **Purchase** | Acquire a free-app license via `buyProduct` |
+| **Owned apps** | `purchases` lists the apps the authenticated account already owns (modern-macOS signed session) |
 | **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist`; output is **still FairPlay-encrypted** |
 | **Device decryption** | Orchestrates a Frida dump of the app **running on a jailbroken device** (or Apple Silicon Mac with SIP off), then patches and verifies; cannot decrypt the file alone |
 | **Offline decryption** | `decrypt offline` decrypts a local encrypted IPA natively (no running app, no external tool, any minimum iOS) with a per-account credential, and verifies the result |
@@ -110,6 +111,7 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
 | **Cross-platform Anisette** | Local modern ADI on macOS, auto-managed Docker anisette server elsewhere |
+| **MCP server** | `mcp` runs ipakeep as a Model Context Protocol server over stdio, exposing `search`, `list_versions`, `auth_info`, `download` and `purchases` as tools for AI agents |
 | **CLI + Library** | Use as a command-line tool or as a Rust crate |
 
 ### Supported Outputs
