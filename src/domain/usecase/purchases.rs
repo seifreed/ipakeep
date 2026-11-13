@@ -29,20 +29,32 @@ where
 
     /// List the apps the authenticated account already owns.
     ///
-    /// `limit` caps the number of apps returned, most recent purchase first.
+    /// `limit` caps fetched records, most recent purchase first. `platform`
+    /// optionally retains apps licensed for that platform (case-insensitive).
     ///
     /// # Errors
     ///
     /// Returns `AppStoreError::AuthenticationFailed` if not logged in.
     /// Returns any `AppStoreError` surfaced by the repository.
-    pub async fn execute(&self, limit: u32) -> Result<Vec<OwnedApp>, AppStoreError> {
+    pub async fn execute(
+        &self,
+        limit: u32,
+        platform: Option<&str>,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
         let account = self
             .credentials
             .load_account()
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
             .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
-        let apps = self.app_store.list_purchases(&account, limit).await?;
+        let mut apps = self.app_store.list_purchases(&account, limit).await?;
+        if let Some(platform) = platform {
+            apps.retain(|app| {
+                app.platforms
+                    .iter()
+                    .any(|owned_platform| owned_platform.eq_ignore_ascii_case(platform))
+            });
+        }
         Ok(apps)
     }
 }
@@ -88,7 +100,7 @@ mod tests {
         let credentials = InMemoryCredentialRepository::new();
         let use_case = Purchases::new(app_store, credentials);
 
-        let result: Result<Vec<OwnedApp>, AppStoreError> = use_case.execute(10).await;
+        let result: Result<Vec<OwnedApp>, AppStoreError> = use_case.execute(10, None).await;
 
         assert!(
             matches!(result, Err(AppStoreError::AuthenticationFailed(_))),
@@ -103,7 +115,7 @@ mod tests {
         let credentials = InMemoryCredentialRepository::new().with_account(account());
         let use_case = Purchases::new(app_store.clone(), credentials);
 
-        let apps = use_case.execute(25).await.unwrap();
+        let apps = use_case.execute(25, None).await.unwrap();
 
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].id, 894_490_049);
@@ -120,8 +132,30 @@ mod tests {
         let credentials = InMemoryCredentialRepository::new().with_account(account());
         let use_case = Purchases::new(app_store, credentials);
 
-        let error = use_case.execute(10).await.unwrap_err();
+        let error = use_case.execute(10, None).await.unwrap_err();
 
         assert!(matches!(error, AppStoreError::NetworkError(_)));
+    }
+
+    #[tokio::test]
+    async fn purchases_filters_platform_case_insensitively() {
+        let app_store = FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![
+            owned_app(),
+            OwnedApp {
+                id: 8,
+                bundle_id: "com.example.macapp".into(),
+                name: "Mac app".into(),
+                version: "1.0".into(),
+                platforms: vec!["macos".into()],
+                purchase_date: None,
+            },
+        ]));
+        let credentials = InMemoryCredentialRepository::new().with_account(account());
+        let use_case = Purchases::new(app_store, credentials);
+
+        let apps = use_case.execute(25, Some("IPad")).await.unwrap();
+
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].id, 894_490_049);
     }
 }

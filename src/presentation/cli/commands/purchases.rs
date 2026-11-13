@@ -21,7 +21,7 @@ where
 {
     let use_case = Purchases::new(app_store, credentials);
     let apps = use_case
-        .execute(limit)
+        .execute(limit, None)
         .await
         .map_err(|e| format!("purchases failed: {e}"))?;
 

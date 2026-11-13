@@ -158,17 +158,10 @@ where
             Some(value) => value,
             None => 10,
         };
-        let mut apps = Purchases::new(self.app_store.clone(), self.credentials.clone())
-            .execute(limit)
+        let apps = Purchases::new(self.app_store.clone(), self.credentials.clone())
+            .execute(limit, args.platform.as_deref())
             .await
             .map_err(|error| format!("purchases failed: {error}"))?;
-        if let Some(platform) = args.platform {
-            apps.retain(|app| {
-                app.platforms
-                    .iter()
-                    .any(|owned_platform| owned_platform.eq_ignore_ascii_case(&platform))
-            });
-        }
         to_value(&PurchasesOutput {
             count: apps.len(),
             apps,
