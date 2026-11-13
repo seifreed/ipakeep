@@ -275,6 +275,11 @@ pub enum DecryptCommands {
         /// Output IPA path.
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Remove app extensions that could not be dumped instead of failing
+        /// (e.g. notification services that only run when iOS triggers them).
+        #[arg(long)]
+        drop_undumped_extensions: bool,
     },
 
     /// Dump an iOS app on this Apple Silicon Mac (no jailbreak; needs SIP disabled).

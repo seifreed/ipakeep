@@ -486,7 +486,7 @@ fn patch_thins_fat_binary_dropping_undumped_slices() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
 
-    let outcome = patch_with_report(&ipa, dir.path()).unwrap();
+    let outcome = patch_with_report(&ipa, dir.path(), false).unwrap();
 
     assert_eq!(
         outcome.dropped_slices,
@@ -564,7 +564,7 @@ fn patch_accepts_matching_uuid_and_warns_without_one() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
 
-    let unverified = patch_with_report(&ipa, dir.path()).unwrap();
+    let unverified = patch_with_report(&ipa, dir.path(), false).unwrap();
     assert_eq!(unverified.unverified_slices.len(), 1);
 
     std::fs::write(
@@ -572,7 +572,7 @@ fn patch_accepts_matching_uuid_and_warns_without_one() {
         "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA\n",
     )
     .unwrap();
-    let verified = patch_with_report(&ipa, dir.path()).unwrap();
+    let verified = patch_with_report(&ipa, dir.path(), false).unwrap();
     assert!(verified.unverified_slices.is_empty());
     assert!(verify_ipa(&verified.ipa).unwrap().ok);
 }
@@ -640,4 +640,34 @@ fn patch_reassembles_chunked_dump() {
     std::fs::remove_file(dir.path().join("TestExec.arm64.bin.part.0")).unwrap();
     let err = patch_ipa_decrypted(&ipa, dir.path()).unwrap_err();
     assert!(err.contains("chunk at offset 48"), "{err}");
+}
+
+#[test]
+fn undumped_extension_fails_with_hint_or_is_dropped_on_request() {
+    let encrypted = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11);
+    let ipa = build_ipa_with(&[
+        ("Payload/Test.app/TestExec", &encrypted),
+        ("Payload/Test.app/PlugIns/Notify.appex/Notify", &encrypted),
+        ("Payload/Test.app/PlugIns/Notify.appex/Info.plist", b"plist"),
+    ]);
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("TestExec.arm64.bin"),
+        vec![0xAB_u8; CRYPTSIZE as usize],
+    )
+    .unwrap();
+
+    let err = patch_ipa_decrypted(&ipa, dir.path()).unwrap_err();
+    assert!(err.contains("--drop-undumped-extensions"), "{err}");
+
+    let patched = patch_ipa_decrypted_with(&ipa, dir.path(), true).unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(patched)).unwrap();
+    let names: Vec<String> = (0..archive.len())
+        .map(|i| archive.by_index(i).unwrap().name().unwrap().into_owned())
+        .collect();
+    assert!(names.iter().any(|name| name == "Payload/Test.app/TestExec"));
+    assert!(
+        names.iter().all(|name| !name.contains("Notify.appex")),
+        "{names:?}"
+    );
 }

@@ -8,7 +8,7 @@
 //! The argv builders are pure and unit-tested; the actual execution needs a
 //! device (USB) or an Apple Silicon Mac (`Local`).
 
-use super::{ensure_decrypted, patch_ipa_decrypted};
+use super::{ensure_decrypted, patch_ipa_decrypted_with};
 use crate::infrastructure::exec::{
     newest_ipa, observed_output, require_program, run_inherit, temp_dir,
 };
@@ -81,6 +81,8 @@ pub struct DumpRequest<'a> {
     pub settle: f64,
     /// Spawn the app rather than attach (builtin).
     pub spawn: bool,
+    /// Remove app extensions without a dump instead of failing (builtin).
+    pub drop_undumped_extensions: bool,
 }
 
 /// Run the dump and return the decrypted IPA bytes.
@@ -128,7 +130,11 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     run_inherit(command)?;
 
     let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
-    ensure_decrypted(patch_ipa_decrypted(&ipa_bytes, work)?)
+    ensure_decrypted(patch_ipa_decrypted_with(
+        &ipa_bytes,
+        work,
+        req.drop_undumped_extensions,
+    )?)
 }
 
 /// Copy the installed, still-encrypted bundle off the device so the patch base

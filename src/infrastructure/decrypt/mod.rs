@@ -17,7 +17,7 @@ pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
 use macho::Slice;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
@@ -166,7 +166,31 @@ fn slice_report(slice: &Slice, entry: &str) -> SliceReport {
 /// Returns an error if a dumped slice is missing/mis-sized, belongs to a
 /// different build (`LC_UUID` mismatch), or the archive cannot be rewritten.
 pub fn patch_ipa_decrypted(ipa_bytes: &[u8], from_dir: &Path) -> Result<Vec<u8>, String> {
-    let outcome = patch_with_report(ipa_bytes, from_dir)?;
+    patch_ipa_decrypted_with(ipa_bytes, from_dir, false)
+}
+
+/// [`patch_ipa_decrypted`], optionally removing app extensions (`.appex`)
+/// that have no dump instead of failing. Extensions such as notification
+/// services only run when iOS triggers them, so they often cannot be dumped;
+/// dropping them still yields a working decrypted main app.
+///
+/// # Errors
+///
+/// Same as [`patch_ipa_decrypted`], except undumped extensions are removed
+/// when `drop_undumped_extensions` is set.
+pub fn patch_ipa_decrypted_with(
+    ipa_bytes: &[u8],
+    from_dir: &Path,
+    drop_undumped_extensions: bool,
+) -> Result<Vec<u8>, String> {
+    let outcome = patch_with_report(ipa_bytes, from_dir, drop_undumped_extensions)?;
+    for bundle in &outcome.dropped_bundles {
+        tracing::warn!(
+            event_name = "decrypt.patch.extension_dropped",
+            bundle = %bundle,
+            "no dump for app extension; removed it from the IPA"
+        );
+    }
     for slice in &outcome.dropped_slices {
         tracing::warn!(
             event_name = "decrypt.patch.slice_dropped",
@@ -192,10 +216,17 @@ struct PatchOutcome {
     dropped_slices: Vec<String>,
     /// `entry[arch]` of patched slices whose dump carried no `LC_UUID`.
     unverified_slices: Vec<String>,
+    /// `.appex/` archive prefixes removed because they had no dump.
+    dropped_bundles: BTreeSet<String>,
 }
 
-fn patch_with_report(ipa_bytes: &[u8], from_dir: &Path) -> Result<PatchOutcome, String> {
+fn patch_with_report(
+    ipa_bytes: &[u8],
+    from_dir: &Path,
+    drop_undumped_extensions: bool,
+) -> Result<PatchOutcome, String> {
     let mut scan = open_archive(ipa_bytes)?;
+    let mut dropped_bundles = BTreeSet::new();
     let mut patched: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut dropped_slices = Vec::new();
     let mut unverified_slices = Vec::new();
@@ -225,13 +256,29 @@ fn patch_with_report(ipa_bytes: &[u8], from_dir: &Path) -> Result<PatchOutcome, 
         }
 
         if !touched {
-            if let Some((_, filename)) = missing.first() {
-                return Err(format!(
-                    "missing dumped slice {}: no dump for {name}",
-                    from_dir.join(filename).display()
-                ));
+            let Some((_, filename)) = missing.first() else {
+                continue;
+            };
+            match extension_bundle_prefix(&name) {
+                Some(bundle) if drop_undumped_extensions => {
+                    dropped_bundles.insert(bundle.to_string());
+                    continue;
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "missing dumped slice {}: no dump for app extension {name}; \
+                         trigger the extension while dumping, or pass \
+                         --drop-undumped-extensions to remove it",
+                        from_dir.join(filename).display()
+                    ));
+                }
+                None => {
+                    return Err(format!(
+                        "missing dumped slice {}: no dump for {name}",
+                        from_dir.join(filename).display()
+                    ));
+                }
             }
-            continue;
         }
         if !missing.is_empty() {
             bytes = macho::retain_slices(&bytes, |index| {
@@ -247,15 +294,30 @@ fn patch_with_report(ipa_bytes: &[u8], from_dir: &Path) -> Result<PatchOutcome, 
         patched.insert(name, bytes);
     }
 
+    patched.retain(|name, _| !in_dropped_bundle(name, &dropped_bundles));
     if patched.is_empty() {
         return Err("no encrypted Mach-O slices found to patch".into());
     }
 
     Ok(PatchOutcome {
-        ipa: repack(ipa_bytes, &patched)?,
+        ipa: repack(ipa_bytes, &patched, &dropped_bundles)?,
         dropped_slices,
         unverified_slices,
+        dropped_bundles,
     })
+}
+
+/// Archive prefix of the innermost `.appex` bundle containing `name`, e.g.
+/// `Payload/App.app/PlugIns/Share.appex/`.
+fn extension_bundle_prefix(name: &str) -> Option<&str> {
+    name.rfind(".appex/")
+        .map(|end| &name[..end + ".appex/".len()])
+}
+
+fn in_dropped_bundle(name: &str, dropped: &BTreeSet<String>) -> bool {
+    dropped
+        .iter()
+        .any(|bundle| name.starts_with(bundle.as_str()))
 }
 
 /// Reject a dump whose `LC_UUID` differs from the IPA slice's. Returns `true`
@@ -414,13 +476,20 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-fn repack(ipa_bytes: &[u8], patched: &BTreeMap<String, Vec<u8>>) -> Result<Vec<u8>, String> {
+fn repack(
+    ipa_bytes: &[u8],
+    patched: &BTreeMap<String, Vec<u8>>,
+    dropped_bundles: &BTreeSet<String>,
+) -> Result<Vec<u8>, String> {
     let mut archive = open_archive(ipa_bytes)?;
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
 
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| e.to_string())?;
         let name = file.name().map_err(|error| error.to_string())?.into_owned();
+        if in_dropped_bundle(&name, dropped_bundles) {
+            continue;
+        }
         if let Some(bytes) = patched.get(&name) {
             let options = entry_options(&file, 0o755);
             writer
@@ -790,7 +859,7 @@ pub fn set_min_os(ipa_bytes: &[u8], version: &str) -> Result<Vec<u8>, String> {
     if patched.is_empty() {
         return Err("no LC_BUILD_VERSION or Info.plist found to patch".into());
     }
-    repack(ipa_bytes, &patched)
+    repack(ipa_bytes, &patched, &BTreeSet::new())
 }
 
 /// Parse `"x"`, `"x.y"`, or `"x.y.z"` into a packed `LC_BUILD_VERSION` word.

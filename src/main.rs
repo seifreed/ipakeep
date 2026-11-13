@@ -283,6 +283,7 @@ async fn dispatch_decrypt(
             spawn,
             settle,
             output,
+            drop_undumped_extensions,
         } => decrypt::handle_dump(&decrypt::DumpArgs {
             bundle_id: &bundle_id,
             dumper: &dumper,
@@ -292,6 +293,7 @@ async fn dispatch_decrypt(
             spawn,
             settle,
             output: output.as_deref(),
+            drop_undumped_extensions,
         }),
         DecryptCommands::DumpMac {
             bundle_id,

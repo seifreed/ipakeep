@@ -141,6 +141,8 @@ pub struct DumpArgs<'a> {
     pub settle: f64,
     /// Output IPA path.
     pub output: Option<&'a Path>,
+    /// Remove app extensions that could not be dumped instead of failing.
+    pub drop_undumped_extensions: bool,
 }
 
 /// Drive a dumper to produce a decrypted IPA.
@@ -162,6 +164,7 @@ pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
         agent: args.agent,
         settle: args.settle,
         spawn: args.spawn,
+        drop_undumped_extensions: args.drop_undumped_extensions,
     };
     let bytes = run_dump(&req)?;
     let out = args
@@ -193,6 +196,7 @@ pub fn handle_dump_mac(
         spawn: true,
         settle,
         output,
+        drop_undumped_extensions: false,
     })
 }
 
