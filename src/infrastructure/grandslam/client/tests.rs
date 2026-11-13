@@ -112,7 +112,7 @@ fn two_factor_required_result_extracts_identity_from_encrypted_spd() {
     }))
     .expect("encode spd plist");
     let inner = serde_json::json!({
-        "Status": {"hsc": 409, "ec": 0},
+        "Status": {"hsc": 409, "ec": 0, "au": "secondaryAuth"},
         "spd": BASE64.encode(encrypt_spd_fixture(session_key, &spd)),
     });
 
@@ -120,8 +120,13 @@ fn two_factor_required_result_extracts_identity_from_encrypted_spd() {
         .expect("2FA result should decode identity fields from spd");
 
     match result {
-        SrpCompleteResult::TwoFactorRequired { dsid, idms_token } => {
+        SrpCompleteResult::TwoFactorRequired {
+            dsid,
+            idms_token,
+            method,
+        } => {
             assert_eq!((dsid, idms_token), ("adsid-xyz".into(), "idms-xyz".into()));
+            assert_eq!(method, crate::domain::error::TwoFactorMethod::Sms);
         }
         SrpCompleteResult::Success(_) => panic!("expected TwoFactorRequired, got Success"),
     }

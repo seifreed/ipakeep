@@ -2,6 +2,17 @@
 
 use thiserror::Error;
 
+/// Two-factor method requested by Apple's authentication response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TwoFactorMethod {
+    /// Apple offered a trusted-device verification code.
+    TrustedDevice,
+    /// Apple requires an SMS verification code.
+    Sms,
+    /// Apple did not specify a method or returned an unrecognized value.
+    Unspecified,
+}
+
 /// Errors that can occur during App Store operations.
 #[derive(Debug, Clone, Error)]
 pub enum AppStoreError {
@@ -16,6 +27,8 @@ pub enum AppStoreError {
         dsid: String,
         /// IDMS token for continuing the 2FA flow.
         idms_token: String,
+        /// Method Apple selected, when supplied by the authentication response.
+        method: TwoFactorMethod,
     },
 
     /// The Apple account is disabled.

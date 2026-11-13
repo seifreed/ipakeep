@@ -1,5 +1,5 @@
 use crate::domain::entity::Account;
-use crate::domain::error::AppStoreError;
+use crate::domain::error::{AppStoreError, TwoFactorMethod};
 use crate::infrastructure::grandslam::{
     anisette::{AnisetteData, resolve_anisette},
     srp::derive_srp_password,
@@ -164,6 +164,8 @@ pub enum SrpCompleteResult {
         dsid: String,
         /// IDMS token.
         idms_token: String,
+        /// Method selected by Apple's authentication response.
+        method: TwoFactorMethod,
     },
 }
 

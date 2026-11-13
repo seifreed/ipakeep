@@ -1,6 +1,7 @@
 //! Interactive `GrandSlam` 2FA flow for auth login.
 
 use super::{LoginOptions, output::format_login_account};
+use crate::domain::error::TwoFactorMethod;
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthLogin, GrandslamCredentials};
 use crate::presentation::cli::output::OutputFormat;
@@ -15,6 +16,7 @@ pub(super) struct GrandSlamLoginContext<'a> {
 pub(super) struct GrandSlamChallenge<'a> {
     pub(super) dsid: &'a str,
     pub(super) idms_token: &'a str,
+    pub(super) method: TwoFactorMethod,
 }
 
 pub(super) async fn handle_2fa<R, C>(
@@ -38,8 +40,8 @@ where
         guid: login.guid,
         store_front: login.store_front,
     };
-    let method = select_2fa_method()?;
-    let account = if method == 0 {
+    let choice = select_2fa_method(challenge.method)?;
+    let account = if choice == 0 {
         complete_trusted_device(use_case, &credentials, challenge).await
     } else {
         complete_sms(use_case, &credentials, challenge).await
@@ -50,11 +52,12 @@ where
     Ok(())
 }
 
-fn select_2fa_method() -> Result<usize, String> {
+fn select_2fa_method(method: TwoFactorMethod) -> Result<usize, String> {
+    let default = usize::from(method == TwoFactorMethod::Sms);
     dialoguer::Select::new()
         .with_prompt("Choose 2FA method")
         .items(["Trusted device", "SMS"])
-        .default(0)
+        .default(default)
         .interact()
         .map_err(|e| format!("failed to select 2FA method: {e}"))
 }

@@ -1,6 +1,6 @@
 //! `GrandSlam` SRP response handling.
 
-use crate::domain::error::AppStoreError;
+use crate::domain::error::{AppStoreError, TwoFactorMethod};
 use crate::infrastructure::grandslam::{
     anisette::AnisetteData,
     client::{SrpCompleteResult, SrpInitResponse},
@@ -101,6 +101,7 @@ pub(super) fn two_factor_required_result(
         .filter(|s| !s.is_empty())
         .unwrap_or(account.directory_services_id);
     let idms_token = account.idms_token.unwrap_or_default();
+    let method = two_factor_method(inner);
 
     if dsid.is_empty() || idms_token.is_empty() {
         return Err(AppStoreError::AuthenticationFailed(
@@ -108,7 +109,23 @@ pub(super) fn two_factor_required_result(
         ));
     }
 
-    Ok(SrpCompleteResult::TwoFactorRequired { dsid, idms_token })
+    Ok(SrpCompleteResult::TwoFactorRequired {
+        dsid,
+        idms_token,
+        method,
+    })
+}
+
+fn two_factor_method(inner: &JsonValue) -> TwoFactorMethod {
+    match inner
+        .get("Status")
+        .and_then(|status| status.get("au"))
+        .and_then(JsonValue::as_str)
+    {
+        Some("trustedDeviceSecondaryAuth") => TwoFactorMethod::TrustedDevice,
+        Some("secondaryAuth") => TwoFactorMethod::Sms,
+        _ => TwoFactorMethod::Unspecified,
+    }
 }
 
 pub(super) fn verify_server_proof_response(
@@ -159,6 +176,23 @@ mod tests {
             headers: HashMap::from([("X-Apple-I-MD".into(), "otp".into())]),
             cpd: json!({"X-Apple-I-MD": "otp"}),
         }
+    }
+
+    #[test]
+    fn two_factor_method_uses_apple_status_and_defaults_unknown_values() {
+        assert_eq!(
+            two_factor_method(&json!({"Status": {"au": "trustedDeviceSecondaryAuth"}})),
+            TwoFactorMethod::TrustedDevice
+        );
+        assert_eq!(
+            two_factor_method(&json!({"Status": {"au": "secondaryAuth"}})),
+            TwoFactorMethod::Sms
+        );
+        assert_eq!(
+            two_factor_method(&json!({"Status": {"au": "future-method"}})),
+            TwoFactorMethod::Unspecified
+        );
+        assert_eq!(two_factor_method(&json!({})), TwoFactorMethod::Unspecified);
     }
 
     #[test]

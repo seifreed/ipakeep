@@ -124,7 +124,11 @@ where
             println!("{output}");
             Ok(())
         }
-        Err(AppStoreError::AuthCodeRequired { dsid, idms_token }) => {
+        Err(AppStoreError::AuthCodeRequired {
+            dsid,
+            idms_token,
+            method,
+        }) => {
             grandslam::handle_2fa(
                 use_case,
                 GrandSlamLoginContext {
@@ -136,6 +140,7 @@ where
                 GrandSlamChallenge {
                     dsid: &dsid,
                     idms_token: &idms_token,
+                    method,
                 },
                 options,
                 format,
