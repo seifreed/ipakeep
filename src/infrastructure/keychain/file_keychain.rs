@@ -15,6 +15,7 @@ use std::time::Instant;
 ///
 /// Credentials are stored as JSON at `~/.ipakeep/auth.json`.
 /// The directory is created on first save if it doesn't exist.
+#[derive(Clone)]
 pub struct FileKeychain {
     config_dir: PathBuf,
 }

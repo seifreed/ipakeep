@@ -19,7 +19,7 @@ path = "src/lib.rs"
 clap = { version = "4", features = ["derive"] }
 
 # Async
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "time", "io-std", "io-util"] }
 async-trait = "0.1"
 
 # HTTP

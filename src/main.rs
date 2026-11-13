@@ -21,6 +21,7 @@ use ipakeep::infrastructure::keychain::MacOSKeychain;
 ///
 /// This allows `main.rs` to choose between `FileKeychain` and `MacOSKeychain`
 /// without changing the generic handler signatures in the presentation layer.
+#[derive(Clone)]
 enum AnyKeychain {
     /// File-based JSON keychain.
     File(FileKeychain),
@@ -224,6 +225,9 @@ async fn dispatch_command(
         Commands::Simulator { action } => dispatch_simulator(action),
         Commands::Device { action } => dispatch_device(action),
         Commands::Decrypt { action } => dispatch_decrypt(action, format, keychain).await,
+        Commands::Mcp => {
+            ipakeep::presentation::cli::commands::mcp::handle_mcp(app_store, keychain).await
+        }
     }
 }
 
@@ -440,6 +444,7 @@ fn command_name(command: &Commands) -> &'static str {
             DecryptCommands::DumpMac { .. } => "decrypt.dump_mac",
             DecryptCommands::Provision { .. } => "decrypt.provision",
         },
+        Commands::Mcp => "mcp",
     }
 }
 
