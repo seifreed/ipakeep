@@ -14,6 +14,7 @@ mod macho;
 pub use dump::{DumpDevice, DumpRequest, Dumper, run_dump};
 pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 
+use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
 use macho::Slice;
 use std::collections::BTreeMap;
@@ -280,11 +281,12 @@ pub fn resign_app(
 }
 
 pub(crate) fn extract_entitlements(executable: &Path) -> Result<String, String> {
-    let output = Command::new("/usr/bin/codesign")
+    let mut command = Command::new("/usr/bin/codesign");
+    command
         .args(["-d", "--entitlements", ":-", "--xml"])
-        .arg(executable)
-        .output()
-        .map_err(|e| format!("failed to run codesign: {e}"))?;
+        .arg(executable);
+    let output =
+        observed_output(&mut command).map_err(|e| format!("failed to run codesign: {e}"))?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }

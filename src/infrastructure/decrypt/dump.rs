@@ -10,7 +10,7 @@
 
 use super::{ensure_decrypted, patch_ipa_decrypted};
 use crate::infrastructure::exec::{
-    find_in_path, newest_ipa, require_program, run_inherit, temp_dir,
+    find_in_path, newest_ipa, observed_output, require_program, run_inherit, temp_dir,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -133,11 +133,9 @@ fn python_with_frida() -> Result<String, String> {
     }
     candidates.dedup();
     for candidate in candidates {
-        if Command::new(&candidate)
-            .args(["-c", "import frida"])
-            .output()
-            .is_ok_and(|output| output.status.success())
-        {
+        let mut command = Command::new(&candidate);
+        command.args(["-c", "import frida"]);
+        if observed_output(&mut command).is_ok_and(|output| output.status.success()) {
             return Ok(candidate);
         }
     }

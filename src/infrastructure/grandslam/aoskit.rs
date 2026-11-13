@@ -6,6 +6,7 @@
 
 #![allow(unsafe_code, unexpected_cfgs, unsafe_op_in_unsafe_fn)]
 
+use crate::infrastructure::exec::observed_output;
 use libc::{RTLD_LAZY, c_char, dlopen};
 use objc::runtime::{Class, Object};
 use std::collections::HashMap;
@@ -28,10 +29,9 @@ pub fn retrieve_otp_headers(dsid: &str) -> Option<HashMap<String, String>> {
 /// Returns the machine hardware UUID (for `X-Mme-Device-Id`).
 /// Uses `ioreg` instead of `AOSUtilities` FFI to avoid uncatchable Objective-C exceptions.
 pub fn machine_udid() -> Option<String> {
-    let output = std::process::Command::new("ioreg")
-        .args(["-c", "IOPlatformExpertDevice", "-d", "2"])
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("ioreg");
+    command.args(["-c", "IOPlatformExpertDevice", "-d", "2"]);
+    let output = observed_output(&mut command).ok()?;
     let text = String::from_utf8(output.stdout).ok()?;
     // Format: "IOPlatformUUID" = "CD4BA2D3-B68F-5F4C-A716-E5DFD2F14FC5"
     text.lines()
@@ -47,10 +47,9 @@ pub fn machine_udid() -> Option<String> {
 /// `system_profiler -xml` (whose `<key>`/`<string>` split made a naive parser
 /// return the literal key name).
 pub fn machine_serial_number() -> Option<String> {
-    let output = std::process::Command::new("ioreg")
-        .args(["-c", "IOPlatformExpertDevice", "-d", "2"])
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("ioreg");
+    command.args(["-c", "IOPlatformExpertDevice", "-d", "2"]);
+    let output = observed_output(&mut command).ok()?;
     let text = String::from_utf8(output.stdout).ok()?;
     // Format: "IOPlatformSerialNumber" = "L2D6M931F1"
     text.lines()

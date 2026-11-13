@@ -12,6 +12,8 @@ mod remote;
 
 use crate::domain::error::AppStoreError;
 #[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
+use crate::infrastructure::exec::observed_output;
+#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
 use fields::current_locale;
 use fields::{AnisetteFields, build_cpd, build_headers};
 #[cfg(not(ipakeep_modern_adi))]
@@ -37,15 +39,14 @@ pub struct AnisetteData {
 #[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
 fn get_local_user_uuid() -> Option<String> {
     let username = std::env::var("USER").ok()?;
-    let output = std::process::Command::new("dscl")
-        .args([
-            "/Search",
-            "-read",
-            &format!("/Users/{username}"),
-            "GeneratedUID",
-        ])
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new("dscl");
+    command.args([
+        "/Search",
+        "-read",
+        &format!("/Users/{username}"),
+        "GeneratedUID",
+    ]);
+    let output = observed_output(&mut command).ok()?;
     let stdout = String::from_utf8(output.stdout).ok()?;
     // Parse "GeneratedUID: AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
     stdout

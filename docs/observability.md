@@ -165,3 +165,12 @@ completion or spawn-failure events with the executable basename, exit code,
 outcome, and duration. Arguments, environment, stdin/stdout, stderr, and full
 executable paths are excluded. A regression test runs a failing child process
 whose arguments and output contain a sentinel and verifies neither is logged.
+
+### Milestone 6 — direct host tools and Docker commands
+
+Direct host process calls for signing, entitlement inspection, Frida discovery,
+Apple device metadata, and the non-macOS Docker lifecycle now use the same
+process event path. A Linux target check was attempted, but this Mac lacks a
+cross-target OpenSSL installation required by `openssl-sys`; therefore the
+non-macOS module could not be fully type-checked here. Native macOS tests and
+build remain the validation for this milestone.

@@ -1,6 +1,7 @@
 //! Local modern ADI Anisette provider for macOS.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::grandslam::anisette::AnisetteData;
 use crate::infrastructure::grandslam::anisette::from_headers;
 use serde::Deserialize;
@@ -51,7 +52,8 @@ fn build_anisette_data(headers: HashMap<String, String>) -> Result<AnisetteData,
 
 fn run_helper() -> Result<Vec<u8>, AppStoreError> {
     let helper_path = helper_path()?;
-    let output = Command::new(helper_path).output().map_err(|error| {
+    let mut command = Command::new(helper_path);
+    let output = observed_output(&mut command).map_err(|error| {
         AppStoreError::NetworkError(format!("could not start modern Anisette helper: {error}"))
     })?;
     if !output.status.success() {

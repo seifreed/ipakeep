@@ -6,6 +6,7 @@
 //! the server is already running and, if not, launches the container.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::exec::observed_tokio_output;
 use crate::infrastructure::http::telemetry::send_with_observability;
 use std::time::Duration;
 use tokio::process::Command;
@@ -72,9 +73,9 @@ async fn probe(client: &reqwest::Client) -> bool {
 
 /// Verify the Docker CLI is installed and the daemon is reachable.
 async fn ensure_docker_available() -> Result<(), AppStoreError> {
-    let available = Command::new("docker")
-        .arg("version")
-        .output()
+    let mut command = Command::new("docker");
+    command.arg("version");
+    let available = observed_tokio_output(&mut command)
         .await
         .is_ok_and(|output| output.status.success());
 
@@ -126,9 +127,9 @@ async fn ensure_image(image: &str) -> Result<(), AppStoreError> {
 
 /// Return `true` if a local image with this name/tag exists.
 async fn image_exists(image: &str) -> bool {
-    Command::new("docker")
-        .args(["image", "inspect", image])
-        .output()
+    let mut command = Command::new("docker");
+    command.args(["image", "inspect", image]);
+    observed_tokio_output(&mut command)
         .await
         .is_ok_and(|output| output.status.success())
 }
@@ -150,13 +151,11 @@ async fn build_bundled_image(image: &str) -> Result<(), AppStoreError> {
         .map_err(io_err)?;
 
     let context = context.to_string_lossy().to_string();
-    let output = Command::new("docker")
-        .args(["build", "--pull", "-t", image, &context])
-        .output()
-        .await
-        .map_err(|e| {
-            AppStoreError::NetworkError(format!("failed to build the anisette image: {e}"))
-        })?;
+    let mut command = Command::new("docker");
+    command.args(["build", "--pull", "-t", image, &context]);
+    let output = observed_tokio_output(&mut command).await.map_err(|e| {
+        AppStoreError::NetworkError(format!("failed to build the anisette image: {e}"))
+    })?;
 
     if output.status.success() {
         return Ok(());
@@ -172,25 +171,23 @@ async fn build_bundled_image(image: &str) -> Result<(), AppStoreError> {
 async fn run_new_container(image: &str) -> Result<(), AppStoreError> {
     let volume_mount = format!("{VOLUME}:{SERVER_LIB_PATH}");
 
-    let output = Command::new("docker")
-        .args([
-            "run",
-            "-d",
-            "--name",
-            CONTAINER_NAME,
-            "--restart",
-            "unless-stopped",
-            "-p",
-            PORT_BINDING,
-            "-v",
-            &volume_mount,
-            image,
-        ])
-        .output()
-        .await
-        .map_err(|e| {
-            AppStoreError::NetworkError(format!("failed to launch the anisette container: {e}"))
-        })?;
+    let mut command = Command::new("docker");
+    command.args([
+        "run",
+        "-d",
+        "--name",
+        CONTAINER_NAME,
+        "--restart",
+        "unless-stopped",
+        "-p",
+        PORT_BINDING,
+        "-v",
+        &volume_mount,
+        image,
+    ]);
+    let output = observed_tokio_output(&mut command).await.map_err(|e| {
+        AppStoreError::NetworkError(format!("failed to launch the anisette container: {e}"))
+    })?;
 
     if output.status.success() {
         return Ok(());
@@ -204,11 +201,9 @@ async fn run_new_container(image: &str) -> Result<(), AppStoreError> {
 
 /// Image the managed container was created from, or `None` if it does not exist.
 async fn existing_container_image() -> Option<String> {
-    let output = Command::new("docker")
-        .args(["inspect", "-f", "{{.Config.Image}}", CONTAINER_NAME])
-        .output()
-        .await
-        .ok()?;
+    let mut command = Command::new("docker");
+    command.args(["inspect", "-f", "{{.Config.Image}}", CONTAINER_NAME]);
+    let output = observed_tokio_output(&mut command).await.ok()?;
 
     if !output.status.success() {
         return None;
@@ -220,17 +215,16 @@ async fn existing_container_image() -> Option<String> {
 
 /// Force-remove the managed container, ignoring "no such container".
 async fn remove_container() {
-    let _ = Command::new("docker")
-        .args(["rm", "-f", CONTAINER_NAME])
-        .output()
-        .await;
+    let mut command = Command::new("docker");
+    command.args(["rm", "-f", CONTAINER_NAME]);
+    let _ = observed_tokio_output(&mut command).await;
 }
 
 /// Try to start a previously-created container; returns `true` on success.
 async fn start_existing_container() -> bool {
-    Command::new("docker")
-        .args(["start", CONTAINER_NAME])
-        .output()
+    let mut command = Command::new("docker");
+    command.args(["start", CONTAINER_NAME]);
+    observed_tokio_output(&mut command)
         .await
         .is_ok_and(|output| output.status.success())
 }

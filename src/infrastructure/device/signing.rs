@@ -2,6 +2,7 @@
 
 use super::{InstallRequest, bundle_identifier, collect_sign_targets};
 use crate::infrastructure::decrypt::extract_entitlements;
+use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::exec::run_inherit;
 use plist::{Dictionary, Value};
 use std::fs;
@@ -16,10 +17,9 @@ pub(super) struct Profile {
 
 impl Profile {
     pub(super) fn read(path: &Path) -> Result<Self, String> {
-        let output = Command::new("/usr/bin/security")
-            .args(["cms", "-D", "-i"])
-            .arg(path)
-            .output()
+        let mut command = Command::new("/usr/bin/security");
+        command.args(["cms", "-D", "-i"]).arg(path);
+        let output = observed_output(&mut command)
             .map_err(|error| format!("decoding {}: {error}", path.display()))?;
         if !output.status.success() {
             return Err(format!(

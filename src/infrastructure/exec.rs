@@ -74,6 +74,25 @@ pub(crate) fn observed_status(command: &mut Command) -> std::io::Result<ExitStat
     result
 }
 
+#[cfg(not(target_os = "macos"))]
+pub(crate) async fn observed_tokio_output(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<Output> {
+    let program = std::path::Path::new(command.as_std().get_program())
+        .file_name()
+        .unwrap_or(command.as_std().get_program())
+        .to_string_lossy()
+        .into_owned();
+    let started = Instant::now();
+    let result = command.output().await;
+    record_process_result(
+        &program,
+        started,
+        result.as_ref().map(|output| output.status),
+    );
+    result
+}
+
 fn process_name(command: &Command) -> String {
     std::path::Path::new(command.get_program())
         .file_name()
