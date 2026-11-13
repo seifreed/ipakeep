@@ -6,10 +6,11 @@
 //! declares the tool set, validates arguments, runs the use case, and maps the
 //! result (or failure) to MCP content.
 
-use super::mcp_tools::tool_definitions;
-use crate::domain::entity::{
-    Account, App, AppVersion, DownloadMetadata, OwnedApp, metadata_string,
+use super::mcp_models::{
+    AppArgs, AuthInfoOutput, DownloadArgs, DownloadOutput, PurchasesArgs, PurchasesOutput,
+    SavedFile, SearchArgs, SearchOutput, VersionsOutput, ipa_filename, parse_args, to_value,
 };
+use super::mcp_tools::tool_definitions;
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthInfo, Download, ListVersions, Purchases, Search};
 use crate::infrastructure::mcp::{
@@ -17,7 +18,6 @@ use crate::infrastructure::mcp::{
 };
 use crate::presentation::cli::commands::{get_guid, resolve_app_id};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -215,153 +215,10 @@ where
     }
 }
 
-fn parse_args<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T, String> {
-    serde_json::from_value(arguments).map_err(|error| format!("invalid arguments: {error}"))
-}
-
-fn to_value<T: Serialize>(value: &T) -> Result<Value, String> {
-    serde_json::to_value(value).map_err(|error| format!("failed to serialize result: {error}"))
-}
-
-fn ipa_filename(metadata: &DownloadMetadata, app_id: i64, index: usize) -> String {
-    let bundle = metadata_string(metadata, "softwareVersionBundleId")
-        .or_else(|| metadata_string(metadata, "bundleId"))
-        .unwrap_or_else(|| format!("app_{app_id}"));
-    let bundle = sanitize_segment(&bundle);
-    let version = metadata_string(metadata, "bundleShortVersionString")
-        .map(|version| sanitize_segment(&version))
-        .unwrap_or_default();
-    if version.is_empty() {
-        format!("{bundle}_{index}.ipa")
-    } else {
-        format!("{bundle}_{version}_{index}.ipa")
-    }
-}
-
-fn sanitize_segment(value: &str) -> String {
-    let safe: String = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if safe.is_empty() {
-        "_".to_string()
-    } else {
-        safe
-    }
-}
-
-fn default_country() -> String {
-    "us".to_string()
-}
-
-const fn default_limit() -> u32 {
-    5
-}
-
-#[derive(Debug, Deserialize)]
-struct SearchArgs {
-    term: String,
-    #[serde(default = "default_country")]
-    country: String,
-    #[serde(default = "default_limit")]
-    limit: u32,
-}
-
-#[derive(Debug, Deserialize)]
-struct AppArgs {
-    app: String,
-    #[serde(default = "default_country")]
-    country: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DownloadArgs {
-    app: String,
-    #[serde(default = "default_country")]
-    country: String,
-    #[serde(default)]
-    external_version_id: Option<String>,
-    #[serde(default)]
-    output: Option<String>,
-    #[serde(default)]
-    no_purchase: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct PurchasesArgs {
-    #[serde(default)]
-    page: Option<u32>,
-    #[serde(default)]
-    max_results: Option<u32>,
-    #[serde(default)]
-    platform: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct SearchOutput {
-    count: usize,
-    apps: Vec<App>,
-}
-
-#[derive(Debug, Serialize)]
-struct PurchasesOutput {
-    count: usize,
-    apps: Vec<OwnedApp>,
-}
-
-#[derive(Debug, Serialize)]
-struct VersionsOutput {
-    app_id: i64,
-    count: usize,
-    versions: Vec<AppVersion>,
-}
-
-#[derive(Debug, Serialize)]
-struct DownloadOutput {
-    app_id: i64,
-    count: usize,
-    files: Vec<SavedFile>,
-}
-
-#[derive(Debug, Serialize)]
-struct SavedFile {
-    path: String,
-    size: usize,
-}
-
-/// Sanitized account view that never includes tokens, cookies, or passwords.
-#[derive(Debug, Serialize)]
-struct AuthInfoOutput {
-    email: String,
-    name: String,
-    store_front: String,
-    pod: String,
-    has_password_token: bool,
-    has_cookies: bool,
-}
-
-impl From<&Account> for AuthInfoOutput {
-    fn from(account: &Account) -> Self {
-        Self {
-            email: account.email.clone(),
-            name: account.name.clone(),
-            store_front: account.store_front.clone(),
-            pod: account.pod.clone(),
-            has_password_token: !account.password_token.is_empty(),
-            has_cookies: !account.cookies.is_empty(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entity::{Account, App, DownloadMetadata, OwnedApp};
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use crate::infrastructure::mcp::protocol::ToolContent;
 
