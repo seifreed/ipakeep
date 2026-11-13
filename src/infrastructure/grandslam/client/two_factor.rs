@@ -6,6 +6,7 @@ use crate::infrastructure::grandslam::client::http::{
     build_header_map, ensure_success_status, identity_token,
 };
 use crate::infrastructure::grandslam::client::response::parse_trusted_phone_numbers;
+use crate::infrastructure::grandslam::resolve_anisette;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
@@ -20,7 +21,7 @@ pub(super) async fn request_trusted_device_notification(
     dsid: &str,
     idms_token: &str,
 ) -> Result<(), AppStoreError> {
-    let mut headers = identity_headers(dsid, idms_token);
+    let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "text/x-xml-plist".into());
 
     let response = client
@@ -37,7 +38,7 @@ pub(super) async fn list_trusted_phone_numbers(
     dsid: &str,
     idms_token: &str,
 ) -> Result<Vec<TrustedPhoneNumber>, AppStoreError> {
-    let mut headers = identity_headers(dsid, idms_token);
+    let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Accept".into(), "application/json".into());
 
     let value: JsonValue = client
@@ -67,7 +68,7 @@ pub(super) async fn validate_trusted_device_code(
     idms_token: &str,
     code: &str,
 ) -> Result<(), AppStoreError> {
-    let mut headers = identity_headers(dsid, idms_token);
+    let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "text/x-xml-plist".into());
     headers.insert("security-code".into(), code.into());
 
@@ -89,7 +90,7 @@ pub(super) async fn request_sms(
     idms_token: &str,
     phone_id: i64,
 ) -> Result<(), AppStoreError> {
-    let mut headers = identity_headers(dsid, idms_token);
+    let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Content-Type".into(), "application/json".into());
 
     let body = serde_json::json!({
@@ -114,7 +115,8 @@ pub(super) async fn validate_sms_code(
     phone_id: i64,
     code: &str,
 ) -> Result<(), AppStoreError> {
-    let headers = sms_headers(dsid, idms_token);
+    let mut headers = identity_headers(client, dsid, idms_token).await?;
+    headers.insert("Content-Type".into(), "application/json".into());
     let body = serde_json::json!({
         "phoneNumber": { "id": phone_id },
         "securityCode": { "code": code },
@@ -134,17 +136,42 @@ pub(super) async fn validate_sms_code(
     Ok(())
 }
 
-fn identity_headers(dsid: &str, idms_token: &str) -> HashMap<String, String> {
-    let mut headers = HashMap::new();
+async fn identity_headers(
+    client: &reqwest::Client,
+    dsid: &str,
+    idms_token: &str,
+) -> Result<HashMap<String, String>, AppStoreError> {
+    let mut headers = resolve_anisette(client).await?.headers;
+    add_identity_token(&mut headers, dsid, idms_token);
+    Ok(headers)
+}
+
+fn add_identity_token(headers: &mut HashMap<String, String>, dsid: &str, idms_token: &str) {
     headers.insert(
         "X-Apple-Identity-Token".into(),
         identity_token(dsid, idms_token),
     );
-    headers
 }
 
-fn sms_headers(dsid: &str, idms_token: &str) -> HashMap<String, String> {
-    let mut headers = identity_headers(dsid, idms_token);
-    headers.insert("Content-Type".into(), "application/json".into());
-    headers
+#[cfg(test)]
+mod tests {
+    use super::add_identity_token;
+    use crate::infrastructure::grandslam::client::http::identity_token;
+    use std::collections::HashMap;
+
+    #[test]
+    fn identity_token_is_added_without_dropping_anisette_headers() {
+        let mut headers = HashMap::from([("X-Apple-I-MD".into(), "anisette-md".into())]);
+
+        add_identity_token(&mut headers, "123", "token");
+
+        assert_eq!(
+            headers.get("X-Apple-I-MD").map(String::as_str),
+            Some("anisette-md")
+        );
+        assert_eq!(
+            headers.get("X-Apple-Identity-Token").map(String::as_str),
+            Some(identity_token("123", "token").as_str())
+        );
+    }
 }
