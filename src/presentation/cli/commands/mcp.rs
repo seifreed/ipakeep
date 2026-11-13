@@ -11,7 +11,7 @@ use crate::domain::entity::{
 };
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthInfo, Download, ListVersions, Purchases, Search};
-use crate::infrastructure::ipa::{patch_ipa, verify_md5};
+use crate::infrastructure::ipa::prepare_download;
 use crate::infrastructure::mcp::{
     CallToolResult, Implementation, ToolDefinition, ToolInvoker, serve,
 };
@@ -19,7 +19,6 @@ use crate::presentation::cli::commands::{get_guid, resolve_app_id};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::Cursor;
 use std::path::PathBuf;
 
 /// Run the ipakeep MCP server over stdio until the client closes the stream.
@@ -168,13 +167,7 @@ where
                 .download_bytes(&item.url)
                 .await
                 .map_err(|error| format!("download failed: {error}"))?;
-            verify_md5(&bytes, &item.md5)
-                .map_err(|error| format!("MD5 verification failed: {error}"))?;
-            if zip::ZipArchive::new(Cursor::new(&bytes)).is_err() {
-                return Err("downloaded file is not a valid ZIP archive".to_string());
-            }
-            let patched = patch_ipa(&bytes, &item.sinfs, &item.metadata)
-                .map_err(|error| format!("IPA patching failed: {error}"))?;
+            let patched = prepare_download(item, &bytes)?;
             let path = directory.join(ipa_filename(&item.metadata, app_id, index));
             std::fs::write(&path, &patched)
                 .map_err(|error| format!("failed to write file: {error}"))?;

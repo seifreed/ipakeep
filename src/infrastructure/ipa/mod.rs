@@ -8,7 +8,7 @@
 mod metadata;
 mod sinf;
 
-use crate::domain::entity::{DownloadMetadata, Sinf};
+use crate::domain::entity::{DownloadItem, DownloadMetadata, Sinf};
 use metadata::build_itunes_metadata_plist;
 use sinf::sinf_target_paths;
 use std::collections::HashSet;
@@ -76,6 +76,21 @@ pub fn patch_ipa(
 
     let cursor = writer.finish().map_err(|e| e.to_string())?;
     Ok(cursor.into_inner())
+}
+
+/// Validate a downloaded item and apply its IPA metadata and DRM data.
+///
+/// # Errors
+///
+/// Returns an error when the checksum or ZIP archive is invalid, or the IPA
+/// cannot be patched with the item's metadata.
+pub fn prepare_download(item: &DownloadItem, bytes: &[u8]) -> Result<Vec<u8>, String> {
+    verify_md5(bytes, &item.md5).map_err(|error| format!("MD5 verification failed: {error}"))?;
+    if zip::ZipArchive::new(Cursor::new(bytes)).is_err() {
+        return Err("downloaded file is not a valid ZIP archive".into());
+    }
+    patch_ipa(bytes, &item.sinfs, &item.metadata)
+        .map_err(|error| format!("IPA patching failed: {error}"))
 }
 
 fn inject_metadata<W: Write + Seek>(

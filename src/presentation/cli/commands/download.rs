@@ -6,12 +6,11 @@ use self::output::{OutputDestination, derive_ipa_filename, prepare_output_destin
 use crate::domain::entity::DownloadItem;
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::Download;
-use crate::infrastructure::ipa::{patch_ipa, verify_md5};
+use crate::infrastructure::ipa::prepare_download;
 use crate::infrastructure::simulator::{SimulatorTarget, install_ipa};
 use crate::presentation::cli::commands::{get_guid, resolve_app_id};
 use crate::presentation::cli::output::OutputFormat;
 use serde::Serialize;
-use std::io::Cursor;
 use std::path::Path;
 use std::time::Instant;
 
@@ -142,14 +141,7 @@ where
         .await
         .map_err(|e| format!("download failed: {e}"))?;
 
-    verify_md5(&bytes, &item.md5).map_err(|e| format!("MD5 verification failed: {e}"))?;
-
-    if zip::ZipArchive::new(Cursor::new(&bytes)).is_err() {
-        return Err("downloaded file is not a valid ZIP archive".into());
-    }
-
-    let patched = patch_ipa(&bytes, &item.sinfs, &item.metadata)
-        .map_err(|e| format!("IPA patching failed: {e}"))?;
+    let patched = prepare_download(item, &bytes)?;
     let saved_size = patched.len();
 
     let file_name = derive_ipa_filename(&item.metadata, app_id, index);

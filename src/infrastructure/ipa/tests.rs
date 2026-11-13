@@ -56,6 +56,38 @@ fn zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
 }
 
 #[test]
+fn prepare_download_checks_checksum_and_patches_a_valid_archive() {
+    let bytes = test_ipa_bytes();
+    let item = crate::domain::entity::DownloadItem {
+        url: "https://example.test/app.ipa".into(),
+        md5: format!("{:x}", md5::compute(&bytes)),
+        sinfs: Vec::new(),
+        metadata: DownloadMetadata::new(),
+    };
+
+    let prepared = prepare_download(&item, &bytes).expect("valid download");
+    assert!(zip_entry(&prepared, "Payload/Test.app/TestExec").is_some());
+
+    let item = crate::domain::entity::DownloadItem {
+        md5: "invalid-checksum".into(),
+        ..item
+    };
+    assert!(prepare_download(&item, &bytes).is_err());
+}
+
+#[test]
+fn prepare_download_rejects_non_zip_data() {
+    let item = crate::domain::entity::DownloadItem {
+        url: "https://example.test/app.ipa".into(),
+        md5: String::new(),
+        sinfs: Vec::new(),
+        metadata: DownloadMetadata::new(),
+    };
+
+    assert!(prepare_download(&item, b"not a zip archive").is_err());
+}
+
+#[test]
 fn patch_ipa_writes_sinf_inside_app_sc_info() {
     let patched = patch_ipa(
         &test_ipa_bytes(),
