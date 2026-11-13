@@ -1,7 +1,7 @@
 //! [`AppStoreRepository`] implementation for the in-memory fake.
 
 use super::FakeAppStoreRepository;
-use crate::domain::entity::{Account, App, AppVersion, DownloadItem, TrustedPhoneNumber};
+use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::AppStoreRepository;
 use async_trait::async_trait;
@@ -229,6 +229,20 @@ impl AppStoreRepository for FakeAppStoreRepository {
         inner.list_versions_result.clone().unwrap_or_else(|| {
             Err(AppStoreError::Unexpected(
                 "list_versions not configured".into(),
+            ))
+        })
+    }
+
+    async fn list_purchases(
+        &self,
+        account: &Account,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        let mut inner = self.lock_inner();
+        inner.list_purchases_calls.push((account.clone(), limit));
+        inner.list_purchases_result.clone().unwrap_or_else(|| {
+            Err(AppStoreError::Unexpected(
+                "list_purchases not configured".into(),
             ))
         })
     }

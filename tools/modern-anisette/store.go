@@ -27,6 +27,7 @@ type storeRequest struct {
 	Account           appstore.Account `json:"account"`
 	AppID             int64            `json:"appId"`
 	ExternalVersionID string           `json:"externalVersionId"`
+	Limit             int              `json:"limit"`
 }
 
 type storeError struct {
@@ -48,11 +49,13 @@ type stagedItem struct {
 }
 
 type storeResponse struct {
-	Error                   *storeError `json:"error,omitempty"`
-	ExternalVersionIDs      []string    `json:"externalVersionIds,omitempty"`
-	LatestExternalVersionID string      `json:"latestExternalVersionId,omitempty"`
-	LatestVersion           string      `json:"latestVersion,omitempty"`
-	Item                    *stagedItem `json:"item,omitempty"`
+	Error                   *storeError    `json:"error,omitempty"`
+	ExternalVersionIDs      []string       `json:"externalVersionIds,omitempty"`
+	LatestExternalVersionID string         `json:"latestExternalVersionId,omitempty"`
+	LatestVersion           string         `json:"latestVersion,omitempty"`
+	Item                    *stagedItem    `json:"item,omitempty"`
+	Apps                    []appstore.App `json:"apps,omitempty"`
+	TotalCount              int            `json:"totalCount,omitempty"`
 }
 
 type storeOperation func(appstore.AppStore, storeRequest, string) (storeResponse, error)
@@ -61,6 +64,7 @@ var storeOperations = map[string]storeOperation{
 	"purchase":      purchase,
 	"list-versions": listVersions,
 	"download":      download,
+	"owned-apps":    ownedApps,
 }
 
 // runStore performs an App Store commerce request through upstream ipatool so
@@ -75,8 +79,8 @@ func runStore(operation, statePath string, input io.Reader, output io.Writer) er
 	if err := json.NewDecoder(io.LimitReader(input, maxStoreInputSize)).Decode(&request); err != nil {
 		return fmt.Errorf("read Store request: %w", err)
 	}
-	if request.AppID <= 0 || request.Account.PasswordToken == "" || request.Account.DirectoryServicesID == "" {
-		return errors.New("Store request requires an app id and a signed-in account")
+	if request.Account.PasswordToken == "" || request.Account.DirectoryServicesID == "" {
+		return errors.New("Store request requires a signed-in account")
 	}
 
 	store, jar, err := openStore(statePath)
@@ -109,6 +113,9 @@ func classifyStoreError(err error) *storeError {
 // the account already owns, so an expired answer is only reported when the
 // account really lacks the license.
 func purchase(store appstore.AppStore, request storeRequest, _ string) (storeResponse, error) {
+	if request.AppID <= 0 {
+		return storeResponse{}, errors.New("Store request requires an app id")
+	}
 	app := appstore.App{ID: request.AppID}
 	err := store.Purchase(appstore.PurchaseInput{Account: request.Account, App: app})
 	if errors.Is(err, appstore.ErrPasswordTokenExpired) {
@@ -125,6 +132,9 @@ func purchase(store appstore.AppStore, request storeRequest, _ string) (storeRes
 }
 
 func listVersions(store appstore.AppStore, request storeRequest, _ string) (storeResponse, error) {
+	if request.AppID <= 0 {
+		return storeResponse{}, errors.New("Store request requires an app id")
+	}
 	app := appstore.App{ID: request.AppID}
 	versions, err := store.ListVersions(appstore.ListVersionsInput{Account: request.Account, App: app})
 	if err != nil {
@@ -142,7 +152,32 @@ func listVersions(store appstore.AppStore, request storeRequest, _ string) (stor
 	return response, nil
 }
 
+// ownedApps lists the apps the account already owns. Upstream fetches the full
+// purchase history across storefronts, then returns the first page capped at
+// the requested limit, most recent purchase first.
+func ownedApps(store appstore.AppStore, request storeRequest, _ string) (storeResponse, error) {
+	limit := request.Limit
+	if limit <= 0 {
+		limit = appstore.DefaultOwnedAppsLimit
+	}
+	if limit > appstore.MaxOwnedAppsLimit {
+		limit = appstore.MaxOwnedAppsLimit
+	}
+	output, err := store.OwnedApps(appstore.OwnedAppsInput{
+		Account: request.Account,
+		Page:    1,
+		Limit:   limit,
+	})
+	if err != nil {
+		return storeResponse{}, err
+	}
+	return storeResponse{Apps: output.Results, TotalCount: output.TotalCount}, nil
+}
+
 func download(store appstore.AppStore, request storeRequest, staging string) (storeResponse, error) {
+	if request.AppID <= 0 {
+		return storeResponse{}, errors.New("Store request requires an app id")
+	}
 	if err := ensurePrivateDirectory(staging); err != nil {
 		return storeResponse{}, err
 	}

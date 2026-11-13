@@ -72,6 +72,24 @@ pub fn format_app(app: &crate::domain::entity::App) -> String {
     )
 }
 
+/// Format an owned (purchased) app for text display.
+pub fn format_owned_app(app: &crate::domain::entity::OwnedApp) -> String {
+    let platforms = if app.platforms.is_empty() {
+        String::new()
+    } else {
+        format!(" {{{}}}", app.platforms.join(", "))
+    };
+    let purchased = app
+        .purchase_date
+        .as_deref()
+        .map(|date| format!(" - purchased {date}"))
+        .unwrap_or_default();
+    format!(
+        "{} ({}) - {} [{}]{}{}",
+        app.name, app.bundle_id, app.version, app.id, platforms, purchased
+    )
+}
+
 /// Format an app version for text display.
 pub fn format_version(version: &crate::domain::entity::AppVersion) -> String {
     format!(

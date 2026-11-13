@@ -9,6 +9,7 @@ pub mod auth_revoke;
 pub mod download;
 pub mod list_versions;
 pub mod purchase;
+pub mod purchases;
 pub mod search;
 
 pub use auth_info::AuthInfo;
@@ -17,4 +18,5 @@ pub use auth_revoke::AuthRevoke;
 pub use download::Download;
 pub use list_versions::ListVersions;
 pub use purchase::Purchase;
+pub use purchases::Purchases;
 pub use search::Search;
