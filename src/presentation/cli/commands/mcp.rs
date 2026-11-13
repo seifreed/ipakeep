@@ -210,12 +210,17 @@ where
             Some(value) => value,
             None => 10,
         };
-        let _ = args.platform.as_deref();
-
-        let apps = Purchases::new(self.app_store.clone(), self.credentials.clone())
+        let mut apps = Purchases::new(self.app_store.clone(), self.credentials.clone())
             .execute(limit)
             .await
             .map_err(|error| format!("purchases failed: {error}"))?;
+        if let Some(platform) = args.platform {
+            apps.retain(|app| {
+                app.platforms
+                    .iter()
+                    .any(|owned_platform| owned_platform.eq_ignore_ascii_case(&platform))
+            });
+        }
 
         to_value(&PurchasesOutput {
             count: apps.len(),
@@ -675,6 +680,42 @@ mod tests {
         let parsed: Value = serde_json::from_str(text).expect("json content");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["apps"][0]["bundle_id"], "com.example.app");
+    }
+
+    #[tokio::test]
+    async fn purchases_tool_filters_apps_by_platform_case_insensitively() {
+        let app_store = FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![
+            OwnedApp {
+                id: 42,
+                bundle_id: "com.example.iphone".into(),
+                name: "iPhone app".into(),
+                version: "1.0".into(),
+                platforms: vec!["iphone".into()],
+                purchase_date: None,
+            },
+            OwnedApp {
+                id: 43,
+                bundle_id: "com.example.macos".into(),
+                name: "Mac app".into(),
+                version: "1.0".into(),
+                platforms: vec!["macos".into()],
+                purchase_date: None,
+            },
+        ]));
+        let handler = McpToolHandler {
+            app_store,
+            credentials: InMemoryCredentialRepository::new().with_account(account()),
+        };
+
+        let result = handler
+            .call_tool("purchases", serde_json::json!({"platform": "iPhone"}))
+            .await;
+
+        assert!(!result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        let parsed: Value = serde_json::from_str(text).expect("json content");
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["apps"][0]["bundle_id"], "com.example.iphone");
     }
 
     #[tokio::test]
