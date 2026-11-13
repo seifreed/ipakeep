@@ -69,14 +69,29 @@ ipadecrypt and a credential minted once from a jailbroken device):
   license formats ipadecrypt supports decrypt offline, and fat binaries are
   thinned to one slice. `decrypt set-min-os` lowers the declared minimum, but it
   does not backport APIs, so the app may still crash at launch.
+- **Which decrypt path.** `decrypt dump` reads any app installed on the device,
+  regardless of which Apple ID bought it, but needs the app to launch.
+  `decrypt offline` never launches the app but its ipadecrypt credential is
+  **per Apple account**: it only decrypts apps owned by the account you minted
+  with. So for an app bought on a *different* account, use `decrypt dump` on a
+  device where it is installed. The newest iOS 26 license formats
+  (`.v4.supp`/`.v5.supf`) do not decrypt offline yet and fall back to the
+  on-device path.
+- **No-jailbreak decryption.** On iOS, decryption always needs a jailbreak (the
+  kernel read/write `decrypt dump` and `mremap_encrypted`-style static tools
+  rely on). The only no-jailbreak route is an older Apple Silicon Mac
+  (macOS 11.2.3 or earlier) running the iOS app, which is a niche setup.
 - **Entitlements.** A development re-sign can only grant what your profile
   authorizes. App Groups, keychain access groups, push notifications,
   associated domains, iCloud containers, and Apple-restricted entitlements from
   the original team are not available to you, so features depending on them may
   fail. `decrypt entitlements <App.app>` reports which ones will break.
   TrollStore is the exception: it keeps arbitrary entitlements, but only on
-  iOS 14.0b2–16.6.1, 16.7 RC and 17.0; LiveContainer/SideStore can emulate
-  keychain groups but not push or the original team's capabilities.
+  iOS 14.0b2–16.6.1, the 16.7 RC (build 20H18) and 17.0 — not 16.7.x final or
+  17.0.1+ — so to keep an app's original entitlements, install the decrypted IPA
+  with TrollStore on a supported build instead of re-signing. LiveContainer and
+  SideStore can emulate shared keychain groups for sideloaded apps but not push
+  or the original team's capabilities.
 
 ### Key Features
 
