@@ -1,5 +1,6 @@
 //! Synthetic Mach-O / IPA round-trip tests for the decrypt bridge.
 
+use super::min_os::parse_version;
 use super::*;
 use std::io::{Cursor, Read};
 
