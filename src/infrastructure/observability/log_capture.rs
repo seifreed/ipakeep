@@ -28,16 +28,37 @@ pub(crate) struct LogCapture {
 impl LogCapture {
     /// Install a debug-level subscriber writing into this capture.
     pub(crate) fn install(&self) -> LogCaptureGuard {
+        Self::install_subscriber(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_ansi(false)
+                .with_writer(self.clone())
+                .finish(),
+        )
+    }
+
+    /// Install a JSON subscriber for structured event assertions.
+    pub(crate) fn install_json(&self) -> LogCaptureGuard {
+        Self::install_subscriber(
+            tracing_subscriber::fmt()
+                .json()
+                .flatten_event(true)
+                .with_current_span(true)
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(self.clone())
+                .finish(),
+        )
+    }
+
+    fn install_subscriber<S>(subscriber: S) -> LogCaptureGuard
+    where
+        S: tracing::Subscriber + Send + Sync + 'static,
+    {
         pin_global_max_level();
         let lock = match LOG_CAPTURE_LOCK.lock() {
             Ok(lock) => lock,
             Err(poisoned) => poisoned.into_inner(),
         };
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(self.clone())
-            .finish();
         LogCaptureGuard {
             _subscriber: tracing::subscriber::set_default(subscriber),
             _lock: lock,

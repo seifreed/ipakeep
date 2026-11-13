@@ -9,6 +9,7 @@ use crate::domain::repository::CredentialRepository;
 use async_trait::async_trait;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// File-based credential repository.
 ///
@@ -53,19 +54,39 @@ impl FileKeychain {
 #[async_trait]
 impl CredentialRepository for FileKeychain {
     async fn save_account(&self, account: &Account) -> Result<(), CredentialError> {
+        let started = Instant::now();
         self.ensure_dir().await?;
 
         let json = serde_json::to_string_pretty(account).map_err(|e: serde_json::Error| {
             CredentialError::SaveFailed(format!("serialization failed: {e}"))
         })?;
 
-        write_private_file(&self.auth_file(), &json)
+        write_private_file(&self.auth_file(), &json)?;
+        tracing::info!(
+            component = "credential_store",
+            backend = "file",
+            operation = "save",
+            event_name = "credentials.saved",
+            duration_ms = elapsed_ms(started),
+            "credentials saved"
+        );
+        Ok(())
     }
 
     async fn load_account(&self) -> Result<Option<Account>, CredentialError> {
+        let started = Instant::now();
         let path = self.auth_file();
 
         if !path.exists() {
+            tracing::debug!(
+                component = "credential_store",
+                backend = "file",
+                operation = "load",
+                event_name = "credentials.loaded",
+                outcome = "not_found",
+                duration_ms = elapsed_ms(started),
+                "no stored credentials"
+            );
             return Ok(None);
         }
 
@@ -77,10 +98,20 @@ impl CredentialRepository for FileKeychain {
             CredentialError::InvalidCredentials(format!("failed to parse credentials: {e}"))
         })?;
 
+        tracing::debug!(
+            component = "credential_store",
+            backend = "file",
+            operation = "load",
+            event_name = "credentials.loaded",
+            outcome = "found",
+            duration_ms = elapsed_ms(started),
+            "credentials loaded"
+        );
         Ok(Some(account))
     }
 
     async fn delete_account(&self) -> Result<(), CredentialError> {
+        let started = Instant::now();
         let path = self.auth_file();
 
         if !path.exists() {
@@ -89,8 +120,21 @@ impl CredentialRepository for FileKeychain {
 
         tokio::fs::remove_file(&path)
             .await
-            .map_err(|e: std::io::Error| CredentialError::DeleteFailed(e.to_string()))
+            .map_err(|e: std::io::Error| CredentialError::DeleteFailed(e.to_string()))?;
+        tracing::info!(
+            component = "credential_store",
+            backend = "file",
+            operation = "delete",
+            event_name = "credentials.deleted",
+            duration_ms = elapsed_ms(started),
+            "credentials deleted"
+        );
+        Ok(())
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(unix)]
@@ -134,6 +178,7 @@ fn write_private_file(path: &Path, content: &str) -> Result<(), CredentialError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use tempfile::TempDir;
 
     fn test_account() -> Account {
@@ -166,6 +211,26 @@ mod tests {
         let loaded = loaded.unwrap();
         assert_eq!(loaded.email, "test@example.com");
         assert_eq!(loaded.password_token, "token123");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn credential_events_omit_account_data() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let dir = TempDir::new().unwrap();
+        let keychain = FileKeychain::with_dir(dir.path().to_path_buf());
+
+        keychain.save_account(&test_account()).await.unwrap();
+        keychain.load_account().await.unwrap();
+        keychain.delete_account().await.unwrap();
+
+        let logs = capture.contents();
+        assert!(logs.contains("credentials.saved"));
+        assert!(logs.contains("credentials.loaded"));
+        assert!(logs.contains("credentials.deleted"));
+        assert!(logs.contains("duration_ms="));
+        assert!(!logs.contains("test@example.com"));
+        assert!(!logs.contains("token123"));
     }
 
     #[cfg(unix)]

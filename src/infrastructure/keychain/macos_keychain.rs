@@ -8,6 +8,7 @@ use crate::domain::error::CredentialError;
 use crate::domain::repository::CredentialRepository;
 use async_trait::async_trait;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::time::timeout;
 
 /// `errSecItemNotFound` — no keychain item matched the query.
@@ -83,6 +84,7 @@ async fn find_generic_password(service: &str, account: &str) -> Result<Vec<u8>, 
 #[async_trait]
 impl CredentialRepository for MacOSKeychain {
     async fn save_account(&self, account: &Account) -> Result<(), CredentialError> {
+        let started = Instant::now();
         let json = serde_json::to_string_pretty(account).map_err(|e: serde_json::Error| {
             CredentialError::SaveFailed(format!("serialization failed: {e}"))
         })?;
@@ -100,10 +102,20 @@ impl CredentialRepository for MacOSKeychain {
             }
         })
         .await
-        .map_err(|e| CredentialError::SaveFailed(format!("task failed: {e}")))?
+        .map_err(|e| CredentialError::SaveFailed(format!("task failed: {e}")))??;
+        tracing::info!(
+            component = "credential_store",
+            backend = "macos_keychain",
+            operation = "save",
+            event_name = "credentials.saved",
+            duration_ms = elapsed_ms(started),
+            "credentials saved"
+        );
+        Ok(())
     }
 
     async fn load_account(&self) -> Result<Option<Account>, CredentialError> {
+        let started = Instant::now();
         match find_generic_password(&self.service_name, &self.account_name).await {
             Ok(bytes) => {
                 let account: Account =
@@ -112,14 +124,35 @@ impl CredentialRepository for MacOSKeychain {
                             "failed to parse credentials: {e}"
                         ))
                     })?;
+                tracing::debug!(
+                    component = "credential_store",
+                    backend = "macos_keychain",
+                    operation = "load",
+                    event_name = "credentials.loaded",
+                    outcome = "found",
+                    duration_ms = elapsed_ms(started),
+                    "credentials loaded"
+                );
                 Ok(Some(account))
             }
-            Err(CredentialError::NotFound) => Ok(None),
+            Err(CredentialError::NotFound) => {
+                tracing::debug!(
+                    component = "credential_store",
+                    backend = "macos_keychain",
+                    operation = "load",
+                    event_name = "credentials.loaded",
+                    outcome = "not_found",
+                    duration_ms = elapsed_ms(started),
+                    "no stored credentials"
+                );
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }
 
     async fn delete_account(&self) -> Result<(), CredentialError> {
+        let started = Instant::now();
         tokio::task::spawn_blocking({
             let service = self.service_name.clone();
             let account = self.account_name.clone();
@@ -136,8 +169,21 @@ impl CredentialRepository for MacOSKeychain {
             }
         })
         .await
-        .map_err(|e| CredentialError::DeleteFailed(format!("task failed: {e}")))?
+        .map_err(|e| CredentialError::DeleteFailed(format!("task failed: {e}")))??;
+        tracing::info!(
+            component = "credential_store",
+            backend = "macos_keychain",
+            operation = "delete",
+            event_name = "credentials.deleted",
+            duration_ms = elapsed_ms(started),
+            "credentials deleted"
+        );
+        Ok(())
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

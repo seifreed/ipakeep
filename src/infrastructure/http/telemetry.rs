@@ -129,6 +129,40 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn json_event_has_normalized_fields_without_request_secrets() {
+        let capture = LogCapture::default();
+        let _guard = capture.install_json();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/private"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        let request = client.get(format!(
+            "{}/private?token=sensitive-query-value",
+            server.uri()
+        ));
+
+        send_with_observability(&client, request)
+            .await
+            .expect("HTTP response");
+
+        let logs = capture.contents();
+        let event = logs
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|event| event["event_name"] == "http.request.completed")
+            .expect("HTTP JSON event");
+        assert_eq!(event["level"], "DEBUG");
+        assert_eq!(event["event_name"], "http.request.completed");
+        assert_eq!(event["method"], "GET");
+        assert_eq!(event["status"], 200);
+        assert!(event["duration_ms"].is_number());
+        assert!(!logs.contains("sensitive-query-value"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn concurrent_requests_each_emit_a_completion_event() {
         let capture = LogCapture::default();
         let _guard = capture.install();

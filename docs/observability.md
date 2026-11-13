@@ -149,3 +149,11 @@ error's free-form text, which can contain a URL or server-provided detail.
 Simulator debug events identify the operation and conversion count without
 recording user file paths. A regression unit test checks that classifying a
 network error does not return its embedded content.
+
+### Milestone 4 — credential storage and JSON verification
+
+File and macOS Keychain success events now cover save, load, not-found, and
+delete operations with backend, outcome, and duration fields; account names,
+tokens, and storage paths are excluded. Tests assert the file backend's events
+do not contain account data and parse an actual HTTP JSON event to verify its
+normalized level, event name, method, status, and duration fields.

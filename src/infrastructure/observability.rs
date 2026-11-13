@@ -5,6 +5,9 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ENVIRONMENT: &str = "unspecified";
 
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 #[derive(Debug, PartialEq, Eq)]
 enum LogFormat {
     Text,
