@@ -7,6 +7,7 @@ use crate::infrastructure::grandslam::client::http::{
 };
 use crate::infrastructure::grandslam::client::response::parse_trusted_phone_numbers;
 use crate::infrastructure::grandslam::resolve_anisette;
+use crate::infrastructure::http::telemetry::send_with_observability;
 use crate::infrastructure::http::{decode_plist, response_snippet};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -28,10 +29,10 @@ pub(super) async fn request_trusted_device_notification(
     headers.insert("Content-Type".into(), "text/x-xml-plist".into());
     headers.insert("Accept".into(), "text/x-xml-plist".into());
 
-    let response = client
+    let request = client
         .get(TRUSTED_DEVICE_URL)
-        .headers(build_header_map(&headers)?)
-        .send()
+        .headers(build_header_map(&headers)?);
+    let response = send_with_observability(client, request)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("trusted device request failed: {e}")))?;
     ensure_success_status(response, "trusted device request").await
@@ -45,10 +46,10 @@ pub(super) async fn list_trusted_phone_numbers(
     let mut headers = identity_headers(client, dsid, idms_token).await?;
     headers.insert("Accept".into(), "application/json".into());
 
-    let value: JsonValue = client
+    let request = client
         .get(AUTH_OPTIONS_URL)
-        .headers(build_header_map(&headers)?)
-        .send()
+        .headers(build_header_map(&headers)?);
+    let value: JsonValue = send_with_observability(client, request)
         .await
         .map_err(|e| {
             AppStoreError::NetworkError(format!("trusted phone list request failed: {e}"))
@@ -77,10 +78,10 @@ pub(super) async fn validate_trusted_device_code(
     headers.insert("Accept".into(), "text/x-xml-plist".into());
     headers.insert("security-code".into(), code.into());
 
-    let response = client
+    let request = client
         .get(VALIDATE_URL)
-        .headers(build_header_map(&headers)?)
-        .send()
+        .headers(build_header_map(&headers)?);
+    let response = send_with_observability(client, request)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("validate code request failed: {e}")))?;
     let status = response.status();
@@ -105,11 +106,11 @@ pub(super) async fn request_sms(
         "mode": "sms",
     });
 
-    let response = client
+    let request = client
         .put(PHONE_URL)
         .headers(build_header_map(&headers)?)
-        .json(&body)
-        .send()
+        .json(&body);
+    let response = send_with_observability(client, request)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("SMS request failed: {e}")))?;
     ensure_success_status(response, "SMS request").await
@@ -131,11 +132,11 @@ pub(super) async fn validate_sms_code(
         "mode": "sms",
     });
 
-    client
+    let request = client
         .post(PHONE_SECURITY_CODE_URL)
         .headers(build_header_map(&headers)?)
-        .json(&body)
-        .send()
+        .json(&body);
+    send_with_observability(client, request)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("SMS validation request failed: {e}")))?
         .error_for_status()

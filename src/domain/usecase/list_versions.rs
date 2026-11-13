@@ -34,28 +34,13 @@ where
     /// Returns `AppStoreError::AuthenticationFailed` if not logged in.
     /// Returns `AppStoreError::Unexpected` if version metadata is missing.
     pub async fn execute(&self, app_id: i64, guid: &str) -> Result<Vec<AppVersion>, AppStoreError> {
-        tracing::debug!(
-            app_id,
-            guid_len = guid.len(),
-            "starting list versions use case"
-        );
         let account = self
             .credentials
             .load_account()
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
             .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
-        tracing::debug!(
-            store_front_present = !account.store_front.is_empty(),
-            "list versions account loaded"
-        );
-
         let versions = self.app_store.list_versions(&account, app_id, guid).await?;
-        tracing::debug!(
-            app_id,
-            version_count = versions.len(),
-            "app versions returned"
-        );
         Ok(versions)
     }
 }

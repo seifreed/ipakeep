@@ -6,6 +6,7 @@
 //! the server is already running and, if not, launches the container.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::send_with_observability;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -64,7 +65,7 @@ pub async fn ensure_local_server(client: &reqwest::Client) -> Result<String, App
 /// Return `true` if the anisette server answers a successful HTTP response.
 async fn probe(client: &reqwest::Client) -> bool {
     matches!(
-        client.get(ANISETTE_URL).timeout(PROBE_TIMEOUT).send().await,
+        send_with_observability(client, client.get(ANISETTE_URL).timeout(PROBE_TIMEOUT)).await,
         Ok(response) if response.status().is_success()
     )
 }

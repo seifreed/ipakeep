@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod plist_codec;
+pub(crate) mod telemetry;
 
 pub use client::AppleHttpClient;
 pub use plist_codec::{build_plist_dict, decode_plist, encode_plist};

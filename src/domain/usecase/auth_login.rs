@@ -51,24 +51,13 @@ where
         password: &str,
         guid: &str,
     ) -> Result<Account, AppStoreError> {
-        tracing::debug!(
-            email_present = !email.is_empty(),
-            guid_len = guid.len(),
-            "starting legacy auth login"
-        );
         let account = self.app_store.authenticate(email, password, guid).await?;
 
-        tracing::debug!(
-            has_purchase_token = !account.password_token.is_empty(),
-            has_cookies = !account.cookies.is_empty(),
-            "legacy auth login succeeded; saving account"
-        );
         self.credentials
             .save_account(&account)
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?;
 
-        tracing::debug!("legacy auth account saved");
         Ok(account)
     }
 
@@ -84,28 +73,16 @@ where
         code: &str,
         guid: &str,
     ) -> Result<Account, AppStoreError> {
-        tracing::debug!(
-            email_present = !email.is_empty(),
-            code_len = code.len(),
-            guid_len = guid.len(),
-            "starting legacy auth login with 2fa"
-        );
         let account = self
             .app_store
             .authenticate_with_2fa(email, password, code, guid)
             .await?;
 
-        tracing::debug!(
-            has_purchase_token = !account.password_token.is_empty(),
-            has_cookies = !account.cookies.is_empty(),
-            "legacy 2fa auth succeeded; saving account"
-        );
         self.credentials
             .save_account(&account)
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?;
 
-        tracing::debug!("legacy 2fa auth account saved");
         Ok(account)
     }
 
@@ -125,18 +102,11 @@ where
         guid: &str,
         store_front: Option<&str>,
     ) -> Result<Account, AppStoreError> {
-        tracing::debug!(
-            email_present = !email.is_empty(),
-            guid_len = guid.len(),
-            store_front_present = store_front.is_some_and(|s| !s.is_empty()),
-            "starting grandslam auth login"
-        );
         let mut account = self
             .app_store
             .authenticate_grandslam(email, password, guid)
             .await?;
 
-        let store_front_was_empty = account.store_front.is_empty();
         // The GrandSlam SPD payload omits the iTunes Store front, so apply the
         // caller-resolved value (from --country / locale) when it is missing;
         // never override one Apple did provide.
@@ -145,13 +115,7 @@ where
         {
             account.store_front = store_front.to_string();
         }
-        tracing::debug!(
-            has_purchase_token = !account.password_token.is_empty(),
-            store_front_applied = store_front_was_empty && !account.store_front.is_empty(),
-            "grandslam auth login succeeded; validating account"
-        );
         if account.password_token.is_empty() {
-            tracing::warn!("grandslam auth login missing purchase token");
             return Err(AppStoreError::AuthenticationFailed(
                 "GrandSlam login did not return an App Store purchase token; retry without --grandslam".into(),
             ));
@@ -162,7 +126,6 @@ where
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?;
 
-        tracing::debug!("grandslam auth account saved");
         Ok(account)
     }
 
@@ -177,11 +140,6 @@ where
         dsid: &str,
         idms_token: &str,
     ) -> Result<(), AppStoreError> {
-        tracing::debug!(
-            dsid_len = dsid.len(),
-            idms_token_present = !idms_token.is_empty(),
-            "requesting trusted-device 2fa notification"
-        );
         self.app_store
             .request_trusted_device_notification(dsid, idms_token)
             .await
@@ -198,12 +156,6 @@ where
         idms_token: &str,
         code: &str,
     ) -> Result<(), AppStoreError> {
-        tracing::debug!(
-            dsid_len = dsid.len(),
-            idms_token_present = !idms_token.is_empty(),
-            code_len = code.len(),
-            "validating trusted-device 2fa code"
-        );
         self.app_store
             .validate_trusted_device_code(dsid, idms_token, code)
             .await
@@ -222,7 +174,6 @@ where
         idms_token: &str,
         code: &str,
     ) -> Result<Account, AppStoreError> {
-        tracing::debug!("completing trusted-device grandslam 2fa");
         self.validate_trusted_device_code(dsid, idms_token, code)
             .await?;
         self.execute_grandslam(
@@ -244,20 +195,9 @@ where
         dsid: &str,
         idms_token: &str,
     ) -> Result<Vec<crate::domain::entity::TrustedPhoneNumber>, AppStoreError> {
-        tracing::debug!(
-            dsid_len = dsid.len(),
-            idms_token_present = !idms_token.is_empty(),
-            "listing trusted phone numbers"
-        );
-        let phones = self
-            .app_store
+        self.app_store
             .list_trusted_phone_numbers(dsid, idms_token)
-            .await?;
-        tracing::debug!(
-            trusted_phone_count = phones.len(),
-            "trusted phone numbers listed"
-        );
-        Ok(phones)
+            .await
     }
 
     /// Request an SMS code to be sent to a trusted phone number.
@@ -271,12 +211,6 @@ where
         idms_token: &str,
         phone_id: i64,
     ) -> Result<(), AppStoreError> {
-        tracing::debug!(
-            dsid_len = dsid.len(),
-            idms_token_present = !idms_token.is_empty(),
-            phone_id,
-            "requesting sms 2fa code"
-        );
         self.app_store.request_sms(dsid, idms_token, phone_id).await
     }
 
@@ -292,13 +226,6 @@ where
         phone_id: i64,
         code: &str,
     ) -> Result<(), AppStoreError> {
-        tracing::debug!(
-            dsid_len = dsid.len(),
-            idms_token_present = !idms_token.is_empty(),
-            phone_id,
-            code_len = code.len(),
-            "validating sms 2fa code"
-        );
         self.app_store
             .validate_sms_code(dsid, idms_token, phone_id, code)
             .await
@@ -318,7 +245,6 @@ where
         phone_id: i64,
         code: &str,
     ) -> Result<Account, AppStoreError> {
-        tracing::debug!(phone_id, "completing sms grandslam 2fa");
         self.validate_sms_code(dsid, idms_token, phone_id, code)
             .await?;
         self.execute_grandslam(

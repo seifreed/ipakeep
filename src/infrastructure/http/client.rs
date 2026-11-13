@@ -3,6 +3,7 @@
 mod response;
 
 use super::response_snippet;
+use super::telemetry::send_with_observability;
 use reqwest::cookie::Jar;
 use reqwest::{Client, ClientBuilder, Url};
 pub use response::HttpResponse;
@@ -95,8 +96,7 @@ impl AppleHttpClient {
             }
         }
 
-        let response = request
-            .send()
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -159,8 +159,7 @@ impl AppleHttpClient {
             }
         }
 
-        let response = request
-            .send()
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -267,8 +266,7 @@ impl AppleHttpClient {
             }
         }
 
-        let response = request
-            .send()
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
@@ -339,8 +337,7 @@ impl AppleHttpClient {
             }
         }
 
-        let response = request
-            .send()
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
         let status = response.status();

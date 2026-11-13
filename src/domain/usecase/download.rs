@@ -40,32 +40,15 @@ where
         version_id: Option<String>,
         auto_purchase: bool,
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
-        tracing::debug!(
-            app_id,
-            guid_len = guid.len(),
-            version_id_present = version_id.is_some(),
-            auto_purchase,
-            "starting download use case"
-        );
         let account = self
             .credentials
             .load_account()
             .await
             .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
             .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
-        tracing::debug!(
-            has_purchase_token = !account.password_token.is_empty(),
-            store_front_present = !account.store_front.is_empty(),
-            "download account loaded"
-        );
-
         if auto_purchase {
-            tracing::debug!(app_id, "attempting auto-purchase before download");
             match self.app_store.purchase(&account, app_id, guid).await {
-                Ok(()) => tracing::debug!(app_id, "auto-purchase completed"),
-                Err(AppStoreError::NoLicense(_)) => {
-                    tracing::debug!(app_id, "auto-purchase skipped for existing license");
-                }
+                Ok(()) | Err(AppStoreError::NoLicense(_)) => {}
                 Err(e) => return Err(e),
             }
         }
@@ -74,7 +57,6 @@ where
             .app_store
             .download(&account, app_id, guid, version_id)
             .await?;
-        tracing::debug!(app_id, item_count = items.len(), "download items returned");
         Ok(items)
     }
 }
@@ -85,7 +67,6 @@ mod tests {
     use crate::domain::entity::Account;
     use crate::domain::error::AppStoreError;
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
-    use crate::domain::usecase::log_capture::LogCapture;
 
     fn test_account() -> Account {
         Account {
@@ -145,30 +126,6 @@ mod tests {
                 .await
                 .is_ok()
         );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn download_logs_context_and_result() {
-        let capture = LogCapture::default();
-        let _guard = capture.install();
-        let app_store = FakeAppStoreRepository::new()
-            .with_purchase_result(Ok(()))
-            .with_download_result(Ok(vec![]));
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
-
-        let use_case = Download::new(app_store, credentials);
-        use_case
-            .execute(12345, "guid123", Some("100".into()), true)
-            .await
-            .unwrap();
-
-        let logs = capture.contents();
-        assert!(logs.contains("starting download use case"));
-        assert!(logs.contains("auto_purchase=true"));
-        assert!(logs.contains("version_id_present=true"));
-        assert!(logs.contains("auto-purchase completed"));
-        assert!(logs.contains("download items returned"));
-        assert!(!logs.contains("token123"));
     }
 
     #[tokio::test]

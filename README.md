@@ -50,8 +50,19 @@
 ```text
 Account / results   Text tables, JSON
 IPA artifacts       Patched .ipa (sinf + iTunesMetadata injected)
-Logging             tracing to stderr (JSON via IPAKEEP_LOG_FORMAT=json)
+Logging             tracing to stderr (`RUST_LOG`, `--verbose`, optional JSON)
 ```
+
+### Logging
+
+Logs are written to stderr so command results, including `--format json`, stay
+clean on stdout. The default level is `info`; `--verbose` defaults to `debug`,
+and `RUST_LOG` can set a more specific filter. Set
+`IPAKEEP_LOG_FORMAT=json` for structured JSON and `IPAKEEP_ENV` to label the
+deployment environment. HTTP events include method, host, status, and elapsed
+time; they omit paths, query strings, headers, and bodies. See
+[`docs/observability.md`](docs/observability.md) for the event policy and
+diagnostics guide.
 
 ---
 

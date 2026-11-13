@@ -1,4 +1,4 @@
-//! Test helpers for asserting `tracing` output.
+//! Test-only capture writer for `tracing` assertions.
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -7,16 +7,6 @@ use tracing_subscriber::fmt::MakeWriter;
 
 static LOG_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
 
-/// Pin tracing's global `MAX_LEVEL` at `TRACE` exactly once.
-///
-/// `install` only sets a *thread-local* subscriber, so without this the global
-/// `MAX_LEVEL` reflects the global default (`NoSubscriber` = `OFF`). An
-/// interest-cache rebuild — which any thread can trigger by hitting a new
-/// callsite — then recomputes that hint and the `debug!`/`info!` macro fast
-/// path (`level <= LevelFilter::current()`) silently drops events bound for the
-/// thread-local capture, intermittently. A permanent no-op global subscriber
-/// whose max-level hint is `TRACE` keeps the fast path open; the thread-local
-/// capture still takes precedence for events on the test's own thread.
 fn pin_global_max_level() {
     static INIT: OnceLock<()> = OnceLock::new();
     INIT.get_or_init(|| {
@@ -31,13 +21,13 @@ fn pin_global_max_level() {
 
 /// In-memory sink for test log assertions.
 #[derive(Clone, Default)]
-pub struct LogCapture {
+pub(crate) struct LogCapture {
     inner: Arc<Mutex<Vec<u8>>>,
 }
 
 impl LogCapture {
     /// Install a debug-level subscriber writing into this capture.
-    pub fn install(&self) -> LogCaptureGuard {
+    pub(crate) fn install(&self) -> LogCaptureGuard {
         pin_global_max_level();
         let lock = match LOG_CAPTURE_LOCK.lock() {
             Ok(lock) => lock,
@@ -55,7 +45,7 @@ impl LogCapture {
     }
 
     /// Return captured logs as UTF-8 text.
-    pub fn contents(&self) -> String {
+    pub(crate) fn contents(&self) -> String {
         String::from_utf8_lossy(&self.lock()).into_owned()
     }
 
@@ -67,8 +57,8 @@ impl LogCapture {
     }
 }
 
-/// Keeps a test log subscriber installed while holding the global capture lock.
-pub struct LogCaptureGuard {
+/// Keeps a test subscriber installed while holding the global capture lock.
+pub(crate) struct LogCaptureGuard {
     _subscriber: DefaultGuard,
     _lock: MutexGuard<'static, ()>,
 }
@@ -83,8 +73,7 @@ impl<'a> MakeWriter<'a> for LogCapture {
     }
 }
 
-/// Writer that appends formatter output to a shared buffer.
-pub struct LogWriter {
+pub(crate) struct LogWriter {
     inner: Arc<Mutex<Vec<u8>>>,
 }
 

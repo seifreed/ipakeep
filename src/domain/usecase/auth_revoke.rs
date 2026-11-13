@@ -26,9 +26,7 @@ where
     ///
     /// Returns `CredentialError::NotFound` if no credentials exist.
     pub async fn execute(&self) -> Result<(), CredentialError> {
-        tracing::debug!("deleting stored auth account");
         self.credentials.delete_account().await?;
-        tracing::debug!("stored auth account deleted");
         Ok(())
     }
 }

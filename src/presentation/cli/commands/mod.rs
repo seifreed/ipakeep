@@ -75,7 +75,7 @@ mod tests {
     use super::resolve_app_id;
     use crate::domain::entity::App;
     use crate::domain::repository::FakeAppStoreRepository;
-    use crate::domain::usecase::log_capture::LogCapture;
+    use crate::infrastructure::observability::log_capture::LogCapture;
 
     fn app(id: i64) -> App {
         App {

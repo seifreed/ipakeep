@@ -1,7 +1,6 @@
 use super::*;
 use crate::domain::entity::Account;
 use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
-use crate::domain::usecase::log_capture::LogCapture;
 
 fn test_account() -> Account {
     Account {
@@ -35,27 +34,6 @@ async fn login_success_saves_credentials() {
     assert_eq!(credentials.save_calls().len(), 1);
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn login_logs_progress_without_secrets() {
-    let capture = LogCapture::default();
-    let _guard = capture.install();
-    let app_store = FakeAppStoreRepository::new().with_authenticate_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-
-    let use_case = AuthLogin::new(app_store, credentials);
-    use_case
-        .execute("test@example.com", "S3cr3t-pass", "guid123")
-        .await
-        .unwrap();
-
-    let logs = capture.contents();
-    assert!(logs.contains("starting legacy auth login"));
-    assert!(logs.contains("legacy auth account saved"));
-    assert!(!logs.contains("S3cr3t-pass"));
-    assert!(!logs.contains("token123"));
-    assert!(!logs.contains("test@example.com"));
-}
-
 #[tokio::test]
 async fn login_auth_failure_does_not_save() {
     let app_store = FakeAppStoreRepository::new()
@@ -84,28 +62,6 @@ async fn login_with_2fa_success() {
 
     assert!(result.is_ok());
     assert_eq!(credentials.save_calls().len(), 1);
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn two_factor_login_logs_progress_without_secrets() {
-    let capture = LogCapture::default();
-    let _guard = capture.install();
-    let app_store =
-        FakeAppStoreRepository::new().with_authenticate_with_2fa_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-
-    let use_case = AuthLogin::new(app_store, credentials);
-    use_case
-        .login_with_2fa("test@example.com", "S3cr3t-pass", "123456", "guid123")
-        .await
-        .unwrap();
-
-    let logs = capture.contents();
-    assert!(logs.contains("starting legacy auth login with 2fa"));
-    assert!(logs.contains("legacy 2fa auth account saved"));
-    assert!(!logs.contains("S3cr3t-pass"));
-    assert!(!logs.contains("123456"));
-    assert!(!logs.contains("token123"));
 }
 
 #[tokio::test]

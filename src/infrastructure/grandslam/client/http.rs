@@ -3,6 +3,7 @@
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::http::plist_codec::{decode_plist, encode_plist};
 use crate::infrastructure::http::response_snippet;
+use crate::infrastructure::http::telemetry::send_with_observability;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -29,8 +30,7 @@ pub(super) async fn post_plist(
         }
     }
 
-    let response = request
-        .send()
+    let response = send_with_observability(client, request)
         .await
         .map_err(|e| AppStoreError::NetworkError(format!("HTTP POST failed: {e}")))?;
 

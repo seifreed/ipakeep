@@ -3,6 +3,7 @@
 use super::AnisetteData;
 use super::fields::{AnisetteFields, build_cpd, build_headers};
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::send_with_observability;
 use serde_json::Value as JsonValue;
 
 pub(super) async fn fetch_remote(
@@ -10,9 +11,11 @@ pub(super) async fn fetch_remote(
     base_url: &str,
 ) -> Result<AnisetteData, AppStoreError> {
     let url = base_url.trim_end_matches('/').to_string();
-    let response = client.get(&url).send().await.map_err(|e| {
-        AppStoreError::NetworkError(format!("anisette server request to {url} failed: {e}"))
-    })?;
+    let response = send_with_observability(client, client.get(&url))
+        .await
+        .map_err(|e| {
+            AppStoreError::NetworkError(format!("anisette server request to {url} failed: {e}"))
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -45,9 +48,13 @@ async fn fetch_remote_user_agent(
     client_info: &str,
 ) -> Result<Option<String>, AppStoreError> {
     let url = format!("{base_url}/v3/client_info");
-    let response = client.get(&url).send().await.map_err(|e| {
-        AppStoreError::NetworkError(format!("anisette client info request to {url} failed: {e}"))
-    })?;
+    let response = send_with_observability(client, client.get(&url))
+        .await
+        .map_err(|e| {
+            AppStoreError::NetworkError(format!(
+                "anisette client info request to {url} failed: {e}"
+            ))
+        })?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }

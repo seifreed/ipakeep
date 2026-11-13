@@ -11,9 +11,6 @@ pub mod list_versions;
 pub mod purchase;
 pub mod search;
 
-#[cfg(test)]
-pub(crate) mod log_capture;
-
 pub use auth_info::AuthInfo;
 pub use auth_login::{AuthLogin, GrandslamCredentials};
 pub use auth_revoke::AuthRevoke;

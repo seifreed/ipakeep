@@ -32,14 +32,7 @@ where
         country: &str,
         limit: u32,
     ) -> Result<Vec<App>, AppStoreError> {
-        tracing::debug!(
-            term_len = term.len(),
-            country,
-            limit,
-            "starting search use case"
-        );
         let apps = self.app_store.search(term, country, limit).await?;
-        tracing::debug!(result_count = apps.len(), "search results returned");
         Ok(apps)
     }
 }

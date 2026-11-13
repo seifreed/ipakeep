@@ -126,3 +126,18 @@ Remaining work: move instrumentation out of domain use cases; observe outbound
 HTTP, storage, filesystem, and subprocess boundaries; test structured output,
 secret handling, and concurrent events; finish the operator documentation and
 rescore.
+
+### Milestone 2 — domain boundary and outbound HTTP
+
+Removed direct `tracing` calls from `domain/usecase`; the use cases now depend
+only on their repository ports. Moved the in-memory capture utility to the
+test-only infrastructure observability module. All outbound `reqwest` sends
+now pass through one infrastructure helper that records method, hostname,
+HTTP status, outcome, and duration. It classifies transport errors without
+recording their text and never records URL paths/queries, headers, or bodies.
+
+Validation at this milestone: 267 tests pass, 1 ignored; `cargo check`,
+`cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check` pass. Two
+HTTP telemetry tests cover secret omission and overlapping async requests.
+The initial score remains 4.4/10 pending the remaining I/O boundaries, security
+review, and integration-level logger tests.

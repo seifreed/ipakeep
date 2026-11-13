@@ -27,12 +27,7 @@ where
     ///
     /// Returns `CredentialError::LoadFailed` if credentials cannot be read.
     pub async fn execute(&self) -> Result<Option<Account>, CredentialError> {
-        tracing::debug!("loading stored auth account");
         let account = self.credentials.load_account().await?;
-        tracing::debug!(
-            account_present = account.is_some(),
-            "stored auth account loaded"
-        );
         Ok(account)
     }
 }

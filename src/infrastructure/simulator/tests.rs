@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::usecase::log_capture::LogCapture;
+use crate::infrastructure::observability::log_capture::LogCapture;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
