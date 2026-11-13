@@ -180,8 +180,13 @@ alone.
 # Inspect encrypted slices and the exact dump filenames.
 ipakeep decrypt inspect MyApp.ipa
 
-# Dump the running app through Frida, then patch the plaintext slices.
-ipakeep decrypt dump com.example.MyApp --ipa MyApp.ipa --spawn
+# Dump the installed app through Frida. Without --ipa, the installed (still
+# encrypted) bundle is pulled from the device, so versions always match.
+ipakeep decrypt dump com.example.MyApp --spawn
+
+# Event-driven extensions (notification services, widgets) often cannot be
+# launched for a dump; drop them instead of failing.
+ipakeep decrypt dump com.example.MyApp --spawn --drop-undumped-extensions
 
 # Validate that every Mach-O slice is structurally decrypted.
 ipakeep decrypt verify MyApp-decrypted.ipa
@@ -196,11 +201,16 @@ target; `decrypt inspect` reports which iOS majors satisfy each slice's minimum
 OS. `--dumper frida-ios-dump`, `bagbak`, and `r2flutch` can drive an installed
 third-party dumper instead.
 
-Pass `decrypt dump` the encrypted IPA for the exact app version installed on
-the target. A matching bundle ID is not enough: releases can have different
-encrypted slice sizes, which ipakeep checks before writing output. Use
-`list-versions` and `download --external-version-id` to select the matching
-App Store version.
+If you pass `--ipa`, it must be the encrypted IPA for the exact app version
+installed on the target. A matching bundle ID is not enough: ipakeep compares
+each dumped slice's `LC_UUID` and size with the IPA and refuses a different
+build. Omitting `--ipa` avoids the problem: ipakeep copies the installed bundle
+off the device through Frida's system session (no SSH needed) and patches that.
+
+Tested end to end on a jailbroken iPhone 8 (iOS 16.7.16, Dopamine, Frida 17):
+the main executable and all embedded frameworks were dumped and verified with
+`cryptid 0`; the app's notification-service extension could not be launched
+on demand and was removed with `--drop-undumped-extensions`.
 
 A normal, non-jailbroken iPhone can install a properly re-signed **decrypted**
 IPA, but pairing it or enabling Developer Mode does not grant access to an
