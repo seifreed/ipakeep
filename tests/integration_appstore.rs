@@ -35,6 +35,7 @@ fn test_config(server: &MockServer) -> AppleApiConfig {
         itunes_search_url: format!("{}/search", server.uri()),
         itunes_lookup_url: format!("{}/lookup", server.uri()),
         store_base_url: server.uri(),
+        signed_store_login: false,
     }
 }
 

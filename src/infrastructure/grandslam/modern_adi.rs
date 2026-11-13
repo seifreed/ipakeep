@@ -1,6 +1,7 @@
 //! Local modern ADI Anisette provider for macOS.
 
-use crate::domain::error::AppStoreError;
+use crate::domain::entity::Account;
+use crate::domain::error::{AppStoreError, TwoFactorMethod};
 use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::grandslam::anisette::AnisetteData;
 use crate::infrastructure::grandslam::anisette::from_headers;
@@ -69,6 +70,126 @@ async fn generate_fresh() -> Result<AnisetteData, AppStoreError> {
     })?;
     validate_headers(&value.headers)?;
     build_anisette_data(value.headers)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreLoginResponse {
+    #[serde(default)]
+    auth_code_required: bool,
+    #[serde(default)]
+    account: StoreAccount,
+    #[serde(default)]
+    cookies: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct StoreAccount {
+    email: String,
+    name: String,
+    password_token: String,
+    directory_services_identifier: String,
+    store_front: String,
+    pod: String,
+}
+
+/// Log in to the App Store `MZFinance` endpoint through the bundled ipatool
+/// helper, which signs the request with the Store AMD proof and SAP action
+/// signature Apple now requires to issue a purchase `passwordToken`.
+///
+/// Without `code`, Apple pushes a 2FA code to trusted devices and this returns
+/// `AuthCodeRequired`; call again with the code to finish.
+///
+/// # Errors
+///
+/// Returns `AuthCodeRequired` when Apple wants a 2FA code, otherwise
+/// `AuthenticationFailed` if the helper or Apple rejects the login.
+pub async fn store_login(
+    email: &str,
+    password: &str,
+    code: Option<&str>,
+) -> Result<Account, AppStoreError> {
+    let request = serde_json::to_vec(&serde_json::json!({
+        "email": email,
+        "password": password,
+        "code": code.unwrap_or_default(),
+    }))
+    .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
+    let span = tracing::Span::current();
+    let output = tokio::task::spawn_blocking(move || span.in_scope(|| run_login_helper(&request)))
+        .await
+        .map_err(|error| {
+            AppStoreError::NetworkError(format!("App Store login task failed: {error}"))
+        })??;
+    parse_store_login(&output)
+}
+
+fn run_login_helper(request: &[u8]) -> Result<Vec<u8>, AppStoreError> {
+    let mut child = Command::new(helper_path()?)
+        .arg("login")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            AppStoreError::NetworkError(format!("could not start App Store login helper: {error}"))
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(request).map_err(|error| {
+            AppStoreError::NetworkError(format!("send App Store login request: {error}"))
+        })?;
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        AppStoreError::NetworkError(format!("App Store login helper failed: {error}"))
+    })?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(AppStoreError::AuthenticationFailed(
+            error.trim().chars().take(512).collect(),
+        ));
+    }
+    if output.stdout.len() > MAX_HELPER_OUTPUT {
+        return Err(AppStoreError::NetworkError(
+            "App Store login helper output exceeds size limit".into(),
+        ));
+    }
+    Ok(output.stdout)
+}
+
+fn parse_store_login(output: &[u8]) -> Result<Account, AppStoreError> {
+    let response: StoreLoginResponse = serde_json::from_slice(output).map_err(|error| {
+        AppStoreError::NetworkError(format!(
+            "App Store login helper returned invalid JSON: {error}"
+        ))
+    })?;
+    if response.auth_code_required {
+        return Err(AppStoreError::AuthCodeRequired {
+            dsid: String::new(),
+            idms_token: String::new(),
+            method: TwoFactorMethod::TrustedDevice,
+        });
+    }
+    let account = response.account;
+    if account.password_token.is_empty() || account.directory_services_identifier.is_empty() {
+        return Err(AppStoreError::AuthenticationFailed(
+            "App Store login did not return a purchase token".into(),
+        ));
+    }
+    Ok(Account {
+        email: account.email,
+        name: account.name,
+        password_token: account.password_token,
+        dsid: Some(account.directory_services_identifier.clone()),
+        directory_services_id: account.directory_services_identifier,
+        store_front: account.store_front,
+        pod: account.pod,
+        idms_token: None,
+        adsid: None,
+        grandslam_session_key: None,
+        grandslam_continuation: None,
+        cookies: response.cookies,
+    })
 }
 
 fn build_anisette_data(headers: HashMap<String, String>) -> Result<AnisetteData, AppStoreError> {
@@ -306,6 +427,27 @@ mod tests {
         let headers = HashMap::from([("X-Apple-I-MD".into(), "token\nInjected: yes".into())]);
 
         assert!(validate_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn store_login_maps_helper_responses() {
+        let account = parse_store_login(
+            br#"{"account":{"email":"a@b.c","name":"A B","passwordToken":"tok","directoryServicesIdentifier":"42","storeFront":"143454-8,32","pod":"71"},"cookies":["mz_at0-42=x; Domain=apple.com"]}"#,
+        )
+        .unwrap();
+        assert_eq!(account.password_token, "tok");
+        assert_eq!(account.directory_services_id, "42");
+        assert_eq!(account.store_front, "143454-8,32");
+        assert_eq!(account.cookies.len(), 1);
+
+        assert!(matches!(
+            parse_store_login(br#"{"authCodeRequired":true,"account":{}}"#),
+            Err(AppStoreError::AuthCodeRequired { .. })
+        ));
+        assert!(matches!(
+            parse_store_login(br#"{"account":{"email":"a@b.c"}}"#),
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
     }
 
     #[tokio::test]

@@ -94,20 +94,7 @@ impl AppStoreRepository for AppleAppStoreRepository {
         password: &str,
         guid: &str,
     ) -> Result<Account, AppStoreError> {
-        let auth_url = crate::infrastructure::appstore::bag::resolve_auth_endpoint(
-            &self.client,
-            &self.config.bag_url,
-            guid,
-        )
-        .await?;
-        crate::infrastructure::appstore::authentication::authenticate(
-            &self.client,
-            &auth_url,
-            email,
-            password,
-            guid,
-        )
-        .await
+        store_authenticate(self, email, password, None, guid).await
     }
 
     async fn authenticate_with_2fa(
@@ -117,21 +104,7 @@ impl AppStoreRepository for AppleAppStoreRepository {
         code: &str,
         guid: &str,
     ) -> Result<Account, AppStoreError> {
-        let auth_url = crate::infrastructure::appstore::bag::resolve_auth_endpoint(
-            &self.client,
-            &self.config.bag_url,
-            guid,
-        )
-        .await?;
-        crate::infrastructure::appstore::authentication::authenticate_with_2fa(
-            &self.client,
-            &auth_url,
-            email,
-            password,
-            code,
-            guid,
-        )
-        .await
+        store_authenticate(self, email, password, Some(code), guid).await
     }
 
     async fn authenticate_grandslam(
@@ -281,6 +254,36 @@ impl AppStoreRepository for AppleAppStoreRepository {
         guid: &str,
     ) -> Result<Vec<AppVersion>, AppStoreError> {
         commerce::list_versions(self, account, app_id, guid).await
+    }
+}
+
+async fn store_authenticate(
+    repository: &AppleAppStoreRepository,
+    email: &str,
+    password: &str,
+    code: Option<&str>,
+    guid: &str,
+) -> Result<Account, AppStoreError> {
+    #[cfg(ipakeep_modern_adi)]
+    if repository.config.signed_store_login {
+        return crate::infrastructure::grandslam::store_login(email, password, code).await;
+    }
+
+    let client = &repository.client;
+    let auth_url = crate::infrastructure::appstore::bag::resolve_auth_endpoint(
+        client,
+        &repository.config.bag_url,
+        guid,
+    )
+    .await?;
+    match code {
+        Some(code) => {
+            super::authentication::authenticate_with_2fa(
+                client, &auth_url, email, password, code, guid,
+            )
+            .await
+        }
+        None => super::authentication::authenticate(client, &auth_url, email, password, guid).await,
     }
 }
 

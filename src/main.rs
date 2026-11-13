@@ -430,7 +430,7 @@ fn command_name(command: &Commands) -> &'static str {
 }
 
 fn use_grandslam(cli: &Cli) -> bool {
-    cli.grandslam || (cfg!(ipakeep_modern_adi) && !cli.legacy)
+    cli.grandslam
 }
 
 #[cfg(test)]
@@ -444,20 +444,8 @@ mod tests {
         assert_eq!(command_name(&command.command), "search");
     }
 
-    #[cfg(ipakeep_modern_adi)]
     #[test]
-    fn modern_macos_defaults_to_grandslam_unless_legacy_is_forced() {
-        let default = Cli::try_parse_from(["ipakeep", "auth", "login"]).expect("CLI options");
-        let legacy =
-            Cli::try_parse_from(["ipakeep", "--legacy", "auth", "login"]).expect("CLI options");
-
-        assert!(use_grandslam(&default));
-        assert!(!use_grandslam(&legacy));
-    }
-
-    #[cfg(not(ipakeep_modern_adi))]
-    #[test]
-    fn non_macos_defaults_to_configurator_and_accepts_grandslam_flag() {
+    fn defaults_to_store_login_and_accepts_grandslam_flag() {
         let default = Cli::try_parse_from(["ipakeep", "auth", "login"]).expect("CLI options");
         let grandslam =
             Cli::try_parse_from(["ipakeep", "--grandslam", "auth", "login"]).expect("CLI options");
