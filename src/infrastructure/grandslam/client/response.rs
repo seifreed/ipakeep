@@ -158,4 +158,17 @@ mod tests {
         assert!(error.contains("error code 7"));
         assert!(!error.contains("account-secret"));
     }
+
+    #[test]
+    fn extract_base64_reports_invalid_encoded_data() {
+        assert_eq!(
+            extract_base64(&json!({"token": "AQ=="}), "token"),
+            Ok(vec![1])
+        );
+        assert!(
+            extract_base64(&json!({"token": "%%%"}), "token")
+                .unwrap_err()
+                .contains("base64 decode failed for token")
+        );
+    }
 }
