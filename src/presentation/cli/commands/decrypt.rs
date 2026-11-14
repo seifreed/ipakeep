@@ -438,13 +438,61 @@ fn append_macho_text(out: &mut String, macho: &MachoReport) {
 mod tests {
     use super::*;
     use crate::infrastructure::decrypt::{MachoVerify, SliceVerify};
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
 
     fn empty_ipa() -> Vec<u8> {
         zip::ZipWriter::new(Cursor::new(Vec::new()))
             .finish()
             .unwrap()
             .into_inner()
+    }
+
+    fn encrypted_ipa() -> Vec<u8> {
+        const CRYPTOFF: usize = 0x100;
+        const CRYPTSIZE: usize = 0x40;
+        const ARM64: u32 = 0x0100_000c;
+        const ENCRYPTION_INFO_64: u32 = 0x2c;
+        const BUILD_VERSION: u32 = 0x32;
+        let mut macho = vec![0u8; CRYPTOFF + CRYPTSIZE];
+        for (offset, value) in [
+            (0, 0xfeed_facfu32),
+            (4, ARM64),
+            (8, 0),
+            (12, 2),
+            (16, 2),
+            (20, 48),
+            (24, 0),
+            (28, 0),
+            (32, ENCRYPTION_INFO_64),
+            (36, 24),
+            (40, CRYPTOFF as u32),
+            (44, CRYPTSIZE as u32),
+            (48, 1),
+            (52, 0),
+            (56, BUILD_VERSION),
+            (60, 24),
+            (64, 2),
+            (68, 16 << 16),
+            (72, 16 << 16),
+            (76, 0),
+        ] {
+            macho[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        macho[CRYPTOFF..].fill(0x11);
+
+        let info = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>TestExec</string><key>MinimumOSVersion</key><string>16.0</string></dict></plist>"#;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in [
+            ("Payload/Test.app/Info.plist", &info[..]),
+            ("Payload/Test.app/TestExec", &macho),
+            ("Payload/Test.app/SC_Info/TestExec.sinf", b"sinf"),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
     }
 
     #[test]
@@ -644,6 +692,35 @@ mod tests {
         assert!(handle_inspect(&ipa, &OutputFormat::Text).is_ok());
         assert!(handle_verify(&ipa, &OutputFormat::Json).is_err());
         assert!(handle_verify(&ipa, &OutputFormat::Text).is_err());
+    }
+
+    #[test]
+    fn ipa_handlers_inspect_patch_verify_and_lower_minimum_os() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = work.path().join("encrypted.ipa");
+        std::fs::write(&ipa, encrypted_ipa()).unwrap();
+        assert!(handle_inspect(&ipa, &OutputFormat::Json).is_ok());
+        assert!(handle_inspect(&ipa, &OutputFormat::Text).is_ok());
+        assert!(
+            handle_verify(&ipa, &OutputFormat::Json)
+                .unwrap_err()
+                .contains("still encrypted")
+        );
+
+        let dumps = work.path().join("dumps");
+        std::fs::create_dir(&dumps).unwrap();
+        std::fs::write(
+            dumps.join("TestExec.arm64.bin"),
+            (0..64).map(|i| i as u8).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let patched = work.path().join("patched.ipa");
+        handle_patch(&ipa, &dumps, Some(&patched)).unwrap();
+        assert!(handle_verify(&patched, &OutputFormat::Text).is_ok());
+
+        let min_os = work.path().join("min-os.ipa");
+        handle_set_min_os(&ipa, "15.1", Some(&min_os)).unwrap();
+        assert!(min_os.is_file());
     }
 
     #[test]
