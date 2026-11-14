@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
+
+static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Resolve `program` against `PATH` (or as a literal path when it contains `/`).
 pub(crate) fn find_in_path(program: &str) -> Option<PathBuf> {
@@ -148,14 +151,15 @@ fn record_process_result(
 /// Returns an error if the directory cannot be created.
 pub(crate) fn temp_dir(prefix: &str) -> Result<PathBuf, String> {
     let unique = format!(
-        "ipakeep-{prefix}-{}-{}",
+        "ipakeep-{prefix}-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
+            .map_or(0, |d| d.as_nanos()),
+        TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     let dir = std::env::temp_dir().join(unique);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::create_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(dir)
 }
 
@@ -243,8 +247,11 @@ mod tests {
     #[test]
     fn temporary_directory_and_newest_ipa_helpers_handle_empty_and_present_files() {
         let path = temp_dir("coverage").unwrap();
+        let second = temp_dir("coverage").unwrap();
         assert!(path.is_dir());
+        assert_ne!(path, second);
         std::fs::remove_dir_all(&path).unwrap();
+        std::fs::remove_dir_all(second).unwrap();
 
         let work = tempfile::tempdir().unwrap();
         assert_eq!(newest_ipa(work.path()), None);
