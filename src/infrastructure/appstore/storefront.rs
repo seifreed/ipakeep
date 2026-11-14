@@ -69,7 +69,7 @@ fn country_from_locale(locale: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{country_from_locale, storefront_for_country};
+    use super::{country_from_locale, locale_country, storefront_for_country};
 
     #[test]
     fn storefront_for_country_maps_known_countries_case_insensitively() {
@@ -122,5 +122,10 @@ mod tests {
         assert_eq!(country_from_locale("en_US").as_deref(), Some("us"));
         assert_eq!(country_from_locale("C"), None);
         assert_eq!(country_from_locale(""), None);
+    }
+
+    #[test]
+    fn locale_country_returns_no_or_two_letter_region() {
+        assert!(locale_country().is_none_or(|country| country.len() == 2));
     }
 }
