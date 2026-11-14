@@ -314,33 +314,8 @@ fn run_fouldecrypt(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
         })?;
     }
 
-    let local_script = work.join("run.sh");
-    std::fs::write(
-        &local_script,
-        include_str!("../../../scripts/fouldecrypt/run.sh"),
-    )
-    .map_err(|error| format!("{}: {error}", local_script.display()))?;
-    let local_script = local_script.to_string_lossy().into_owned();
-
-    run_remote(
-        scp_argv(
-            req.ssh,
-            use_password,
-            &local_script,
-            &remote_spec(req.ssh, REMOTE_SCRIPT),
-        ),
-        password.as_deref(),
-    )?;
-    std::thread::sleep(SSH_PAUSE);
-    run_remote(
-        ssh_argv(
-            req.ssh,
-            use_password,
-            &remote_command(REMOTE_SCRIPT, req.bundle_id, REMOTE_OUT_IPA),
-        ),
-        password.as_deref(),
-    )?;
-    std::thread::sleep(SSH_PAUSE);
+    let local_script = write_fouldecrypt_script(work)?;
+    deploy_and_run_fouldecrypt(req, &local_script, password.as_deref(), use_password)?;
 
     let local_ipa = work.join("fouldecrypt.ipa");
     run_remote(
@@ -359,6 +334,41 @@ fn run_fouldecrypt(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
         )
     })?;
     ensure_decrypted(bytes)
+}
+
+fn write_fouldecrypt_script(work: &Path) -> Result<String, String> {
+    let path = work.join("run.sh");
+    std::fs::write(&path, include_str!("../../../scripts/fouldecrypt/run.sh"))
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn deploy_and_run_fouldecrypt(
+    req: &DumpRequest,
+    local_script: &str,
+    password: Option<&str>,
+    use_password: bool,
+) -> Result<(), String> {
+    run_remote(
+        scp_argv(
+            req.ssh,
+            use_password,
+            local_script,
+            &remote_spec(req.ssh, REMOTE_SCRIPT),
+        ),
+        password,
+    )?;
+    std::thread::sleep(SSH_PAUSE);
+    run_remote(
+        ssh_argv(
+            req.ssh,
+            use_password,
+            &remote_command(REMOTE_SCRIPT, req.bundle_id, REMOTE_OUT_IPA),
+        ),
+        password,
+    )?;
+    std::thread::sleep(SSH_PAUSE);
+    Ok(())
 }
 
 /// Run a prepared ssh/scp command, feeding the password through `SSHPASS` (never
