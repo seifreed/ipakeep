@@ -1,8 +1,94 @@
 use super::parsing::{external_version_ids, parse_download_item};
 use super::*;
+use crate::domain::entity::test_support::test_account;
+use crate::domain::repository::{DownloadRepository, PurchaseRepository, VersionRepository};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread::JoinHandle;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+#[tokio::test]
+async fn commerce_download_sends_version_and_list_versions_skips_missing_ids() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "songList": [{
+                "URL": "https://example.test/app.ipa",
+                "metadata": {"bundleShortVersionString": "1.2"}
+            }]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let config = AppleApiConfig {
+        store_base_url: server.uri(),
+        signed_store_login: false,
+        ..AppleApiConfig::default()
+    };
+    let repository =
+        AppleAppStoreRepository::with_config(AppleHttpClient::new().expect("HTTP client"), config);
+    let mut account = test_account();
+    account.pod.clear();
+
+    let items = repository
+        .download(&account, 42, "guid", Some("9001".into()))
+        .await
+        .expect("download items");
+    assert_eq!(items.len(), 1);
+    assert!(
+        repository
+            .list_versions(&account, 42, "guid")
+            .await
+            .expect("versions")
+            .is_empty()
+    );
+
+    let requests = server.received_requests().await.expect("requests");
+    let first_body = String::from_utf8_lossy(&requests[0].body);
+    let second_body = String::from_utf8_lossy(&requests[1].body);
+    assert!(first_body.contains("externalVersionId"));
+    assert!(first_body.contains("9001"));
+    assert!(!second_body.contains("externalVersionId"));
+}
+
+#[tokio::test]
+async fn commerce_purchase_reports_storefront_mismatch_without_failure_type() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/WebObjects/MZFinance.woa/wa/buyProduct"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("x-set-apple-store-front", "143441-7,28")
+                .set_body_json(serde_json::json!({"customerMessage": "not eligible"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let config = AppleApiConfig {
+        store_base_url: server.uri(),
+        signed_store_login: false,
+        ..AppleApiConfig::default()
+    };
+    let repository =
+        AppleAppStoreRepository::with_config(AppleHttpClient::new().expect("HTTP client"), config);
+    let mut account = test_account();
+    account.pod.clear();
+
+    let error = repository
+        .purchase(&account, 42, "guid")
+        .await
+        .expect_err("purchase should be rejected");
+    assert!(matches!(error, AppStoreError::PurchaseFailed(message)
+        if message.contains("not eligible")
+            && message.contains("store front sent: 143441-2,26")
+            && message.contains("Apple expects: 143441-7,28")));
+}
 
 #[tokio::test]
 async fn repository_search_uses_configured_http_endpoint() {
