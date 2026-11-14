@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     use crate::domain::entity::Account;
     use crate::domain::error::AppStoreError;
-    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use crate::domain::repository::{AppStoreRepo, CredentialRepo};
 
     fn test_account() -> Account {
         Account {
@@ -87,8 +87,14 @@ mod tests {
 
     #[tokio::test]
     async fn download_without_auto_purchase() {
-        let app_store = FakeAppStoreRepository::new().with_download_result(Ok(vec![]));
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_download()
+            .return_once(|_, _, _, _| Ok(vec![]));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
 
         let use_case = Download::new(app_store, credentials);
         let result: Result<Vec<DownloadItem>, AppStoreError> =
@@ -98,8 +104,9 @@ mod tests {
 
     #[tokio::test]
     async fn download_fails_without_login() {
-        let app_store = FakeAppStoreRepository::new();
-        let credentials = InMemoryCredentialRepository::new();
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| Ok(None));
 
         let use_case = Download::new(app_store, credentials);
         let result: Result<Vec<DownloadItem>, AppStoreError> =
@@ -113,10 +120,17 @@ mod tests {
 
     #[tokio::test]
     async fn download_auto_purchase_ignores_existing_license() {
-        let app_store = FakeAppStoreRepository::new()
-            .with_purchase_result(Err(AppStoreError::NoLicense(12345)))
-            .with_download_result(Ok(vec![]));
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_purchase()
+            .return_once(|_, _, _| Err(AppStoreError::NoLicense(12345)));
+        app_store
+            .expect_download()
+            .return_once(|_, _, _, _| Ok(vec![]));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
 
         let use_case = Download::new(app_store, credentials);
 
@@ -130,10 +144,14 @@ mod tests {
 
     #[tokio::test]
     async fn download_auto_purchase_returns_purchase_error() {
-        let app_store = FakeAppStoreRepository::new()
-            .with_purchase_result(Err(AppStoreError::PurchaseFailed("nope".into())))
-            .with_download_result(Ok(vec![]));
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_purchase()
+            .return_once(|_, _, _| Err(AppStoreError::PurchaseFailed("nope".into())));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
 
         let use_case = Download::new(app_store, credentials);
         let error = use_case

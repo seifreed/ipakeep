@@ -37,7 +37,7 @@ mod tests {
     use super::*;
     use crate::domain::entity::Account;
     use crate::domain::error::CredentialError;
-    use crate::domain::repository::InMemoryCredentialRepository;
+    use crate::domain::repository::CredentialRepo;
 
     fn test_account() -> Account {
         Account {
@@ -58,7 +58,10 @@ mod tests {
 
     #[tokio::test]
     async fn info_returns_stored_account() {
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
 
         let use_case = AuthInfo::new(credentials);
         let result: Result<Option<Account>, CredentialError> = use_case.execute().await;
@@ -71,7 +74,8 @@ mod tests {
 
     #[tokio::test]
     async fn info_returns_none_when_no_credentials() {
-        let credentials = InMemoryCredentialRepository::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| Ok(None));
 
         let use_case = AuthInfo::new(credentials);
         let result: Result<Option<Account>, CredentialError> = use_case.execute().await;

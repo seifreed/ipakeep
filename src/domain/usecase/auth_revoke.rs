@@ -35,36 +35,25 @@ where
 mod tests {
     use super::*;
     use crate::domain::error::CredentialError;
-    use crate::domain::repository::InMemoryCredentialRepository;
+    use crate::domain::repository::CredentialRepo;
 
     #[tokio::test]
     async fn revoke_deletes_credentials() {
-        let credentials =
-            InMemoryCredentialRepository::new().with_account(crate::domain::entity::Account {
-                email: "test@example.com".into(),
-                name: "Test User".into(),
-                password_token: "token123".into(),
-                directory_services_id: "dsid123".into(),
-                store_front: "143441-2,26".into(),
-                pod: "3".into(),
-                idms_token: None,
-                dsid: None,
-                adsid: None,
-                grandslam_session_key: None,
-                grandslam_continuation: None,
-                cookies: Vec::new(),
-            });
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_delete_account().return_once(|| Ok(()));
 
-        let use_case = AuthRevoke::new(credentials.clone());
+        let use_case = AuthRevoke::new(credentials);
         let result: Result<(), CredentialError> = use_case.execute().await;
 
         assert!(result.is_ok());
-        assert_eq!(credentials.delete_calls(), 1);
     }
 
     #[tokio::test]
     async fn revoke_fails_when_no_credentials() {
-        let credentials = InMemoryCredentialRepository::new();
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_delete_account()
+            .return_once(|| Err(CredentialError::NotFound));
 
         let use_case = AuthRevoke::new(credentials);
         let result: Result<(), CredentialError> = use_case.execute().await;

@@ -41,7 +41,7 @@ where
 mod tests {
     use super::*;
     use crate::domain::error::AppStoreError;
-    use crate::domain::repository::FakeAppStoreRepository;
+    use crate::domain::repository::AppStoreRepo;
 
     #[tokio::test]
     async fn search_returns_results() {
@@ -53,21 +53,23 @@ mod tests {
             price: 0.0,
         }];
 
-        let app_store = FakeAppStoreRepository::new().with_search_result(Ok(apps));
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_search()
+            .withf(|term, country, limit| term == "example" && country == "us" && *limit == 5)
+            .return_once(|_, _, _| Ok(apps));
 
-        let use_case = Search::new(app_store.clone());
+        let use_case = Search::new(app_store);
         let result: Result<Vec<App>, AppStoreError> = use_case.execute("example", "us", 5).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 1);
-
-        let calls = app_store.search_calls();
-        assert_eq!(calls, vec![("example".into(), "us".into(), 5)]);
     }
 
     #[tokio::test]
     async fn search_empty_results() {
-        let app_store = FakeAppStoreRepository::new().with_search_result(Ok(vec![]));
+        let mut app_store = AppStoreRepo::new();
+        app_store.expect_search().return_once(|_, _, _| Ok(vec![]));
 
         let use_case = Search::new(app_store);
         let result: Result<Vec<App>, AppStoreError> =

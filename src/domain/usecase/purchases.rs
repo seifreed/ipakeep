@@ -72,7 +72,7 @@ mod tests {
     use super::*;
     use crate::domain::entity::{Account, OwnedApp};
     use crate::domain::error::AppStoreError;
-    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use crate::domain::repository::{AppStoreRepo, CredentialRepo};
 
     fn account() -> Account {
         Account {
@@ -104,9 +104,10 @@ mod tests {
 
     #[tokio::test]
     async fn purchases_fails_without_login() {
-        let app_store = FakeAppStoreRepository::new();
-        let credentials = InMemoryCredentialRepository::new();
-        let use_case = Purchases::new(app_store.clone(), credentials);
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| Ok(None));
+        let use_case = Purchases::new(app_store, credentials);
 
         let result: Result<Vec<OwnedApp>, AppStoreError> = use_case.execute(10, None).await;
 
@@ -118,26 +119,34 @@ mod tests {
 
     #[tokio::test]
     async fn purchases_returns_repository_apps() {
-        let app_store =
-            FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![owned_app()]));
-        let credentials = InMemoryCredentialRepository::new().with_account(account());
-        let use_case = Purchases::new(app_store.clone(), credentials);
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_list_purchases()
+            .withf(|_, limit| *limit == 25)
+            .return_once(|_, _| Ok(vec![owned_app()]));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(account())));
+        let use_case = Purchases::new(app_store, credentials);
 
         let apps = use_case.execute(25, None).await.unwrap();
 
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].id, 894_490_049);
         assert_eq!(apps[0].platforms, vec!["iphone", "ipad"]);
-        let calls = app_store.list_purchases_calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, 25);
     }
 
     #[tokio::test]
     async fn purchases_propagates_repository_error() {
-        let app_store = FakeAppStoreRepository::new()
-            .with_list_purchases_result(Err(AppStoreError::NetworkError("boom".into())));
-        let credentials = InMemoryCredentialRepository::new().with_account(account());
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_list_purchases()
+            .return_once(|_, _| Err(AppStoreError::NetworkError("boom".into())));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(account())));
         let use_case = Purchases::new(app_store, credentials);
 
         let error = use_case.execute(10, None).await.unwrap_err();
@@ -147,25 +156,33 @@ mod tests {
 
     #[tokio::test]
     async fn purchases_filters_platform_case_insensitively() {
-        let app_store = FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![
-            owned_app(),
-            owned_app(),
-            OwnedApp {
-                id: 8,
-                bundle_id: "com.example.macapp".into(),
-                name: "Mac app".into(),
-                version: "1.0".into(),
-                platforms: vec!["macos".into()],
-                purchase_date: None,
-            },
-        ]));
-        let credentials = InMemoryCredentialRepository::new().with_account(account());
-        let use_case = Purchases::new(app_store.clone(), credentials);
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_list_purchases()
+            .withf(|_, limit| *limit == 100)
+            .return_once(|_, _| {
+                Ok(vec![
+                    owned_app(),
+                    owned_app(),
+                    OwnedApp {
+                        id: 8,
+                        bundle_id: "com.example.macapp".into(),
+                        name: "Mac app".into(),
+                        version: "1.0".into(),
+                        platforms: vec!["macos".into()],
+                        purchase_date: None,
+                    },
+                ])
+            });
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(account())));
+        let use_case = Purchases::new(app_store, credentials);
 
         let apps = use_case.execute(1, Some("IPad")).await.unwrap();
 
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].id, 894_490_049);
-        assert_eq!(app_store.list_purchases_calls()[0].1, 100);
     }
 }

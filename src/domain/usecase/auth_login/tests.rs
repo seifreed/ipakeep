@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::entity::Account;
-use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+use crate::domain::error::CredentialError;
+use crate::domain::repository::{AppStoreRepo, CredentialRepo};
 
 fn test_account() -> Account {
     Account {
@@ -21,70 +22,92 @@ fn test_account() -> Account {
 
 #[tokio::test]
 async fn login_success_saves_credentials() {
-    let app_store = FakeAppStoreRepository::new().with_authenticate_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate()
+        .withf(|email, password, guid| {
+            email == "test@example.com" && password == "password" && guid == "guid123"
+        })
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|_| Ok(()));
 
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let use_case = AuthLogin::new(app_store, credentials);
     let result: Result<Account, AppStoreError> = use_case
         .execute("test@example.com", "password", "guid123")
         .await;
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap().email, "test@example.com");
-    assert_eq!(credentials.save_calls().len(), 1);
 }
 
 #[tokio::test]
 async fn login_auth_failure_does_not_save() {
-    let app_store = FakeAppStoreRepository::new()
-        .with_authenticate_result(Err(AppStoreError::InvalidCredentials));
-    let credentials = InMemoryCredentialRepository::new();
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate()
+        .return_once(|_, _, _| Err(AppStoreError::InvalidCredentials));
+    let credentials = CredentialRepo::new();
 
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let use_case = AuthLogin::new(app_store, credentials);
     let result: Result<Account, AppStoreError> = use_case
         .execute("test@example.com", "wrong", "guid123")
         .await;
 
     assert!(result.is_err());
-    assert_eq!(credentials.save_calls().len(), 0);
 }
 
 #[tokio::test]
 async fn login_with_2fa_success() {
-    let app_store =
-        FakeAppStoreRepository::new().with_authenticate_with_2fa_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_with_2fa()
+        .return_once(|_, _, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|_| Ok(()));
 
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let use_case = AuthLogin::new(app_store, credentials);
     let result: Result<Account, AppStoreError> = use_case
         .login_with_2fa("test@example.com", "password", "123456", "guid123")
         .await;
 
     assert!(result.is_ok());
-    assert_eq!(credentials.save_calls().len(), 1);
 }
 
 #[tokio::test]
 async fn login_credential_save_failure_returns_error() {
-    let app_store = FakeAppStoreRepository::new().with_authenticate_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-    // InMemoryCredentialRepository always succeeds on save, so we test
-    // the happy path and verify save_account was exercised.
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate()
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials
+        .expect_save_account()
+        .return_once(|_| Err(CredentialError::SaveFailed("disk full".into())));
+    let use_case = AuthLogin::new(app_store, credentials);
     let result: Result<Account, AppStoreError> = use_case
         .execute("test@example.com", "password", "guid123")
         .await;
 
-    assert!(result.is_ok());
-    assert_eq!(credentials.save_calls().len(), 1);
+    assert!(matches!(result, Err(AppStoreError::Unexpected(_))));
 }
 
 #[tokio::test]
 async fn trusted_device_grandslam_2fa_relogs_before_saving_account() {
-    let app_store =
-        FakeAppStoreRepository::new().with_authenticate_grandslam_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-    let use_case = AuthLogin::new(app_store.clone(), credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_validate_trusted_device_code()
+        .withf(|dsid, token, code| dsid == "dsid123" && token == "idms123" && code == "123456")
+        .return_once(|_, _, _| Ok(()));
+    app_store
+        .expect_authenticate_grandslam()
+        .withf(|email, password, guid| {
+            email == "test@example.com" && password == "password" && guid == "guid123"
+        })
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|_| Ok(()));
+    let use_case = AuthLogin::new(app_store, credentials);
 
     let result = use_case
         .complete_trusted_device_grandslam_2fa(
@@ -102,27 +125,23 @@ async fn trusted_device_grandslam_2fa_relogs_before_saving_account() {
         .unwrap();
 
     assert_eq!(result.email, "test@example.com");
-    assert_eq!(
-        app_store.validate_trusted_device_code_calls(),
-        vec![("dsid123".into(), "idms123".into(), "123456".into())]
-    );
-    assert_eq!(
-        app_store.authenticate_grandslam_calls(),
-        vec![(
-            "test@example.com".into(),
-            "password".into(),
-            "guid123".into()
-        )]
-    );
-    assert_eq!(credentials.save_calls().len(), 1);
 }
 
 #[tokio::test]
 async fn sms_grandslam_2fa_relogs_before_saving_account() {
-    let app_store =
-        FakeAppStoreRepository::new().with_authenticate_grandslam_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-    let use_case = AuthLogin::new(app_store.clone(), credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_validate_sms_code()
+        .withf(|dsid, token, phone_id, code| {
+            dsid == "dsid123" && token == "idms123" && *phone_id == 1 && code == "123456"
+        })
+        .return_once(|_, _, _, _| Ok(()));
+    app_store
+        .expect_authenticate_grandslam()
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|_| Ok(()));
+    let use_case = AuthLogin::new(app_store, credentials);
 
     let result = use_case
         .complete_sms_grandslam_2fa(
@@ -141,28 +160,22 @@ async fn sms_grandslam_2fa_relogs_before_saving_account() {
         .unwrap();
 
     assert_eq!(result.email, "test@example.com");
-    assert_eq!(
-        app_store.validate_sms_code_calls(),
-        vec![("dsid123".into(), "idms123".into(), 1, "123456".into())]
-    );
-    assert_eq!(
-        app_store.authenticate_grandslam_calls(),
-        vec![(
-            "test@example.com".into(),
-            "password".into(),
-            "guid123".into()
-        )]
-    );
-    assert_eq!(credentials.save_calls().len(), 1);
 }
 
 #[tokio::test]
 async fn execute_grandslam_sets_store_front_when_spd_omits_it() {
     let mut account = test_account();
     account.store_front = String::new();
-    let app_store = FakeAppStoreRepository::new().with_authenticate_grandslam_result(Ok(account));
-    let credentials = InMemoryCredentialRepository::new();
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_grandslam()
+        .return_once(|_, _, _| Ok(account));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|account| {
+        assert_eq!(account.store_front, "143454-1");
+        Ok(())
+    });
+    let use_case = AuthLogin::new(app_store, credentials);
 
     let result = use_case
         .execute_grandslam("test@example.com", "password", "guid123", Some("143454-1"))
@@ -170,16 +183,18 @@ async fn execute_grandslam_sets_store_front_when_spd_omits_it() {
         .unwrap();
 
     assert_eq!(result.store_front, "143454-1");
-    assert_eq!(credentials.save_calls()[0].store_front, "143454-1");
 }
 
 #[tokio::test]
 async fn execute_grandslam_rejects_account_without_purchase_token() {
     let mut account = test_account();
     account.password_token.clear();
-    let app_store = FakeAppStoreRepository::new().with_authenticate_grandslam_result(Ok(account));
-    let credentials = InMemoryCredentialRepository::new();
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_grandslam()
+        .return_once(|_, _, _| Ok(account));
+    let credentials = CredentialRepo::new();
+    let use_case = AuthLogin::new(app_store, credentials);
 
     let result = use_case
         .execute_grandslam("test@example.com", "password", "guid123", Some("143454-1"))
@@ -189,17 +204,19 @@ async fn execute_grandslam_rejects_account_without_purchase_token() {
         panic!("expected AuthenticationFailed");
     };
     assert!(message.contains("purchase token"));
-    assert!(credentials.save_calls().is_empty());
 }
 
 #[tokio::test]
 async fn execute_grandslam_preserves_store_front_from_spd() {
     // test_account() already carries a store front; the derived value must
     // not overwrite one Apple actually provided.
-    let app_store =
-        FakeAppStoreRepository::new().with_authenticate_grandslam_result(Ok(test_account()));
-    let credentials = InMemoryCredentialRepository::new();
-    let use_case = AuthLogin::new(app_store, credentials.clone());
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_grandslam()
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials.expect_save_account().return_once(|_| Ok(()));
+    let use_case = AuthLogin::new(app_store, credentials);
 
     let result = use_case
         .execute_grandslam("test@example.com", "password", "guid123", Some("143454-1"))

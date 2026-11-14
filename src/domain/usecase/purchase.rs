@@ -48,7 +48,7 @@ where
 mod tests {
     use super::*;
     use crate::domain::entity::Account;
-    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use crate::domain::repository::{AppStoreRepo, CredentialRepo};
 
     fn test_account() -> Account {
         Account {
@@ -69,8 +69,12 @@ mod tests {
 
     #[tokio::test]
     async fn purchase_success() {
-        let app_store = FakeAppStoreRepository::new().with_purchase_result(Ok(()));
-        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let mut app_store = AppStoreRepo::new();
+        app_store.expect_purchase().return_once(|_, _, _| Ok(()));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
 
         let use_case = Purchase::new(app_store, credentials);
         let result: Result<(), AppStoreError> = use_case.execute(12345, "guid123").await;
@@ -80,8 +84,9 @@ mod tests {
 
     #[tokio::test]
     async fn purchase_fails_without_login() {
-        let app_store = FakeAppStoreRepository::new();
-        let credentials = InMemoryCredentialRepository::new();
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| Ok(None));
 
         let use_case = Purchase::new(app_store, credentials);
         let result: Result<(), AppStoreError> = use_case.execute(12345, "guid123").await;

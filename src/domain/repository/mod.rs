@@ -6,6 +6,9 @@ pub mod credential_repository;
 #[cfg(test)]
 pub mod fake;
 
+#[cfg(test)]
+mod mocks;
+
 pub use app_store_repository::{
     AppStoreRepository, AuthenticationRepository, CatalogRepository, DownloadRepository,
     PurchaseRepository, VersionRepository,
@@ -14,3 +17,6 @@ pub use credential_repository::CredentialRepository;
 
 #[cfg(test)]
 pub use fake::{FakeAppStoreRepository, InMemoryCredentialRepository};
+
+#[cfg(test)]
+pub(crate) use mocks::{AppStoreRepo, CredentialRepo};

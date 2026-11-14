@@ -50,7 +50,7 @@ mod tests {
     use super::*;
     use crate::domain::entity::Account;
     use crate::domain::error::AppStoreError;
-    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use crate::domain::repository::{AppStoreRepo, CredentialRepo};
 
     fn account() -> Account {
         Account {
@@ -71,8 +71,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_versions_fails_without_login() {
-        let app_store = FakeAppStoreRepository::new();
-        let credentials = InMemoryCredentialRepository::new();
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| Ok(None));
         let use_case = ListVersions::new(app_store, credentials);
         let result: Result<Vec<AppVersion>, AppStoreError> =
             use_case.execute(12345, "guid123").await;
@@ -85,12 +86,17 @@ mod tests {
 
     #[tokio::test]
     async fn list_versions_returns_repository_versions() {
-        let app_store =
-            FakeAppStoreRepository::new().with_list_versions_result(Ok(vec![AppVersion {
+        let mut app_store = AppStoreRepo::new();
+        app_store.expect_list_versions().return_once(|_, _, _| {
+            Ok(vec![AppVersion {
                 external_version_id: "100".into(),
                 version_string: "1.0".into(),
-            }]));
-        let credentials = InMemoryCredentialRepository::new().with_account(account());
+            }])
+        });
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(account())));
         let use_case = ListVersions::new(app_store, credentials);
 
         let versions = use_case.execute(12345, "guid123").await.unwrap();
