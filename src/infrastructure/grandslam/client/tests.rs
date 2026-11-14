@@ -212,26 +212,32 @@ async fn post_plist_returns_status_error_before_decoding_body() {
 
 #[tokio::test]
 async fn success_status_reports_response_body_read_failures() {
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
-    let (release_server, wait_for_release) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut chunk = [0; 1024];
+        while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+            let count = stream.read(&mut chunk).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..count]);
+        }
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nx")
             .unwrap();
         stream.flush().unwrap();
-        wait_for_release.recv().unwrap();
     });
     let response = reqwest::Client::new()
         .get(format!("http://{address}/"))
         .send()
         .await
         .unwrap();
-    release_server.send(()).unwrap();
 
     assert!(matches!(
         http::ensure_success_status(response, "fixture").await,
