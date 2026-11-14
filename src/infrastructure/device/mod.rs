@@ -186,4 +186,43 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn workdir_install_rejects_invalid_archives_before_signing_or_device_commands() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ipa = dir.path().join("invalid.ipa");
+        let workdir = dir.path().join("work");
+        fs::create_dir(&workdir).unwrap();
+        fs::write(&ipa, b"not a zip archive").unwrap();
+        let request = InstallRequest {
+            ipa: &ipa,
+            device: "device",
+            identity: "identity",
+            provisioning_profiles: &[],
+            entitlements: None,
+            launch: false,
+            legacy_device: false,
+        };
+        assert!(install_in_workdir(&request, &workdir).is_err());
+
+        let ipa = dir.path().join("no-app.ipa");
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "Payload/readme.txt",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        std::io::Write::write_all(&mut writer, b"no app").unwrap();
+        fs::write(&ipa, writer.finish().unwrap().into_inner()).unwrap();
+        let request = InstallRequest {
+            ipa: &ipa,
+            ..request
+        };
+        assert!(
+            install_in_workdir(&request, &workdir)
+                .unwrap_err()
+                .contains("did not contain Payload/*.app")
+        );
+    }
 }
