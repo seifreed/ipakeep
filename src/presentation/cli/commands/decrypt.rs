@@ -741,6 +741,12 @@ mod tests {
         let min_os = work.path().join("min-os.ipa");
         handle_set_min_os(&ipa, "15.1", Some(&min_os)).unwrap();
         assert!(min_os.is_file());
+
+        handle_set_min_os(&ipa, "15.1", None).unwrap();
+        assert!(work.path().join("encrypted-minos.ipa").is_file());
+
+        let missing_parent = work.path().join("missing/min-os.ipa");
+        assert!(handle_set_min_os(&ipa, "15.1", Some(&missing_parent)).is_err());
     }
 
     #[test]
