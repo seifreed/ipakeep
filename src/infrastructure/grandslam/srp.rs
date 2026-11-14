@@ -139,6 +139,14 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn aes_cbc_decrypt_rejects_a_short_key() {
+        assert_eq!(
+            aes_cbc_decrypt(&[0; AES_256_KEY_LEN - 1], &[0; AES_BLOCK_LEN], &[]).unwrap_err(),
+            "AES key too short (expected 32 bytes)"
+        );
+    }
+
     fn encrypt_spd_fixture(session_key: &[u8], plaintext: &[u8]) -> Vec<u8> {
         use aes::Aes256;
         use aes::cipher::{BlockEncryptMut, KeyIvInit};
