@@ -229,6 +229,17 @@ mod tests {
         VersionRepository,
     };
 
+    #[test]
+    fn poisoned_repository_lock_recovers_the_inner_state() {
+        let repository = FakeAppStoreRepository::new();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repository.with_inner(|_| panic!("poison test lock"));
+        }));
+
+        assert!(panic.is_err());
+        assert!(repository.search_calls().is_empty());
+    }
+
     fn account() -> Account {
         Account {
             email: "test@example.com".into(),
