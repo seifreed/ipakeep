@@ -126,6 +126,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_auto_purchase_continues_after_successful_purchase() {
+        let mut app_store = AppStoreRepo::new();
+        app_store.expect_purchase().return_once(|_, _, _| Ok(()));
+        app_store
+            .expect_download()
+            .return_once(|_, _, _, _| Ok(vec![]));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
+
+        let use_case = Download::new(app_store, credentials);
+        assert!(use_case.execute(12345, "guid123", None, true).await.is_ok());
+    }
+
+    #[tokio::test]
     async fn download_auto_purchase_returns_purchase_error() {
         let mut app_store = AppStoreRepo::new();
         app_store
