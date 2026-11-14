@@ -54,6 +54,7 @@ pub async fn resolve_auth_endpoint(
 #[cfg(test)]
 mod tests {
     use super::{CONFIGURATOR_AUTH_ENDPOINT, resolve_auth_endpoint};
+    use crate::domain::error::AppStoreError;
     use crate::infrastructure::http::AppleHttpClient;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -97,5 +98,27 @@ mod tests {
             .await
             .expect("endpoint");
         assert_eq!(endpoint, "https://auth.example.com/custom");
+    }
+
+    #[tokio::test]
+    async fn reports_a_missing_authentication_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/bag.xml"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "unrelated": true
+            })))
+            .mount(&server)
+            .await;
+
+        let client = AppleHttpClient::new().expect("client");
+        let result =
+            resolve_auth_endpoint(&client, &format!("{}/bag.xml", server.uri()), "GUID").await;
+
+        assert!(matches!(
+            result,
+            Err(AppStoreError::Unexpected(message))
+                if message == "missing authentication endpoint in bag.xml"
+        ));
     }
 }
