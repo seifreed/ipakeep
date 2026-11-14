@@ -48,10 +48,11 @@ pub fn storefront_for_country(country: &str) -> Option<String> {
 /// (`LC_ALL`/`LANG`, e.g. `es_ES.UTF-8` → `es`). Returns `None` when the locale
 /// is absent or carries no region (e.g. `C`, `POSIX`).
 pub fn locale_country() -> Option<String> {
-    let locale = std::env::var("LC_ALL")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var("LANG").ok())?;
+    locale_country_from_values(std::env::var("LC_ALL").ok(), std::env::var("LANG").ok())
+}
+
+fn locale_country_from_values(lc_all: Option<String>, lang: Option<String>) -> Option<String> {
+    let locale = lc_all.filter(|value| !value.is_empty()).or(lang)?;
     country_from_locale(&locale)
 }
 
@@ -69,7 +70,9 @@ fn country_from_locale(locale: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{country_from_locale, locale_country, storefront_for_country};
+    use super::{
+        country_from_locale, locale_country, locale_country_from_values, storefront_for_country,
+    };
 
     #[test]
     fn storefront_for_country_maps_known_countries_case_insensitively() {
@@ -127,5 +130,22 @@ mod tests {
     #[test]
     fn locale_country_returns_no_or_two_letter_region() {
         assert!(locale_country().is_none_or(|country| country.len() == 2));
+    }
+
+    #[test]
+    fn locale_country_prefers_nonempty_lc_all_then_falls_back_to_lang() {
+        assert_eq!(
+            locale_country_from_values(Some("es_ES.UTF-8".into()), Some("fr_FR".into())).as_deref(),
+            Some("es")
+        );
+        assert_eq!(
+            locale_country_from_values(Some(String::new()), Some("fr_FR".into())).as_deref(),
+            Some("fr")
+        );
+        assert_eq!(locale_country_from_values(None, None), None);
+        assert_eq!(
+            locale_country_from_values(Some("C".into()), Some("fr_FR".into())),
+            None
+        );
     }
 }
