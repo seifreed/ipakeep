@@ -3,6 +3,7 @@
 //! Uses the native macOS Security framework via `security_framework`
 //! to store credentials as a generic password item.
 
+use super::common::{deserialize_account, elapsed_ms, serialize_account};
 use crate::domain::entity::Account;
 use crate::domain::error::CredentialError;
 use crate::domain::repository::CredentialRepository;
@@ -86,9 +87,7 @@ async fn find_generic_password(service: &str, account: &str) -> Result<Vec<u8>, 
 impl CredentialRepository for MacOSKeychain {
     async fn save_account(&self, account: &Account) -> Result<(), CredentialError> {
         let started = Instant::now();
-        let json = serde_json::to_string_pretty(account).map_err(|e: serde_json::Error| {
-            CredentialError::SaveFailed(format!("serialization failed: {e}"))
-        })?;
+        let json = serialize_account(account)?;
 
         tokio::task::spawn_blocking({
             let service = self.service_name.clone();
@@ -120,12 +119,7 @@ impl CredentialRepository for MacOSKeychain {
         let started = Instant::now();
         match find_generic_password(&self.service_name, &self.account_name).await {
             Ok(bytes) => {
-                let account: Account =
-                    serde_json::from_slice(&bytes).map_err(|e: serde_json::Error| {
-                        CredentialError::InvalidCredentials(format!(
-                            "failed to parse credentials: {e}"
-                        ))
-                    })?;
+                let account = deserialize_account(&bytes)?;
                 tracing::debug!(
                     service = "ipakeep",
                     component = "credential_store",
@@ -187,30 +181,10 @@ impl CredentialRepository for MacOSKeychain {
     }
 }
 
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_account() -> Account {
-        Account {
-            email: "test@example.com".into(),
-            name: "Test User".into(),
-            password_token: "token123".into(),
-            directory_services_id: "dsid123".into(),
-            store_front: "143441-2,26".into(),
-            pod: "3".into(),
-            idms_token: None,
-            dsid: None,
-            adsid: None,
-            grandslam_session_key: None,
-            grandslam_continuation: None,
-            cookies: Vec::new(),
-        }
-    }
+    use crate::infrastructure::keychain::test_support::test_account;
 
     /// Build a unique keychain instance for a given test name and attempt
     /// to delete any pre-existing item so the test starts from a clean slate.

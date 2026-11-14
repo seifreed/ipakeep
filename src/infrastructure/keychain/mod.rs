@@ -1,5 +1,9 @@
 //! Keychain infrastructure — credential persistence implementations.
 
+mod common;
+#[cfg(test)]
+mod test_support;
+
 pub mod file_keychain;
 
 #[cfg(target_os = "macos")]

@@ -3,6 +3,7 @@
 //! Stores credentials as JSON in `~/.ipakeep/auth.json`.
 //! This implementation prioritizes simplicity and cross-platform compatibility.
 
+use super::common::{deserialize_account, elapsed_ms, serialize_account};
 use crate::domain::entity::Account;
 use crate::domain::error::CredentialError;
 use crate::domain::repository::CredentialRepository;
@@ -58,9 +59,7 @@ impl CredentialRepository for FileKeychain {
         let started = Instant::now();
         self.ensure_dir().await?;
 
-        let json = serde_json::to_string_pretty(account).map_err(|e: serde_json::Error| {
-            CredentialError::SaveFailed(format!("serialization failed: {e}"))
-        })?;
+        let json = serialize_account(account)?;
 
         write_private_file(&self.auth_file(), &json)?;
         tracing::info!(
@@ -97,9 +96,7 @@ impl CredentialRepository for FileKeychain {
             .await
             .map_err(|e: std::io::Error| CredentialError::LoadFailed(e.to_string()))?;
 
-        let account: Account = serde_json::from_str(&content).map_err(|e: serde_json::Error| {
-            CredentialError::InvalidCredentials(format!("failed to parse credentials: {e}"))
-        })?;
+        let account = deserialize_account(content.as_bytes())?;
 
         tracing::debug!(
             service = "ipakeep",
@@ -136,10 +133,6 @@ impl CredentialRepository for FileKeychain {
         );
         Ok(())
     }
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(unix)]
@@ -183,25 +176,9 @@ fn write_private_file(path: &Path, content: &str) -> Result<(), CredentialError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::keychain::test_support::test_account;
     use crate::infrastructure::observability::log_capture::LogCapture;
     use tempfile::TempDir;
-
-    fn test_account() -> Account {
-        Account {
-            email: "test@example.com".into(),
-            name: "Test User".into(),
-            password_token: "token123".into(),
-            directory_services_id: "dsid123".into(),
-            store_front: "143441-2,26".into(),
-            pod: "3".into(),
-            idms_token: None,
-            dsid: None,
-            adsid: None,
-            grandslam_session_key: None,
-            grandslam_continuation: None,
-            cookies: Vec::new(),
-        }
-    }
 
     #[tokio::test]
     async fn save_and_load_account() {
