@@ -32,8 +32,12 @@ fn first_booted_simulator_udid(device_name: Option<&str>) -> Result<String, Stri
         "/usr/bin/xcrun",
         &["simctl", "list", "--json", "-e", "devices"],
     ))?;
+    find_booted_simulator_udid(&output, device_name)
+}
+
+fn find_booted_simulator_udid(output: &str, device_name: Option<&str>) -> Result<String, String> {
     let json: Value =
-        serde_json::from_str(&output).map_err(|e| format!("failed to parse simctl JSON: {e}"))?;
+        serde_json::from_str(output).map_err(|e| format!("failed to parse simctl JSON: {e}"))?;
     let devices = json
         .get("devices")
         .and_then(Value::as_object)
@@ -79,5 +83,50 @@ mod tests {
         };
 
         assert!(simulator_udid(&target).unwrap_err().contains("device"));
+    }
+
+    #[test]
+    fn explicit_simulator_udid_is_trimmed_without_running_xcrun() {
+        let target = SimulatorTarget {
+            udid: Some("  SIM-123  ".into()),
+            device: None,
+        };
+
+        assert_eq!(simulator_udid(&target).as_deref(), Ok("SIM-123"));
+    }
+
+    #[test]
+    fn booted_simulator_lookup_filters_by_name_and_reports_missing_devices() {
+        let output = r#"{"devices":{"runtime-a":[{"name":"Phone A","udid":"A","state":"Shutdown"},{"name":"Phone B","udid":"B","state":"Booted"}],"runtime-b":[{"name":"Phone C","udid":"C","state":"Booted"}]}}"#;
+
+        assert_eq!(find_booted_simulator_udid(output, None).as_deref(), Ok("B"));
+        assert_eq!(
+            find_booted_simulator_udid(output, Some("Phone C")).as_deref(),
+            Ok("C")
+        );
+        assert!(
+            find_booted_simulator_udid(output, Some("Missing"))
+                .unwrap_err()
+                .contains("Missing")
+        );
+    }
+
+    #[test]
+    fn booted_simulator_lookup_rejects_invalid_simctl_json_shapes() {
+        assert!(
+            find_booted_simulator_udid("not json", None)
+                .unwrap_err()
+                .contains("parse")
+        );
+        assert!(
+            find_booted_simulator_udid("{}", None)
+                .unwrap_err()
+                .contains("did not contain devices")
+        );
+        assert!(
+            find_booted_simulator_udid(r#"{"devices":{}}"#, None)
+                .unwrap_err()
+                .contains("no booted Simulator found")
+        );
     }
 }
