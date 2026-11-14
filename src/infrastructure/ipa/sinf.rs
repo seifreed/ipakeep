@@ -216,3 +216,177 @@ fn bundle_relative_path(bundle_prefix: &str, path: &str) -> Result<String, Strin
         Ok(format!("{bundle_prefix}{path}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plist_bytes(value: plist::Value) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        value.to_writer_xml(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn info() -> Vec<u8> {
+        let mut dict = plist::Dictionary::new();
+        dict.insert(
+            "CFBundleExecutable".into(),
+            plist::Value::String("Game".into()),
+        );
+        plist_bytes(plist::Value::Dictionary(dict))
+    }
+
+    fn manifest(primary: &[&str], replicas: &[&str]) -> Vec<u8> {
+        let mut dict = plist::Dictionary::new();
+        for (key, paths) in [("SinfPaths", primary), ("SinfReplicationPaths", replicas)] {
+            dict.insert(
+                key.into(),
+                plist::Value::Array(
+                    paths
+                        .iter()
+                        .map(|path| plist::Value::String((*path).into()))
+                        .collect(),
+                ),
+            );
+        }
+        plist_bytes(plist::Value::Dictionary(dict))
+    }
+
+    fn ipa(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in entries {
+            writer
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, data).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn sinfs(count: usize) -> Vec<Sinf> {
+        (0..count)
+            .map(|id| Sinf {
+                id: id as i64,
+                data: vec![id as u8],
+            })
+            .collect()
+    }
+
+    fn targets(bytes: &[u8], sinfs: &[Sinf]) -> Result<Vec<(String, Vec<u8>)>, String> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        sinf_target_paths(&mut archive, sinfs)
+    }
+
+    #[test]
+    fn empty_sinf_response_needs_no_app_archive() {
+        assert!(targets(&ipa(&[]), &sinfs(0)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_manifest_uses_executable_for_one_sinf_and_rejects_many() {
+        let bytes = ipa(&[("Payload/Game.app/Info.plist", &info())]);
+        assert_eq!(
+            targets(&bytes, &sinfs(1)).unwrap(),
+            [("Payload/Game.app/SC_Info/Game.sinf".into(), vec![0])]
+        );
+        assert!(
+            targets(&bytes, &sinfs(2))
+                .unwrap_err()
+                .contains("Manifest.plist is missing")
+        );
+
+        let no_info = ipa(&[("Payload/Other.txt", b"data")]);
+        assert!(
+            targets(&no_info, &sinfs(1))
+                .unwrap_err()
+                .contains("missing Payload/*.app/Info.plist")
+        );
+    }
+
+    #[test]
+    fn manifest_maps_multiple_sinfs_and_deduplicates_replication_paths() {
+        let manifest = manifest(
+            &["SC_Info/A.sinf", "SC_Info/B.sinf"],
+            &["SC_Info/A.sinf", "SC_Info/B-copy.sinf"],
+        );
+        let bytes = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            ("Payload/Game.app/SC_Info/Manifest.plist", &manifest),
+        ]);
+        assert_eq!(
+            targets(&bytes, &sinfs(2)).unwrap(),
+            [
+                ("Payload/Game.app/SC_Info/A.sinf".into(), vec![0]),
+                ("Payload/Game.app/SC_Info/B.sinf".into(), vec![1]),
+                ("Payload/Game.app/SC_Info/B-copy.sinf".into(), vec![1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_count_mismatches_and_unsafe_or_external_paths() {
+        let bytes = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            (
+                "Payload/Game.app/SC_Info/Manifest.plist",
+                &manifest(&["SC_Info/A.sinf", "SC_Info/B.sinf"], &[]),
+            ),
+        ]);
+        assert!(
+            targets(&bytes, &sinfs(1))
+                .unwrap_err()
+                .contains("sinf count mismatch")
+        );
+
+        let valid = [
+            "../escape",
+            "/absolute",
+            r"SC_Info\bad",
+            "./dot",
+            "SC_Info//bad",
+        ];
+        for path in valid {
+            assert!(bundle_relative_path("Payload/Game.app/", path).is_err());
+        }
+        assert!(
+            bundle_relative_path("Payload/Game.app/", "Payload/Elsewhere/a.sinf")
+                .unwrap_err()
+                .contains("outside app bundle")
+        );
+    }
+
+    #[test]
+    fn malformed_or_empty_manifest_values_fall_back_or_fail_cleanly() {
+        let malformed = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            ("Payload/Game.app/SC_Info/Manifest.plist", b"broken"),
+        ]);
+        assert!(targets(&malformed, &sinfs(1)).is_err());
+
+        let root_array = plist_bytes(plist::Value::Array(Vec::new()));
+        let fallback = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            ("Payload/Game.app/SC_Info/Manifest.plist", &root_array),
+        ]);
+        assert_eq!(
+            targets(&fallback, &sinfs(1)).unwrap()[0].0,
+            "Payload/Game.app/SC_Info/Game.sinf"
+        );
+
+        let mut wrong_type = plist::Dictionary::new();
+        wrong_type.insert(
+            "SinfPaths".into(),
+            plist::Value::Array(vec![plist::Value::Integer(1.into())]),
+        );
+        let invalid = plist_bytes(plist::Value::Dictionary(wrong_type));
+        let invalid = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            ("Payload/Game.app/SC_Info/Manifest.plist", &invalid),
+        ]);
+        assert!(
+            targets(&invalid, &sinfs(1))
+                .unwrap_err()
+                .contains("non-string value")
+        );
+    }
+}
