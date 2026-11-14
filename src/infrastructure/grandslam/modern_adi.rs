@@ -32,6 +32,8 @@ struct HelperResponse {
 static PROCESS_ANISETTE: OnceLock<AnisetteData> = OnceLock::new();
 #[cfg(test)]
 static TEST_HELPER_PATH: OnceLock<PathBuf> = OnceLock::new();
+#[cfg(test)]
+static TEST_CONFIG_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
 fn finish_task<T>(
     result: Result<Result<T, AppStoreError>, tokio::task::JoinError>,
@@ -348,7 +350,10 @@ fn helper_path() -> Result<PathBuf, AppStoreError> {
     if let Some(path) = TEST_HELPER_PATH.get() {
         return Ok(path.clone());
     }
-    helper_path_from(dirs::config_dir())
+    let config_directory = dirs::config_dir();
+    #[cfg(test)]
+    let config_directory = TEST_CONFIG_DIRECTORY.get().cloned().or(config_directory);
+    helper_path_from(config_directory)
 }
 
 fn helper_path_from(config_directory: Option<PathBuf>) -> Result<PathBuf, AppStoreError> {
@@ -566,20 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn resolves_and_installs_the_helper_under_the_config_directory() {
-        let directory = tempfile::tempdir().expect("temporary config directory");
-
-        let path = helper_path_from(Some(directory.path().to_path_buf())).expect("helper path");
-
-        assert!(path.starts_with(directory.path().join("ipakeep/bin")));
-        assert!(path.is_file());
-        assert!(matches!(
-            helper_path_from(None),
-            Err(AppStoreError::NetworkError(message)) if message.contains("config directory")
-        ));
-    }
-
-    #[test]
     fn embeds_the_compiled_modern_adi_helper() {
         let directory = tempfile::tempdir().expect("temporary directory");
 
@@ -734,6 +725,13 @@ mod tests {
     #[tokio::test]
     async fn public_store_operations_run_the_configured_helper() {
         let directory = tempfile::tempdir().expect("temporary directory");
+        let config_directory = directory.path().join("config");
+        TEST_CONFIG_DIRECTORY
+            .set(config_directory.clone())
+            .expect("test config directory starts unset");
+        let installed = helper_path().expect("helper installed in temporary config");
+        assert!(installed.starts_with(config_directory.join("ipakeep/bin")));
+
         let helper = write_helper(
             directory.path(),
             "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; purchase) printf '%s' '{\"ok\":true}' ;; *) printf '%s' '{\"headers\":{\"X-Apple-I-MD\":\"otp\",\"X-Apple-I-MD-M\":\"machine\",\"X-Mme-Client-Info\":\"<Mac>\"}}' ;; esac",

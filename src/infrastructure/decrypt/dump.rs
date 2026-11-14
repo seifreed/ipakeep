@@ -107,6 +107,19 @@ pub struct DumpRequest<'a> {
     pub drop_undumped_extensions: bool,
 }
 
+type RemoteRunner = fn((String, Vec<String>), Option<&str>) -> Result<(), String>;
+
+#[derive(Clone, Copy)]
+struct DumpRuntime {
+    require_program: fn(&str) -> Result<(), String>,
+    run_remote: RemoteRunner,
+    sleep: fn(Duration),
+    run_inherit: fn(Command) -> Result<(), String>,
+}
+
+#[cfg(test)]
+static TEST_DUMP_RUNTIME: std::sync::OnceLock<DumpRuntime> = std::sync::OnceLock::new();
+
 /// Run the dump and return the decrypted IPA bytes.
 ///
 /// # Errors
@@ -115,6 +128,14 @@ pub struct DumpRequest<'a> {
 /// IPA cannot be patched.
 pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
     let work = temp_dir("dump")?;
+    let runtime = DumpRuntime {
+        require_program,
+        run_remote,
+        sleep: std::thread::sleep,
+        run_inherit,
+    };
+    #[cfg(test)]
+    let runtime = TEST_DUMP_RUNTIME.get().copied().unwrap_or(runtime);
     let result = dispatch_dump(
         req,
         &work,
@@ -124,13 +145,19 @@ pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
                 req,
                 work,
                 || std::env::var(SSH_PASSWORD_ENV).ok(),
-                require_program,
-                run_remote,
-                std::thread::sleep,
+                runtime.require_program,
+                runtime.run_remote,
+                runtime.sleep,
             )
         },
         |dumper, bundle_id, work| {
-            run_external(dumper, bundle_id, work, require_program, run_inherit)
+            run_external(
+                dumper,
+                bundle_id,
+                work,
+                runtime.require_program,
+                runtime.run_inherit,
+            )
         },
     );
     let _ = std::fs::remove_dir_all(&work);
@@ -398,13 +425,16 @@ fn run_fouldecrypt(
         ),
         password,
     )?;
-    let bytes = std::fs::read(&local_ipa).map_err(|error| {
-        format!(
-            "{}: {error} (FoulDecrypt produced no IPA; see the device-side output above)",
-            local_ipa.display()
-        )
-    })?;
+    let bytes = std::fs::read(&local_ipa)
+        .map_err(|error| fouldecrypt_missing_ipa_error(&local_ipa, &error))?;
     ensure_decrypted(bytes)
+}
+
+fn fouldecrypt_missing_ipa_error(path: &Path, error: &std::io::Error) -> String {
+    format!(
+        "{}: {error} (FoulDecrypt produced no IPA; see the device-side output above)",
+        path.display()
+    )
 }
 
 fn write_fouldecrypt_script(work: &Path) -> Result<String, String> {
@@ -665,6 +695,41 @@ mod tests {
     }
 
     #[test]
+    fn run_dump_routes_device_and_external_backends_through_local_runners() {
+        fn require(_: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn remote(_: (String, Vec<String>), _: Option<&str>) -> Result<(), String> {
+            Err("mock remote stop".into())
+        }
+        fn pause(_: Duration) {}
+        fn inherit(_: Command) -> Result<(), String> {
+            Err("mock runner stop".into())
+        }
+
+        assert!(
+            TEST_DUMP_RUNTIME
+                .set(DumpRuntime {
+                    require_program: require,
+                    run_remote: remote,
+                    sleep: pause,
+                    run_inherit: inherit,
+                })
+                .is_ok()
+        );
+        assert!(
+            run_dump(&request(Dumper::FoulDecrypt))
+                .expect_err("fake remote stops the dump")
+                .contains("mock remote stop")
+        );
+        assert!(
+            run_dump(&request(Dumper::Bagbak))
+                .expect_err("fake runner stops the dump")
+                .contains("mock runner stop")
+        );
+    }
+
+    #[test]
     fn external_dump_reports_tool_and_output_failures() {
         let work = tempfile::tempdir().expect("temporary directory");
         let required = run_external(
@@ -893,6 +958,16 @@ mod tests {
         )
         .unwrap_err();
         assert!(missing.contains("FoulDecrypt produced no IPA"));
+    }
+
+    #[test]
+    fn formats_the_missing_fouldecrypt_package_error() {
+        let path = Path::new("/tmp/fouldecrypt.ipa");
+
+        let error = fouldecrypt_missing_ipa_error(path, &std::io::Error::other("missing"));
+
+        assert!(error.contains("/tmp/fouldecrypt.ipa: missing"));
+        assert!(error.contains("FoulDecrypt produced no IPA"));
     }
 
     #[test]
