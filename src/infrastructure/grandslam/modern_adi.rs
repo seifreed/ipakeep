@@ -260,10 +260,9 @@ fn run_helper() -> Result<Vec<u8>, AppStoreError> {
         AppStoreError::NetworkError(format!("could not start modern Anisette helper: {error}"))
     })?;
     if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
         return Err(AppStoreError::NetworkError(format!(
             "modern Anisette helper failed: {}",
-            error.trim().chars().take(512).collect::<String>()
+            helper_error(&output)
         )));
     }
     if output.stdout.len() > MAX_HELPER_OUTPUT {
