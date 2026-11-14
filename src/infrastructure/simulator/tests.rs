@@ -25,6 +25,100 @@ fn convert_macho_adds_simulator_build_version() {
 }
 
 #[test]
+fn empty_and_partial_files_are_not_accepted_as_machos() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let empty = dir.path().join("Empty");
+    fs::write(&empty, []).unwrap();
+    assert!(!convert_macho_file(&empty).unwrap());
+    assert!(!is_macho_file(&empty).unwrap());
+    assert!(!is_arm64_simulator_binary(&empty).unwrap());
+
+    let partial = dir.path().join("Partial");
+    fs::write(&partial, MH_MAGIC_64.to_le_bytes()).unwrap();
+    assert!(convert_macho_file(&partial).is_err());
+}
+
+#[test]
+fn convert_rejects_zero_size_load_commands() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("ZeroCommand");
+    let mut bytes = Vec::new();
+    for value in [
+        MH_MAGIC_64,
+        CPU_TYPE_ARM64,
+        0,
+        0,
+        1,
+        8,
+        0,
+        0,
+        0xdead_beef,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    fs::write(&path, bytes).unwrap();
+
+    assert!(
+        convert_macho_file(&path)
+            .unwrap_err()
+            .contains("zero-size load command")
+    );
+}
+
+#[test]
+fn simulator_detection_rejects_short_and_out_of_bounds_commands() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let short = dir.path().join("ShortBuildVersion");
+    let mut bytes = Vec::new();
+    for value in [
+        MH_MAGIC_64,
+        CPU_TYPE_ARM64,
+        0,
+        0,
+        1,
+        8,
+        0,
+        0,
+        LC_BUILD_VERSION,
+        8,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    fs::write(&short, bytes).unwrap();
+    assert!(
+        is_arm64_simulator_binary(&short)
+            .unwrap_err()
+            .contains("command is too small")
+    );
+
+    let out_of_bounds = dir.path().join("OutOfBounds");
+    let mut bytes = Vec::new();
+    for value in [
+        MH_MAGIC_64,
+        CPU_TYPE_ARM64,
+        0,
+        0,
+        1,
+        8,
+        0,
+        0,
+        0xdead_beef,
+        16,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    fs::write(&out_of_bounds, bytes).unwrap();
+    assert!(
+        is_arm64_simulator_binary(&out_of_bounds)
+            .unwrap_err()
+            .contains("extends beyond sizeofcmds")
+    );
+}
+
+#[test]
 fn convert_macho_rejects_insert_that_would_overwrite_payload() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("PackedBinary");
