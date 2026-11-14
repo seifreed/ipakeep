@@ -225,6 +225,19 @@ mod tests {
         assert_eq!(fields.md_m, "machine");
     }
 
+    #[test]
+    fn stringifies_non_string_header_values() {
+        let obj = serde_json::json!({
+            "X-Apple-I-MD": 12345,
+            "X-Apple-I-MD-M": true
+        });
+        let fields = AnisetteFields::from_remote(obj.as_object().unwrap())
+            .expect("non-string header values are converted to strings");
+
+        assert_eq!(fields.md, "12345");
+        assert_eq!(fields.md_m, "true");
+    }
+
     /// Parse `obj` expecting rejection, returning the error's message.
     /// `AnisetteFields` holds OTP secrets and is deliberately not `Debug`, so we
     /// destructure instead of using `Result::expect_err`.
