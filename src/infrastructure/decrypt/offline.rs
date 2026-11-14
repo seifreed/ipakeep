@@ -64,36 +64,7 @@ fn decrypt_ipa(
         if !keep_watch && entry.binary_path.contains("/Watch/") {
             continue;
         }
-
-        let Some(source) = members.get(&entry.binary_path) else {
-            return Err(format!("missing binary member {}", entry.binary_path));
-        };
-
-        let sinf = read_entry_sinf(&members, &names, &entry)?;
-        let Some(supf) = members.get(&entry.supf_path) else {
-            return Err(format!("missing page-key member {}", entry.supf_path));
-        };
-
-        let credential = if fairplay::is_arcade_sinf(sinf) {
-            creds
-                .arcade
-                .as_deref()
-                .ok_or("this Apple Arcade app needs the account's Arcade credential")?
-        } else {
-            creds.standard.as_slice()
-        };
-
-        if !fairplay::credential_decodes(credential, sinf) {
-            return Err(format!(
-                "the loaded credential does not decode {}'s license — it is from a \
-                 different Apple ID than the one that owns this app",
-                entry.binary_path
-            ));
-        }
-
-        // `Ok(None)` means the slice is not encrypted — skip it.
-        if let Some((decrypted, _pages)) = fairplay::decrypt_binary(source, sinf, supf, credential)?
-        {
+        if let Some(decrypted) = decrypt_entry(&members, &names, &entry, creds)? {
             replacements.insert(entry.binary_path, decrypted);
         }
     }
@@ -103,6 +74,41 @@ fn decrypt_ipa(
     }
 
     fairplay_ipa::assemble(ipa, &replacements, keep_watch)
+}
+
+fn decrypt_entry(
+    members: &BTreeMap<String, Vec<u8>>,
+    names: &BTreeSet<String>,
+    entry: &PlanEntry,
+    creds: &Credentials,
+) -> Result<Option<Vec<u8>>, String> {
+    let source = members
+        .get(&entry.binary_path)
+        .ok_or_else(|| format!("missing binary member {}", entry.binary_path))?;
+    let sinf = read_entry_sinf(members, names, entry)?;
+    let supf = members
+        .get(&entry.supf_path)
+        .ok_or_else(|| format!("missing page-key member {}", entry.supf_path))?;
+    let credential = entry_credential(creds, sinf)?;
+    if !fairplay::credential_decodes(credential, sinf) {
+        return Err(format!(
+            "the loaded credential does not decode {}'s license — it is from a \
+             different Apple ID than the one that owns this app",
+            entry.binary_path
+        ));
+    }
+    Ok(fairplay::decrypt_binary(source, sinf, supf, credential)?.map(|(decrypted, _)| decrypted))
+}
+
+fn entry_credential<'a>(creds: &'a Credentials, sinf: &[u8]) -> Result<&'a [u8], String> {
+    if fairplay::is_arcade_sinf(sinf) {
+        creds
+            .arcade
+            .as_deref()
+            .ok_or_else(|| "this Apple Arcade app needs the account's Arcade credential".into())
+    } else {
+        Ok(creds.standard.as_slice())
+    }
 }
 
 /// The SINF bytes for an entry: its own, else a fallback from the enclosing
