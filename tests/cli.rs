@@ -35,6 +35,31 @@ fn auth_info_fails_when_not_logged_in() {
 }
 
 #[test]
+fn mcp_server_exits_cleanly_when_stdin_closes() {
+    use std::process::Stdio;
+
+    let dir = TempDir::new().unwrap();
+    let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("ipakeep"));
+    command
+        .env("HOME", dir.path())
+        .env("XDG_CONFIG_HOME", dir.path())
+        .args(["--file-keychain", "mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command.spawn().expect("start MCP server");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("MCP process output");
+
+    assert!(
+        output.status.success(),
+        "MCP server failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn search_requires_term() {
     let mut cmd = Command::cargo_bin("ipakeep").unwrap();
     cmd.arg("search");
