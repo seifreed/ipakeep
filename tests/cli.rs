@@ -2,7 +2,25 @@
 
 use assert_cmd::Command;
 use predicates::str::contains;
+use std::path::Path;
 use tempfile::TempDir;
+
+fn write_empty_ipa(path: &Path) {
+    zip::ZipWriter::new(std::fs::File::create(path).unwrap())
+        .finish()
+        .unwrap();
+}
+
+fn offline_command(home: &Path, ipa: &Path) -> Command {
+    let mut command = Command::cargo_bin("ipakeep").unwrap();
+    command
+        .env("HOME", home)
+        .env_remove("IPAKEEP_FAIRPLAY_CREDENTIAL")
+        .env_remove("IPAKEEP_FAIRPLAY_ARCADE_CREDENTIAL")
+        .args(["--file-keychain", "decrypt", "offline", "--no-on-device"])
+        .arg(ipa);
+    command
+}
 
 #[test]
 fn help_shows_usage() {
@@ -57,6 +75,62 @@ fn mcp_server_exits_cleanly_when_stdin_closes() {
         "MCP server failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn offline_decrypt_uses_explicit_fairplay_credential() {
+    let home = TempDir::new().unwrap();
+    let ipa = home.path().join("empty.ipa");
+    let credential = home.path().join("account.bin");
+    write_empty_ipa(&ipa);
+    std::fs::write(&credential, [7_u8; 16]).unwrap();
+
+    offline_command(home.path(), &ipa)
+        .env("IPAKEEP_FAIRPLAY_CREDENTIAL", credential)
+        .assert()
+        .failure()
+        .stderr(contains("no encrypted binaries"));
+}
+
+#[test]
+fn offline_decrypt_finds_one_cached_fairplay_credential() {
+    let home = TempDir::new().unwrap();
+    let credentials = home
+        .path()
+        .join("Library/Application Support/ipakeep/credentials");
+    std::fs::create_dir_all(&credentials).unwrap();
+    std::fs::write(credentials.join("account.bin"), [7_u8; 16]).unwrap();
+    let ipa = home.path().join("empty.ipa");
+    write_empty_ipa(&ipa);
+
+    offline_command(home.path(), &ipa)
+        .assert()
+        .failure()
+        .stderr(contains("no encrypted binaries"));
+}
+
+#[test]
+fn offline_decrypt_reports_missing_and_ambiguous_cached_credentials() {
+    let home = TempDir::new().unwrap();
+    let ipa = home.path().join("empty.ipa");
+    write_empty_ipa(&ipa);
+
+    offline_command(home.path(), &ipa)
+        .assert()
+        .failure()
+        .stderr(contains("no FairPlay credential found"));
+
+    let credentials = home
+        .path()
+        .join("Library/Application Support/ipakeep/credentials");
+    std::fs::create_dir_all(&credentials).unwrap();
+    std::fs::write(credentials.join("first.bin"), [1_u8; 16]).unwrap();
+    std::fs::write(credentials.join("second.bin"), [2_u8; 16]).unwrap();
+
+    offline_command(home.path(), &ipa)
+        .assert()
+        .failure()
+        .stderr(contains("multiple credentials found"));
 }
 
 #[test]
