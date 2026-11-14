@@ -1,6 +1,7 @@
 //! Interactive `GrandSlam` 2FA flow for auth login.
 
 use super::{LoginOptions, output::format_login_account};
+use crate::domain::entity::TrustedPhoneNumber;
 use crate::domain::error::TwoFactorMethod;
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthLogin, GrandslamCredentials};
@@ -160,8 +161,23 @@ where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
-    let phones = match use_case.list_trusted_phone_numbers(dsid, idms_token).await {
-        Ok(phones) if !phones.is_empty() => phones,
+    let Some(phones) = list_trusted_phones_or_default(use_case, dsid, idms_token).await else {
+        return Ok(DEFAULT_PHONE_ID);
+    };
+    choose_sms_phone_id(&phones)
+}
+
+async fn list_trusted_phones_or_default<R, C>(
+    use_case: &AuthLogin<R, C>,
+    dsid: &str,
+    idms_token: &str,
+) -> Option<Vec<TrustedPhoneNumber>>
+where
+    R: AppStoreRepository,
+    C: CredentialRepository,
+{
+    match use_case.list_trusted_phone_numbers(dsid, idms_token).await {
+        Ok(phones) if !phones.is_empty() => Some(phones),
         Ok(_) => {
             tracing::warn!(
                 service = "ipakeep",
@@ -171,7 +187,7 @@ where
                 outcome = "empty",
                 "no trusted phone numbers returned; defaulting to phone id 1"
             );
-            return Ok(DEFAULT_PHONE_ID);
+            None
         }
         Err(e) => {
             tracing::warn!(
@@ -182,11 +198,13 @@ where
                 error_type = app_store_error_type(&e),
                 "failed to list trusted phone numbers; defaulting to phone id 1"
             );
-            return Ok(DEFAULT_PHONE_ID);
+            None
         }
-    };
+    }
+}
 
-    if let [only] = phones.as_slice() {
+fn choose_sms_phone_id(phones: &[TrustedPhoneNumber]) -> Result<i64, String> {
+    if let [only] = phones {
         println!("Sending SMS to {}", only.number);
         return Ok(only.id);
     }
