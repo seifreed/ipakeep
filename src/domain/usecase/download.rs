@@ -102,6 +102,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_maps_credential_load_errors() {
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| {
+            Err(crate::domain::error::CredentialError::LoadFailed(
+                "disk".into(),
+            ))
+        });
+
+        let use_case = Download::new(app_store, credentials);
+        assert!(matches!(
+            use_case.execute(12345, "guid123", None, false).await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn download_auto_purchase_ignores_existing_license() {
         let mut app_store = AppStoreRepo::new();
         app_store

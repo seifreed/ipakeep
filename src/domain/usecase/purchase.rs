@@ -98,4 +98,21 @@ mod tests {
             "expected AuthenticationFailed error"
         );
     }
+
+    #[tokio::test]
+    async fn purchase_maps_credential_load_errors() {
+        let app_store = AppStoreRepo::new();
+        let mut credentials = CredentialRepo::new();
+        credentials.expect_load_account().return_once(|| {
+            Err(crate::domain::error::CredentialError::LoadFailed(
+                "disk".into(),
+            ))
+        });
+        let use_case = Purchase::new(app_store, credentials);
+
+        assert!(matches!(
+            use_case.execute(12345, "guid123").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+    }
 }
