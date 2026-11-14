@@ -33,6 +33,31 @@ static PROCESS_ANISETTE: OnceLock<AnisetteData> = OnceLock::new();
 #[cfg(test)]
 static TEST_HELPER_PATH: OnceLock<PathBuf> = OnceLock::new();
 
+fn finish_task<T>(
+    result: Result<Result<T, AppStoreError>, tokio::task::JoinError>,
+    operation: impl std::fmt::Display,
+) -> Result<T, AppStoreError> {
+    match result {
+        Ok(result) => result,
+        Err(error) => Err(AppStoreError::NetworkError(format!(
+            "{operation} task failed: {error}"
+        ))),
+    }
+}
+
+fn finish_helper_wait(
+    result: std::io::Result<Output>,
+    operation: &str,
+) -> Result<Output, AppStoreError> {
+    result.map_err(|error| {
+        AppStoreError::NetworkError(format!("App Store {operation} helper failed: {error}"))
+    })
+}
+
+fn io_error(action: &str, error: &std::io::Error) -> AppStoreError {
+    AppStoreError::NetworkError(format!("{action}: {error}"))
+}
+
 /// Generate Anisette using Apple's current Store ADI implementation.
 ///
 /// The helper re-provisions the machine on every run, so each call would yield
@@ -63,16 +88,16 @@ async fn generate_fresh_with_helper(
     helper: Option<PathBuf>,
 ) -> Result<AnisetteData, AppStoreError> {
     let span = tracing::Span::current();
-    let output = tokio::task::spawn_blocking(move || {
-        span.in_scope(|| match helper {
-            Some(helper) => run_helper_at(&helper),
-            None => run_helper(),
+    let output = finish_task(
+        tokio::task::spawn_blocking(move || {
+            span.in_scope(|| match helper {
+                Some(helper) => run_helper_at(&helper),
+                None => run_helper(),
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        AppStoreError::NetworkError(format!("modern Anisette task failed: {error}"))
-    })??;
+        .await,
+        "modern Anisette",
+    )?;
     let value: HelperResponse = serde_json::from_slice(&output).map_err(|error| {
         AppStoreError::NetworkError(format!(
             "modern Anisette helper returned invalid JSON: {error}"
@@ -136,19 +161,19 @@ async fn store_login_with_helper(
     }))
     .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
     let span = tracing::Span::current();
-    let output = tokio::task::spawn_blocking(move || {
-        span.in_scope(|| {
-            let helper = match helper {
-                Some(helper) => helper,
-                None => helper_path()?,
-            };
-            run_login_helper(&helper, &request)
+    let output = finish_task(
+        tokio::task::spawn_blocking(move || {
+            span.in_scope(|| {
+                let helper = match helper {
+                    Some(helper) => helper,
+                    None => helper_path()?,
+                };
+                run_login_helper(&helper, &request)
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        AppStoreError::NetworkError(format!("App Store login task failed: {error}"))
-    })??;
+        .await,
+        "App Store login",
+    )?;
     parse_store_login(&output)
 }
 
@@ -189,19 +214,19 @@ async fn store_request_with_helper(
     let request = serde_json::to_vec(request)
         .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
     let span = tracing::Span::current();
-    let output = tokio::task::spawn_blocking(move || {
-        span.in_scope(|| {
-            let helper = match helper {
-                Some(helper) => helper,
-                None => helper_path()?,
-            };
-            run_helper_command(&helper, operation, &request)
+    let output = finish_task(
+        tokio::task::spawn_blocking(move || {
+            span.in_scope(|| {
+                let helper = match helper {
+                    Some(helper) => helper,
+                    None => helper_path()?,
+                };
+                run_helper_command(&helper, operation, &request)
+            })
         })
-    })
-    .await
-    .map_err(|error| {
-        AppStoreError::NetworkError(format!("App Store {operation} task failed: {error}"))
-    })??;
+        .await,
+        format!("App Store {operation}"),
+    )?;
     if !output.status.success() {
         return Err(AppStoreError::NetworkError(format!(
             "App Store {operation} helper failed: {}",
@@ -241,9 +266,7 @@ fn run_helper_command(
             AppStoreError::NetworkError(format!("send App Store {operation} request: {error}"))
         })?;
     }
-    child.wait_with_output().map_err(|error| {
-        AppStoreError::NetworkError(format!("App Store {operation} helper failed: {error}"))
-    })
+    finish_helper_wait(child.wait_with_output(), operation)
 }
 
 fn helper_error(output: &Output) -> String {
@@ -325,7 +348,11 @@ fn helper_path() -> Result<PathBuf, AppStoreError> {
     if let Some(path) = TEST_HELPER_PATH.get() {
         return Ok(path.clone());
     }
-    let app_directory = dirs::config_dir()
+    helper_path_from(dirs::config_dir())
+}
+
+fn helper_path_from(config_directory: Option<PathBuf>) -> Result<PathBuf, AppStoreError> {
+    let app_directory = config_directory
         .ok_or_else(|| AppStoreError::NetworkError("cannot find user config directory".into()))?
         .join("ipakeep");
     ensure_private_directory(&app_directory)?;
@@ -343,9 +370,8 @@ fn install_helper(directory: &Path, binary: &[u8]) -> Result<PathBuf, AppStoreEr
     }
 
     let temporary = write_temporary_helper(directory, binary)?;
-    std::fs::rename(&temporary.0, &path).map_err(|error| {
-        AppStoreError::NetworkError(format!("install modern Anisette helper: {error}"))
-    })?;
+    std::fs::rename(&temporary.0, &path)
+        .map_err(|error| io_error("install modern Anisette helper", &error))?;
     verify_helper(&path, binary)?;
     Ok(path)
 }
@@ -362,9 +388,8 @@ fn ensure_private_directory(directory: &Path) -> Result<(), AppStoreError> {
             "modern Anisette helper path is not a real directory".into(),
         ));
     }
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
-        AppStoreError::NetworkError(format!("secure modern Anisette helper directory: {error}"))
-    })
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| io_error("secure modern Anisette helper directory", &error))
 }
 
 struct TemporaryHelper(PathBuf);
@@ -397,12 +422,10 @@ fn write_temporary_helper(
         .map_err(|error| {
             AppStoreError::NetworkError(format!("create modern Anisette helper: {error}"))
         })?;
-    file.write_all(binary).map_err(|error| {
-        AppStoreError::NetworkError(format!("write modern Anisette helper: {error}"))
-    })?;
-    file.sync_all().map_err(|error| {
-        AppStoreError::NetworkError(format!("sync modern Anisette helper: {error}"))
-    })?;
+    file.write_all(binary)
+        .map_err(|error| io_error("write modern Anisette helper", &error))?;
+    file.sync_all()
+        .map_err(|error| io_error("sync modern Anisette helper", &error))?;
     drop(file);
     Ok(temporary)
 }
@@ -415,18 +438,17 @@ fn verify_helper(path: &Path, expected: &[u8]) -> Result<(), AppStoreError> {
         .map_err(|error| {
             AppStoreError::NetworkError(format!("open installed Anisette helper: {error}"))
         })?;
-    let metadata = file.metadata().map_err(|error| {
-        AppStoreError::NetworkError(format!("inspect installed Anisette helper: {error}"))
-    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| io_error("inspect installed Anisette helper", &error))?;
     if !metadata.is_file() || metadata.len() != expected.len() as u64 {
         return Err(AppStoreError::NetworkError(
             "installed Anisette helper failed integrity validation".into(),
         ));
     }
     let mut installed = Vec::with_capacity(expected.len());
-    file.read_to_end(&mut installed).map_err(|error| {
-        AppStoreError::NetworkError(format!("read installed Anisette helper: {error}"))
-    })?;
+    file.read_to_end(&mut installed)
+        .map_err(|error| io_error("read installed Anisette helper", &error))?;
     if Sha256::digest(installed) != Sha256::digest(expected) {
         return Err(AppStoreError::NetworkError(
             "installed Anisette helper failed integrity validation".into(),
@@ -454,6 +476,42 @@ fn validate_headers(headers: &HashMap<String, String>) -> Result<(), AppStoreErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn helper_tasks_map_join_failures_to_network_errors() {
+        let task = tokio::spawn(std::future::pending::<()>());
+        task.abort();
+        let join_error = task.await.expect_err("aborted task");
+
+        assert!(matches!(
+            finish_task::<()>(Err(join_error), "helper"),
+            Err(AppStoreError::NetworkError(message)) if message.contains("helper task failed")
+        ));
+        assert!(matches!(
+            finish_task::<()>(Ok(Err(AppStoreError::AuthenticationFailed("rejected".into()))), "helper"),
+            Err(AppStoreError::AuthenticationFailed(message)) if message == "rejected"
+        ));
+        assert!(finish_task(Ok(Ok::<_, AppStoreError>(7)), "helper").is_ok());
+    }
+
+    #[test]
+    fn helper_wait_failures_are_reported_as_network_errors() {
+        assert!(matches!(
+            finish_helper_wait(Err(std::io::Error::other("wait failed")), "purchase"),
+            Err(AppStoreError::NetworkError(message)) if message.contains("purchase helper failed")
+        ));
+    }
+
+    #[test]
+    fn filesystem_failures_keep_the_operation_context() {
+        let error = io_error("write helper", &std::io::Error::other("disk full"));
+
+        assert!(matches!(
+            error,
+            AppStoreError::NetworkError(message)
+                if message == "write helper: disk full"
+        ));
+    }
 
     fn write_helper(directory: &Path, script: &str) -> PathBuf {
         let path = directory.join("helper.sh");
@@ -505,6 +563,20 @@ mod tests {
                 & 0o777,
             0o700
         );
+    }
+
+    #[test]
+    fn resolves_and_installs_the_helper_under_the_config_directory() {
+        let directory = tempfile::tempdir().expect("temporary config directory");
+
+        let path = helper_path_from(Some(directory.path().to_path_buf())).expect("helper path");
+
+        assert!(path.starts_with(directory.path().join("ipakeep/bin")));
+        assert!(path.is_file());
+        assert!(matches!(
+            helper_path_from(None),
+            Err(AppStoreError::NetworkError(message)) if message.contains("config directory")
+        ));
     }
 
     #[test]
@@ -722,6 +794,18 @@ mod tests {
         assert!(matches!(
             store_request_with_helper(Some(missing), "purchase", &Value::Null).await,
             Err(AppStoreError::NetworkError(message)) if message.contains("could not start")
+        ));
+    }
+
+    #[test]
+    fn helper_command_reports_a_closed_request_pipe() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let helper = write_helper(directory.path(), "exit 0");
+        let request = vec![0; 1024 * 1024];
+
+        assert!(matches!(
+            run_helper_command(&helper, "purchase", &request),
+            Err(AppStoreError::NetworkError(message)) if message.contains("send App Store purchase request")
         ));
     }
 
