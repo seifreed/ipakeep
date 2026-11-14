@@ -88,6 +88,15 @@ func openStore(statePath string) (appstore.AppStore, *cookiejar.Jar, error) {
 }
 
 func runLogin(statePath string, input io.Reader, output io.Writer) error {
+	return runLoginWithOpener(statePath, input, output, openStore)
+}
+
+func runLoginWithOpener(
+	statePath string,
+	input io.Reader,
+	output io.Writer,
+	open func(string) (appstore.AppStore, *cookiejar.Jar, error),
+) error {
 	var request loginRequest
 	if err := json.NewDecoder(io.LimitReader(input, maxLoginInputSize)).Decode(&request); err != nil {
 		return fmt.Errorf("read login request: %w", err)
@@ -96,11 +105,14 @@ func runLogin(statePath string, input io.Reader, output io.Writer) error {
 		return errors.New("login request requires email and password")
 	}
 
-	store, jar, err := openStore(statePath)
+	store, jar, err := open(statePath)
 	if err != nil {
 		return err
 	}
+	return finishLogin(store, jar, request, output)
+}
 
+func finishLogin(store appstore.AppStore, jar *cookiejar.Jar, request loginRequest, output io.Writer) error {
 	result, err := store.Login(appstore.LoginInput{
 		Email:    request.Email,
 		Password: request.Password,

@@ -164,6 +164,8 @@ func TestReadITunesMetadataRejectsMalformedAndOversizedMetadata(t *testing.T) {
 }
 
 type storeStub struct {
+	login       appstore.LoginOutput
+	loginErr    error
 	purchaseErr error
 	versions    appstore.ListVersionsOutput
 	versionsErr error
@@ -176,7 +178,7 @@ type storeStub struct {
 }
 
 func (s *storeStub) Login(appstore.LoginInput) (appstore.LoginOutput, error) {
-	return appstore.LoginOutput{}, nil
+	return s.login, s.loginErr
 }
 func (s *storeStub) AccountInfo() (appstore.AccountInfoOutput, error) {
 	return appstore.AccountInfoOutput{}, nil

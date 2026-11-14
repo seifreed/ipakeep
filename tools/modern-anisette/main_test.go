@@ -1,12 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	cookiejar "github.com/juju/persistent-cookiejar"
+	"github.com/majd/ipatool/v2/pkg/appstore"
 )
 
 func TestReadStateReturnsNilWhenMissingAndRejectsOversize(t *testing.T) {
@@ -177,6 +183,128 @@ func TestRunLoginRejectsInvalidAndIncompleteRequests(t *testing.T) {
 			t.Fatalf("runLogin accepted %q", request)
 		}
 	}
+}
+
+func TestRunLoginRejectsCookieJarLoadErrors(t *testing.T) {
+	directory := t.TempDir()
+	statePath := filepath.Join(directory, "state.json")
+	if err := os.WriteFile(filepath.Join(directory, "store-cookies"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	request := `{"email":"user@example.com","password":"secret"}`
+	err := runLogin(statePath, strings.NewReader(request), io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "open Store cookie jar") {
+		t.Fatalf("runLogin cookie jar error = %v", err)
+	}
+}
+
+func TestRunLoginCompletesThroughTheStore(t *testing.T) {
+	jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "cookies")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &storeStub{login: appstore.LoginOutput{Account: appstore.Account{Email: "user@example.com"}}}
+	var output bytes.Buffer
+	request := `{"email":"user@example.com","password":"secret","code":"123456"}`
+	err = runLoginWithOpener("state.json", strings.NewReader(request), &output, func(path string) (appstore.AppStore, *cookiejar.Jar, error) {
+		if path != "state.json" {
+			t.Fatalf("state path = %q", path)
+		}
+		return store, jar, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response loginResponse
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil || response.Account.Email != "user@example.com" {
+		t.Fatalf("login response = %+v, %v", response, err)
+	}
+}
+
+func TestRunDispatchesValidStoreRequestWithoutAppleCalls(t *testing.T) {
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	request, err := os.CreateTemp(t.TempDir(), "stdin-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer request.Close()
+	if _, err = request.WriteString(`{"account":{"passwordToken":"token","directoryServicesIdentifier":"dsid"},"appId":0}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = request.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	originalArgs, originalStdin := os.Args, os.Stdin
+	defer func() {
+		os.Args, os.Stdin = originalArgs, originalStdin
+	}()
+	os.Args = []string{"ipakeep", "purchase"}
+	os.Stdin = request
+	if err = run(); err != nil {
+		t.Fatalf("run valid Store request = %v", err)
+	}
+}
+
+func TestFinishLoginHandlesChallengeFailureAndSuccess(t *testing.T) {
+	t.Run("two-factor challenge", func(t *testing.T) {
+		jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "cookies")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		store := &storeStub{loginErr: appstore.ErrAuthCodeRequired}
+		if err = finishLogin(store, jar, loginRequest{Email: "a@b.c", Password: "secret"}, &output); err != nil {
+			t.Fatal(err)
+		}
+		var response loginResponse
+		if err = json.Unmarshal(output.Bytes(), &response); err != nil || !response.AuthCodeRequired {
+			t.Fatalf("challenge response = %+v, %v", response, err)
+		}
+	})
+
+	t.Run("login failure", func(t *testing.T) {
+		jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "cookies")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = finishLogin(&storeStub{loginErr: errors.New("rejected")}, jar, loginRequest{}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "App Store login failed") {
+			t.Fatalf("login error = %v", err)
+		}
+	})
+
+	t.Run("successful login removes password", func(t *testing.T) {
+		jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "cookies")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		account := appstore.Account{Email: "a@b.c", Password: "secret"}
+		var output bytes.Buffer
+		err = finishLogin(&storeStub{login: appstore.LoginOutput{Account: account}}, jar, loginRequest{}, &output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response loginResponse
+		if err = json.Unmarshal(output.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Account.Password != "" || response.Account.Email != account.Email {
+			t.Fatalf("login response leaked or changed account: %+v", response.Account)
+		}
+	})
+
+	t.Run("cookie save failure", func(t *testing.T) {
+		jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "missing", "cookies")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		account := appstore.Account{Email: "a@b.c"}
+		err = finishLogin(&storeStub{login: appstore.LoginOutput{Account: account}}, jar, loginRequest{}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "save Store cookie jar") {
+			t.Fatalf("cookie save error = %v", err)
+		}
+	})
 }
 
 func TestWriteStateIsPrivateAndReadable(t *testing.T) {
