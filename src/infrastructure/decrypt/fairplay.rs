@@ -866,6 +866,56 @@ mod tests {
         data
     }
 
+    fn fat_arm64_macho(slices: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
+        let table_end = FAT_HEADER_SIZE + slices.len() * FAT32_ARCH_ENTRY_SIZE;
+        let total_size = table_end + slices.iter().map(|slice| slice.2.len()).sum::<usize>();
+        let mut data = vec![0u8; total_size];
+        data[..4].copy_from_slice(&0xCAFEBABEu32.to_be_bytes());
+        data[4..8].copy_from_slice(&u32::try_from(slices.len()).unwrap().to_be_bytes());
+        let mut slice_offset = table_end;
+        for (index, (cpu, subtype, slice)) in slices.iter().enumerate() {
+            let entry = FAT_HEADER_SIZE + index * FAT32_ARCH_ENTRY_SIZE;
+            data[entry..entry + 4].copy_from_slice(&cpu.to_be_bytes());
+            data[entry + 4..entry + 8].copy_from_slice(&subtype.to_be_bytes());
+            data[entry + 8..entry + 12]
+                .copy_from_slice(&u32::try_from(slice_offset).unwrap().to_be_bytes());
+            data[entry + 12..entry + 16]
+                .copy_from_slice(&u32::try_from(slice.len()).unwrap().to_be_bytes());
+            data[slice_offset..slice_offset + slice.len()].copy_from_slice(slice);
+            slice_offset += slice.len();
+        }
+        data
+    }
+
+    fn thin_arm32_macho() -> Vec<u8> {
+        let mut data = vec![0u8; 8192];
+        data[0..4].copy_from_slice(&MACHO_MAGIC_LE.to_le_bytes());
+        data[4..8].copy_from_slice(&CPU_TYPE_ARM.to_le_bytes());
+        data[8..12].copy_from_slice(&CPU_SUBTYPE_ARMV7.to_le_bytes());
+        data[16..20].copy_from_slice(&1u32.to_le_bytes());
+        data[20..24].copy_from_slice(&20u32.to_le_bytes());
+        data[28..32].copy_from_slice(&LC_ENCRYPTION_INFO.to_le_bytes());
+        data[32..36].copy_from_slice(&20u32.to_le_bytes());
+        data[36..40].copy_from_slice(&4096u32.to_le_bytes());
+        data[40..44].copy_from_slice(&4096u32.to_le_bytes());
+        data[44..48].copy_from_slice(&1u32.to_le_bytes());
+        data
+    }
+
+    fn fat64_arm64_macho() -> Vec<u8> {
+        let slice = thin_arm64_macho(1);
+        let offset = FAT_HEADER_SIZE + FAT64_ARCH_ENTRY_SIZE;
+        let mut data = vec![0u8; offset + slice.len()];
+        data[..4].copy_from_slice(&0xCAFEBABFu32.to_be_bytes());
+        data[4..8].copy_from_slice(&1u32.to_be_bytes());
+        data[8..12].copy_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
+        data[12..16].copy_from_slice(&0u32.to_be_bytes());
+        data[16..24].copy_from_slice(&u64::try_from(offset).unwrap().to_be_bytes());
+        data[24..32].copy_from_slice(&u64::try_from(slice.len()).unwrap().to_be_bytes());
+        data[offset..].copy_from_slice(&slice);
+        data
+    }
+
     #[test]
     fn finish_matches_go_reference_vectors() {
         // Gold vectors produced by running the Go `finish` verbatim.
@@ -1056,6 +1106,51 @@ mod tests {
         let mut cryptid_before_region = thin_arm64_macho(1);
         cryptid_before_region[40..44].copy_from_slice(&16u32.to_le_bytes());
         assert!(arm_encryption_info(&cryptid_before_region).is_err());
+    }
+
+    #[test]
+    fn arm_encryption_info_selects_plain_arm64_before_arm64e() {
+        let plain = thin_arm64_macho(1);
+        let mut arm64e = thin_arm64_macho(1);
+        arm64e[8..12].copy_from_slice(&CPU_SUBTYPE_ARM64E.to_le_bytes());
+        let fat = fat_arm64_macho(&[
+            (CPU_TYPE_ARM64, 0, plain),
+            (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, arm64e),
+        ]);
+
+        let info = arm_encryption_info(&fat)
+            .expect("parse fat Mach-O")
+            .expect("encrypted arm64 slice");
+        assert_eq!(info.base, 48);
+        assert_eq!(info.cpu, CPU_TYPE_ARM64);
+        assert_eq!(info.subtype, 0);
+    }
+
+    #[test]
+    fn arm_encryption_info_falls_back_to_arm64e_and_supports_arm32() {
+        let mut arm64e = thin_arm64_macho(1);
+        arm64e[8..12].copy_from_slice(&CPU_SUBTYPE_ARM64E.to_le_bytes());
+        let fat = fat_arm64_macho(&[(CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, arm64e)]);
+        let info = arm_encryption_info(&fat)
+            .expect("parse arm64e Mach-O")
+            .expect("encrypted arm64e slice");
+        assert_eq!(info.cpu, CPU_TYPE_ARM64);
+        assert_eq!(info.subtype, CPU_SUBTYPE_ARM64E);
+
+        let arm32 = arm_encryption_info(&thin_arm32_macho())
+            .expect("parse 32-bit Mach-O")
+            .expect("encrypted ARMv7 slice");
+        assert_eq!(arm32.cpu, CPU_TYPE_ARM);
+        assert_eq!(arm32.subtype, CPU_SUBTYPE_ARMV7);
+    }
+
+    #[test]
+    fn arm_encryption_info_parses_fat64_tables() {
+        let info = arm_encryption_info(&fat64_arm64_macho())
+            .expect("parse FAT64 Mach-O")
+            .expect("encrypted arm64 slice");
+        assert_eq!(info.base, 40);
+        assert_eq!(info.cpu, CPU_TYPE_ARM64);
     }
 
     #[test]
