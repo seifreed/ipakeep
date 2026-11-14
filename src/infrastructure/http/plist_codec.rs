@@ -200,4 +200,17 @@ mod tests {
 
         assert_eq!(decoded["large"], "9223372036854775808");
     }
+
+    #[test]
+    fn decode_dates_and_non_finite_reals() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>date</key><date>2024-01-02T03:04:05Z</date></dict></plist>"#;
+
+        assert!(decode_plist(xml).unwrap()["date"].is_string());
+        assert_eq!(
+            plist_to_json(&plist::Value::Real(f64::NAN)),
+            JsonValue::Null
+        );
+    }
 }
