@@ -353,6 +353,11 @@ mod tests {
                 .unwrap_err()
                 .contains("outside app bundle")
         );
+        assert_eq!(
+            bundle_relative_path("Payload/Game.app/", "Payload/Game.app/SC_Info/Game.sinf")
+                .unwrap(),
+            "Payload/Game.app/SC_Info/Game.sinf"
+        );
     }
 
     #[test]
@@ -387,6 +392,66 @@ mod tests {
             targets(&invalid, &sinfs(1))
                 .unwrap_err()
                 .contains("non-string value")
+        );
+    }
+
+    #[test]
+    fn manifest_helpers_cover_optional_arrays_single_sinf_replicas_and_mismatches() {
+        assert!(manifest_string_array(None, "SinfPaths").unwrap().is_empty());
+        assert!(
+            manifest_string_array(Some(&plist::Value::String("x".into())), "SinfPaths")
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(ipa(&[]))).unwrap();
+        assert!(
+            read_manifest_sinf_paths(&mut archive, "Payload/Game.app/")
+                .unwrap()
+                .is_none()
+        );
+
+        let single = SinfManifest {
+            primary_paths: vec!["Payload/Game.app/SC_Info/Game.sinf".into()],
+            replication_paths: vec!["Frameworks/A.sinf".into(), "Frameworks/B.sinf".into()],
+        };
+        assert_eq!(
+            manifest_sinf_targets("Payload/Game.app/", single, &sinfs(1))
+                .unwrap()
+                .len(),
+            3
+        );
+
+        let mut targets = Vec::new();
+        assert!(
+            extend_replication_targets(
+                &mut targets,
+                "Payload/Game.app/",
+                vec!["Frameworks/A.sinf".into()],
+                &sinfs(2),
+            )
+            .unwrap_err()
+            .contains("cannot map 1 sinf replication paths to 2 sinfs")
+        );
+    }
+
+    #[test]
+    fn bundle_info_plist_failures_are_reported() {
+        let empty = ipa(&[]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(empty)).unwrap();
+        assert!(
+            read_bundle_executable(&mut archive, "Payload/Game.app/")
+                .unwrap_err()
+                .contains("missing app Info.plist")
+        );
+
+        let invalid_info = plist_bytes(plist::Value::Dictionary(plist::Dictionary::new()));
+        let mut archive =
+            zip::ZipArchive::new(Cursor::new(ipa(&[("Info.plist", &invalid_info)]))).unwrap();
+        assert!(
+            read_bundle_executable(&mut archive, "")
+                .unwrap_err()
+                .contains("missing CFBundleExecutable")
         );
     }
 }
