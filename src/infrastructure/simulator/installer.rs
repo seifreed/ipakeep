@@ -68,6 +68,7 @@ pub(super) fn sign_app_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn codesign_command_adds_entitlements_before_target() {
@@ -93,5 +94,47 @@ mod tests {
                 "/tmp/App.app",
             ]
         );
+    }
+
+    #[test]
+    fn encrypted_app_is_rejected_and_plain_app_is_allowed() {
+        let directory = tempfile::tempdir().expect("app directory");
+        assert!(reject_encrypted_app(directory.path()).is_ok());
+
+        let executable = directory.path().join("App");
+        write_encrypted_arm64_macho(&executable);
+        let error = reject_encrypted_app(directory.path()).unwrap_err();
+        assert!(error.contains("FairPlay-encrypted"));
+        assert!(error.contains("App"));
+    }
+
+    #[test]
+    fn signing_empty_bundle_is_a_noop_and_missing_bundle_fails() {
+        let directory = tempfile::tempdir().expect("app directory");
+        assert!(sign_app_bundle(directory.path(), "-", None).is_ok());
+        assert!(sign_app_bundle(&directory.path().join("missing"), "-", None).is_err());
+    }
+
+    fn write_encrypted_arm64_macho(path: &Path) {
+        let mut bytes = Vec::new();
+        for value in [
+            super::super::macho::MH_MAGIC_64,
+            0x0100_000c_u32,
+            0,
+            0,
+            1,
+            24,
+            0,
+            0,
+            0x2c,
+            24,
+            0,
+            4096,
+            1,
+            0,
+        ] {
+            bytes.extend(value.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write encrypted Mach-O fixture");
     }
 }
