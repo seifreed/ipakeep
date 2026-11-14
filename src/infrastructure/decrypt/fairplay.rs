@@ -1144,6 +1144,51 @@ mod tests {
     }
 
     #[test]
+    fn arm_parser_covers_slice_selection_and_command_boundaries() {
+        let mut armv6 = thin_arm32_macho();
+        armv6[8..12].copy_from_slice(&6u32.to_le_bytes());
+        let fat = fat_arm64_macho(&[
+            (CPU_TYPE_ARM, 6, armv6),
+            (CPU_TYPE_ARM, CPU_SUBTYPE_ARMV7, thin_arm32_macho()),
+        ]);
+        assert_eq!(
+            arm_encryption_info(&fat).unwrap().unwrap().subtype,
+            CPU_SUBTYPE_ARMV7
+        );
+
+        let macho = thin_arm64_macho(1);
+        let chosen = ArmSlice {
+            base: 8190,
+            size: 10,
+            cpu: CPU_TYPE_ARM64,
+            subtype: 0,
+        };
+        assert!(parse_load_command_table(&macho, &chosen).is_err());
+
+        let mut duplicate = macho.clone();
+        duplicate[16..20].copy_from_slice(&2u32.to_le_bytes());
+        duplicate[20..24].copy_from_slice(&48u32.to_le_bytes());
+        let command = duplicate[32..56].to_vec();
+        duplicate[56..80].copy_from_slice(&command);
+        assert!(
+            arm_encryption_info(&duplicate)
+                .err()
+                .unwrap()
+                .contains("found 2")
+        );
+
+        let mut short = macho;
+        short[36..40].copy_from_slice(&8u32.to_le_bytes());
+        short[20..24].copy_from_slice(&8u32.to_le_bytes());
+        assert!(
+            arm_encryption_info(&short)
+                .err()
+                .unwrap()
+                .contains("short encryption")
+        );
+    }
+
+    #[test]
     fn arm_parser_rejects_malformed_fat_tables_and_load_commands() {
         for magic in [0xCAFEBABEu32, 0xCAFEBABF] {
             let mut fat = magic.to_be_bytes().to_vec();
@@ -1390,6 +1435,29 @@ mod tests {
         empty.extend_from_slice(&[0; 4]);
         empty.extend_from_slice(&0u32.to_be_bytes());
         assert!(arm_supf_record_offset(&empty, 1, CPU_TYPE_ARM64, 0).is_err());
+    }
+
+    #[test]
+    fn supp_and_supf_reject_truncated_and_invalid_headers() {
+        let mut supp = vec![1u8, 0, 0, 0];
+        supp.extend_from_slice(&[0; 20]);
+        assert!(pclass_page_key_offset(&supp, 0).is_err());
+
+        let mut bad_magic = vec![5u8];
+        bad_magic.extend_from_slice(b"999");
+        bad_magic.extend_from_slice(&[0; 8]);
+        assert!(supf_header_size(&bad_magic).is_err());
+
+        let mut truncated_arch = vec![5u8];
+        truncated_arch.extend_from_slice(b"502");
+        truncated_arch.extend_from_slice(&[0; 4]);
+        truncated_arch.extend_from_slice(&1u32.to_be_bytes());
+        assert!(arm_supf_record_offset(&truncated_arch, 1, CPU_TYPE_ARM64, 0).is_err());
+
+        let mut short_arch = truncated_arch;
+        short_arch.extend_from_slice(&0u32.to_be_bytes());
+        short_arch.extend_from_slice(&[0; 12]);
+        assert!(arm_supf_record_offset(&short_arch, 1, CPU_TYPE_ARM64, 0).is_err());
     }
 
     #[test]
