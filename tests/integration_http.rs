@@ -122,6 +122,11 @@ async fn get_json_and_plist_report_success_body_decode_errors() {
         .respond_with(ResponseTemplate::new(200).set_body_string("not a plist or JSON"))
         .mount(&server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/invalid-form"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not a plist or JSON"))
+        .mount(&server)
+        .await;
 
     let client = AppleHttpClient::new().unwrap();
     assert!(
@@ -141,6 +146,15 @@ async fn get_json_and_plist_report_success_body_decode_errors() {
             .expect("invalid plist response")
             .to_string()
             .contains("plist decode failed")
+    );
+    assert!(
+        client
+            .post_form(&format!("{}/invalid-form", server.uri()), &HashMap::new())
+            .await
+            .err()
+            .expect("invalid form response")
+            .to_string()
+            .contains("response decode failed")
     );
 }
 
