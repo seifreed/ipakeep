@@ -50,6 +50,20 @@ struct MachoInfo {
     cryptid_offset: usize,
 }
 
+struct LoadCommandTable {
+    start: usize,
+    end: usize,
+    count: u32,
+    encryption_command: u32,
+}
+
+struct EncryptionCommand {
+    offset: usize,
+    size: usize,
+    id: u32,
+    id_offset: usize,
+}
+
 struct ArmSlice {
     base: usize,
     size: usize,
@@ -185,96 +199,127 @@ fn select_slice(raw: Vec<ArmSlice>) -> Result<ArmSlice, String> {
 /// region. Returns `Ok(None)` when the slice is not actively encrypted (no
 /// encryption command, or exactly one with `cryptid == 0`).
 fn parse_encryption(data: &[u8], chosen: &ArmSlice) -> Result<Option<MachoInfo>, String> {
+    let load_commands = parse_load_command_table(data, chosen)?;
+    let Some(encryption) = parse_encryption_command(data, &load_commands)? else {
+        return Ok(None);
+    };
+
+    if encryption.id != 1 || encryption.size == 0 || !encryption.size.is_multiple_of(PAGE_SIZE) {
+        return Err(format!(
+            "unsupported cryptid/size: {}, {}",
+            encryption.id, encryption.size
+        ));
+    }
+
+    if encryption.offset + encryption.size > chosen.size
+        || encryption.id_offset >= chosen.base + encryption.offset
+    {
+        return Err("invalid encrypted region bounds".to_string());
+    }
+
+    Ok(Some(MachoInfo {
+        base: chosen.base,
+        size: chosen.size,
+        cpu: chosen.cpu,
+        subtype: chosen.subtype,
+        crypt_off: encryption.offset,
+        crypt_size: encryption.size,
+        cryptid_offset: encryption.id_offset,
+    }))
+}
+
+fn parse_load_command_table(data: &[u8], chosen: &ArmSlice) -> Result<LoadCommandTable, String> {
     // arm64_32 uses the 32-bit header and load command, like 32-bit ARM.
     let is64 = chosen.cpu == CPU_TYPE_ARM64;
-    let (header_size, enc_cmd, want_magic) = if is64 {
+    let (header_size, encryption_command, expected_magic) = if is64 {
         (32usize, LC_ENCRYPTION_INFO_64, MACHO_MAGIC_64_LE)
     } else {
         (28usize, LC_ENCRYPTION_INFO, MACHO_MAGIC_LE)
     };
 
-    let base = chosen.base;
-    let slice_size = chosen.size;
-
-    if base > data.len() || slice_size > data.len() - base || header_size > data.len() - base {
+    if chosen.base > data.len()
+        || chosen.size > data.len() - chosen.base
+        || header_size > data.len() - chosen.base
+    {
         return Err("Mach-O slice exceeds file".to_string());
     }
 
-    let magic = le_u32(data, base)?;
-    let cpu = le_u32(data, base + 4)?;
-    let ncmds = le_u32(data, base + 16)?;
-    let sizeofcmds = le_u32(data, base + 20)? as usize;
+    let magic = le_u32(data, chosen.base)?;
+    let cpu = le_u32(data, chosen.base + 4)?;
+    let command_count = le_u32(data, chosen.base + 16)?;
+    let commands_size = le_u32(data, chosen.base + 20)? as usize;
 
-    if magic != want_magic || cpu != chosen.cpu || ncmds > 1000 {
+    if magic != expected_magic || cpu != chosen.cpu || command_count > 1000 {
         return Err("invalid Mach-O slice header".to_string());
     }
 
-    let mut pos = base + header_size;
-    let commands_end = pos + sizeofcmds;
-    if commands_end > base + slice_size {
+    let start = chosen.base + header_size;
+    let end = start + commands_size;
+    if end > chosen.base + chosen.size {
         return Err("load commands exceed Mach-O slice".to_string());
     }
 
-    let mut crypt_off = 0usize;
-    let mut crypt_size = 0usize;
-    let mut cryptid = 0u32;
-    let mut cryptid_offset = 0usize;
-    let mut found = 0u32;
+    Ok(LoadCommandTable {
+        start,
+        end,
+        count: command_count,
+        encryption_command,
+    })
+}
 
-    for _ in 0..ncmds {
-        if pos + 8 > commands_end {
+fn parse_encryption_command(
+    data: &[u8],
+    table: &LoadCommandTable,
+) -> Result<Option<EncryptionCommand>, String> {
+    let (found, encryption) = scan_encryption_commands(data, table)?;
+    if found == 0 || (found == 1 && encryption.as_ref().is_some_and(|command| command.id == 0)) {
+        return Ok(None);
+    }
+    if found != 1 {
+        return Err(format!("expected one encryption command, found {found}"));
+    }
+    Ok(encryption)
+}
+
+fn scan_encryption_commands(
+    data: &[u8],
+    table: &LoadCommandTable,
+) -> Result<(u32, Option<EncryptionCommand>), String> {
+    let mut pos = table.start;
+    let mut found = 0u32;
+    let mut encryption = None;
+
+    for _ in 0..table.count {
+        if pos + 8 > table.end {
             return Err("truncated load command".to_string());
         }
 
         let cmd = le_u32(data, pos)?;
         let cmd_size = le_u32(data, pos + 4)? as usize;
-        if cmd_size < 8 || pos + cmd_size > commands_end {
+        if cmd_size < 8 || pos + cmd_size > table.end {
             return Err("invalid load command".to_string());
         }
 
-        if cmd == enc_cmd {
+        if cmd == table.encryption_command {
             if cmd_size < 20 {
                 return Err("short encryption info command".to_string());
             }
-            crypt_off = le_u32(data, pos + 8)? as usize;
-            crypt_size = le_u32(data, pos + 12)? as usize;
-            cryptid = le_u32(data, pos + 16)?;
-            cryptid_offset = pos + 16;
+            encryption = Some(EncryptionCommand {
+                offset: le_u32(data, pos + 8)? as usize,
+                size: le_u32(data, pos + 12)? as usize,
+                id: le_u32(data, pos + 16)?,
+                id_offset: pos + 16,
+            });
             found += 1;
         }
 
         pos += cmd_size;
     }
 
-    if pos != commands_end {
+    if pos != table.end {
         return Err("load command sizes do not match Mach-O header".to_string());
     }
-
-    if found == 0 || (found == 1 && cryptid == 0) {
-        return Ok(None);
-    }
-
-    if found != 1 {
-        return Err(format!("expected one encryption command, found {found}"));
-    }
-
-    if cryptid != 1 || crypt_size == 0 || !crypt_size.is_multiple_of(PAGE_SIZE) {
-        return Err(format!("unsupported cryptid/size: {cryptid}, {crypt_size}"));
-    }
-
-    if crypt_off + crypt_size > slice_size || cryptid_offset >= base + crypt_off {
-        return Err("invalid encrypted region bounds".to_string());
-    }
-
-    Ok(Some(MachoInfo {
-        base,
-        size: slice_size,
-        cpu: chosen.cpu,
-        subtype: chosen.subtype,
-        crypt_off,
-        crypt_size,
-        cryptid_offset,
-    }))
+    Ok((found, encryption))
 }
 
 /// Locate the encrypted region of the slice the output is thinned to. Returns
