@@ -2,7 +2,7 @@
 
 use super::min_os::parse_version;
 use super::*;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 const MH_MAGIC_64: u32 = 0xfeed_facf;
 const CPU_TYPE_ARM64: u32 = 0x0100_000c;
@@ -110,6 +110,41 @@ fn zip_members(members: &[(&str, &[u8])]) -> Vec<u8> {
         writer.write_all(data).unwrap();
     }
     writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn reports_non_eof_errors_while_peeking_at_zip_entries() {
+    struct FailingReader {
+        inner: Cursor<Vec<u8>>,
+        fail_at: u64,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            if self.inner.position() == self.fail_at {
+                return Err(std::io::Error::other("injected read failure"));
+            }
+            self.inner.read(bytes)
+        }
+    }
+
+    impl Seek for FailingReader {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    let bytes = zip_members(&[("TestExec", &thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0))]);
+    let reader = FailingReader {
+        inner: Cursor::new(bytes),
+        fail_at: 38,
+    };
+    let mut archive = zip::ZipArchive::new(reader).unwrap();
+
+    assert_eq!(
+        read_if_macho(&mut archive, 0).unwrap_err(),
+        "injected read failure"
+    );
 }
 
 fn thin_macho_without_build_version() -> Vec<u8> {
