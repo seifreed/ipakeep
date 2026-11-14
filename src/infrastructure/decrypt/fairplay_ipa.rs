@@ -215,20 +215,7 @@ pub fn assemble(
     let file = std::fs::File::open(src_ipa).map_err(|e| format!("{}: {e}", src_ipa.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-
-    let mut written: BTreeSet<String> = BTreeSet::new();
-    for (name, data) in replacements {
-        if is_excluded_ipa_entry(name, keep_watch) {
-            continue;
-        }
-        writer
-            .start_file(name, SimpleFileOptions::default())
-            .map_err(|e| format!("create {name}: {e}"))?;
-        writer
-            .write_all(data)
-            .map_err(|e| format!("write {name}: {e}"))?;
-        written.insert(name.clone());
-    }
+    let written = write_replacements(&mut writer, replacements, keep_watch)?;
 
     let mut names = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
@@ -253,6 +240,27 @@ pub fn assemble(
 
     let cursor = writer.finish().map_err(|e| e.to_string())?;
     Ok(cursor.into_inner())
+}
+
+fn write_replacements(
+    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    replacements: &BTreeMap<String, Vec<u8>>,
+    keep_watch: bool,
+) -> Result<BTreeSet<String>, String> {
+    let mut written = BTreeSet::new();
+    for (name, data) in replacements {
+        if is_excluded_ipa_entry(name, keep_watch) {
+            continue;
+        }
+        writer
+            .start_file(name, SimpleFileOptions::default())
+            .map_err(|e| format!("create {name}: {e}"))?;
+        writer
+            .write_all(data)
+            .map_err(|e| format!("write {name}: {e}"))?;
+        written.insert(name.clone());
+    }
+    Ok(written)
 }
 
 /// Report whether `name` is stripped from the output IPA. Mirrors
