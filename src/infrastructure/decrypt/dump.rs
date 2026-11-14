@@ -625,6 +625,18 @@ mod tests {
     }
 
     #[test]
+    fn reports_installed_bundle_runner_failure() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let python = write_executable(work.path(), "python", "#!/bin/sh\nexit 9\n");
+
+        assert!(
+            pull_installed_bundle(python.to_str().unwrap(), "com.example.app", work.path())
+                .unwrap_err()
+                .contains("exited")
+        );
+    }
+
+    #[test]
     fn run_remote_reports_success_exit_failure_and_start_failure() {
         assert!(run_remote(("/bin/sh".into(), vec!["-c".into(), "exit 0".into()]), None).is_ok());
         assert!(
@@ -741,6 +753,8 @@ mod tests {
             interpreter_from_shebang("#!/usr/bin/env python3.14"),
             Some("python3.14".into())
         );
+        assert_eq!(interpreter_from_shebang("python3"), None);
+        assert_eq!(interpreter_from_shebang("#!"), None);
     }
 
     #[test]
@@ -768,6 +782,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(second.path().join("frida"), "#!/opt/second/python\n").unwrap();
+        std::fs::write(first.path().join("frida"), [0xff]).unwrap();
         let path = std::env::join_paths([first.path(), second.path()]).unwrap();
 
         assert_eq!(
@@ -775,6 +790,14 @@ mod tests {
             ["/opt/first/bin/python3", "python3.14", "/opt/second/python"]
         );
         assert!(launcher_interpreters(None).is_empty());
+    }
+
+    #[test]
+    fn prepare_agent_reports_existing_agent_directory() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        std::fs::create_dir(work.path().join("agent")).unwrap();
+
+        assert!(prepare_agent(None, work.path()).is_err());
     }
 
     #[test]
