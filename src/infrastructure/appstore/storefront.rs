@@ -73,9 +73,41 @@ mod tests {
 
     #[test]
     fn storefront_for_country_maps_known_countries_case_insensitively() {
-        assert_eq!(storefront_for_country("es").as_deref(), Some("143454-1"));
+        let storefronts = [
+            ("us", "143441-1"),
+            ("gb", "143444-1"),
+            ("uk", "143444-1"),
+            ("es", "143454-1"),
+            ("fr", "143442-1"),
+            ("de", "143443-1"),
+            ("it", "143450-1"),
+            ("nl", "143452-1"),
+            ("pt", "143453-1"),
+            ("ie", "143449-1"),
+            ("be", "143446-1"),
+            ("at", "143445-1"),
+            ("ch", "143459-1"),
+            ("se", "143456-1"),
+            ("no", "143457-1"),
+            ("dk", "143458-1"),
+            ("fi", "143447-1"),
+            ("pl", "143478-1"),
+            ("ca", "143455-1"),
+            ("mx", "143468-1"),
+            ("br", "143503-1"),
+            ("au", "143460-1"),
+            ("nz", "143461-1"),
+            ("jp", "143462-1"),
+            ("cn", "143465-1"),
+            ("in", "143467-1"),
+            ("ru", "143469-1"),
+            ("kr", "143466-1"),
+            ("tr", "143480-1"),
+        ];
+        for (country, storefront) in storefronts {
+            assert_eq!(storefront_for_country(country).as_deref(), Some(storefront));
+        }
         assert_eq!(storefront_for_country("US").as_deref(), Some("143441-1"));
-        assert_eq!(storefront_for_country("gb").as_deref(), Some("143444-1"));
     }
 
     #[test]
