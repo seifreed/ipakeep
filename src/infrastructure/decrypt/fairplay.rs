@@ -1144,6 +1144,88 @@ mod tests {
     }
 
     #[test]
+    fn arm_parser_rejects_malformed_fat_tables_and_load_commands() {
+        for magic in [0xCAFEBABEu32, 0xCAFEBABF] {
+            let mut fat = magic.to_be_bytes().to_vec();
+            fat.extend_from_slice(&0u32.to_be_bytes());
+            assert!(collect_slices(&fat).is_err());
+        }
+        assert!(select_slice(Vec::new()).is_err());
+        let arm64_32 = ArmSlice {
+            base: 0,
+            size: 28,
+            cpu: CPU_TYPE_ARM64_32,
+            subtype: 0,
+        };
+        assert_eq!(select_slice(vec![arm64_32]).unwrap().cpu, CPU_TYPE_ARM64_32);
+
+        let mut commands = thin_arm64_macho(1);
+        commands[20..24].copy_from_slice(&24u32.to_le_bytes());
+        let chosen = ArmSlice {
+            base: 0,
+            size: 32,
+            cpu: CPU_TYPE_ARM64,
+            subtype: 0,
+        };
+        assert!(parse_load_command_table(&commands, &chosen).is_err());
+        assert!(parse_load_command_table(&commands, &ArmSlice { size: 31, ..chosen }).is_err());
+        assert!(
+            scan_encryption_commands(
+                &commands,
+                &LoadCommandTable {
+                    start: 32,
+                    end: 35,
+                    count: 1,
+                    encryption_command: LC_ENCRYPTION_INFO_64,
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            scan_encryption_commands(
+                &commands,
+                &LoadCommandTable {
+                    start: 32,
+                    end: 56,
+                    count: 0,
+                    encryption_command: LC_ENCRYPTION_INFO_64,
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sinf_priv_inputs_validates_legacy_trailer_and_dimensions() {
+        let make_sinf = |name: &[u8], iv: &[u8], private: &[u8]| {
+            let children = [
+                atom(*b"name", name),
+                atom(*b"iviv", iv),
+                atom(*b"priv", private),
+            ]
+            .concat();
+            atom(*b"sinf", &atom(*b"schi", &children))
+        };
+        assert_eq!(
+            sinf_priv_inputs(&make_sinf(b"app", &[0; 16], &[0; 448]))
+                .unwrap()
+                .name,
+            b"app"
+        );
+        assert_eq!(
+            sinf_priv_inputs(&make_sinf(b"app", &[0; 16], &[0; 440]))
+                .unwrap()
+                .encrypted_priv
+                .len(),
+            432
+        );
+        let mut bad_trailer = vec![0; 440];
+        bad_trailer[439] = 1;
+        assert!(sinf_priv_inputs(&make_sinf(b"app", &[0; 16], &bad_trailer)).is_err());
+        assert!(sinf_priv_inputs(&make_sinf(b"app", &[0; 4], &[0; 448])).is_err());
+    }
+
+    #[test]
     fn arm_encryption_info_selects_plain_arm64_before_arm64e() {
         let plain = thin_arm64_macho(1);
         let mut arm64e = thin_arm64_macho(1);
