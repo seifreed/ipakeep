@@ -671,6 +671,26 @@ mod tests {
     }
 
     #[test]
+    fn local_builtin_dump_requires_an_ipa_without_starting_tools() {
+        let args = DumpArgs {
+            bundle_id: "com.example.app",
+            dumper: "builtin",
+            ipa: None,
+            device: "local",
+            agent: None,
+            spawn: true,
+            settle: 0.0,
+            output: None,
+            drop_undumped_extensions: false,
+            ssh_host: "127.0.0.1",
+            ssh_port: 2222,
+            ssh_user: "mobile",
+        };
+
+        assert!(handle_dump(&args).unwrap_err().contains("needs --ipa"));
+    }
+
+    #[test]
     fn file_handlers_report_missing_inputs() {
         let path = Path::new("/missing/ipakeep-test.ipa");
         assert!(handle_inspect(path, &OutputFormat::Text).is_err());
