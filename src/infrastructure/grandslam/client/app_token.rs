@@ -47,31 +47,19 @@ impl AppTokenState {
             })?
             .to_string();
 
-        let auth_token = account
-            .idms_token
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                AppStoreError::AuthenticationFailed(
-                    "missing GrandSlam IDMS token for app token".into(),
-                )
-            })?
-            .to_string();
+        let auth_token = required_account_string(
+            account.idms_token.as_deref(),
+            "GrandSlam IDMS token for app token",
+        )?;
 
         let session_key = decode_account_state_b64(
             account.grandslam_session_key.as_deref(),
             "GrandSlam session key",
         )?;
-        let continuation = account
-            .grandslam_continuation
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| {
-                AppStoreError::AuthenticationFailed(
-                    "missing GrandSlam continuation for app token".into(),
-                )
-            })?
-            .to_string();
+        let continuation = required_account_string(
+            account.grandslam_continuation.as_deref(),
+            "GrandSlam continuation for app token",
+        )?;
 
         Ok(Self {
             identity_id,
@@ -80,6 +68,13 @@ impl AppTokenState {
             continuation,
         })
     }
+}
+
+fn required_account_string(value: Option<&str>, label: &str) -> Result<String, AppStoreError> {
+    value
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| AppStoreError::AuthenticationFailed(format!("missing {label}")))
 }
 
 fn decode_account_state_b64(value: Option<&str>, label: &str) -> Result<Vec<u8>, AppStoreError> {
