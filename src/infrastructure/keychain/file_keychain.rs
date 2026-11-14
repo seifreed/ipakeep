@@ -261,6 +261,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_maps_file_read_errors() {
+        let dir = TempDir::new().unwrap();
+        let keychain = FileKeychain::with_dir(dir.path().to_path_buf());
+        std::fs::create_dir(keychain.auth_file()).unwrap();
+
+        assert!(matches!(
+            keychain.load_account().await,
+            Err(CredentialError::LoadFailed(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn delete_account_removes_file() {
         let dir = TempDir::new().unwrap();
         let keychain = FileKeychain::with_dir(dir.path().to_path_buf());
@@ -280,5 +292,17 @@ mod tests {
 
         let result = keychain.delete_account().await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn delete_maps_file_removal_errors() {
+        let dir = TempDir::new().unwrap();
+        let keychain = FileKeychain::with_dir(dir.path().to_path_buf());
+        std::fs::create_dir(keychain.auth_file()).unwrap();
+
+        assert!(matches!(
+            keychain.delete_account().await,
+            Err(CredentialError::DeleteFailed(_))
+        ));
     }
 }
