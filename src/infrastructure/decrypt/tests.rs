@@ -759,6 +759,64 @@ fn entitlement_commands_report_unsigned_macho_errors() {
     assert!(entitlements_report(&executable).is_err());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn reports_and_preserves_entitlements_on_a_signed_app() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let app = signed_entitlement_app(dir.path(), true);
+
+    assert!(entitlements_report(&app).is_ok());
+    resign_app(&app, "-", None).unwrap();
+    assert!(entitlements_report(&app).is_ok());
+
+    let override_path = dir.path().join("override.plist");
+    plist::Value::Dictionary(plist::Dictionary::new())
+        .to_file_xml(&override_path)
+        .unwrap();
+    resign_app(&app, "-", Some(&override_path)).unwrap();
+
+    let empty_root = dir.path().join("empty");
+    std::fs::create_dir(&empty_root).unwrap();
+    let empty_app = signed_entitlement_app(&empty_root, false);
+    assert!(entitlements_report(&empty_app).unwrap().is_empty());
+    resign_app(&empty_app, "-", None).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+fn signed_entitlement_app(
+    root: &std::path::Path,
+    include_entitlements: bool,
+) -> std::path::PathBuf {
+    let app = root.join("Signed.app");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::copy("/bin/echo", app.join("TestExec")).unwrap();
+    let info = plist::Value::Dictionary(plist::Dictionary::from_iter([
+        (
+            "CFBundleIdentifier".to_string(),
+            plist::Value::String("com.example.signed".into()),
+        ),
+        (
+            "CFBundleExecutable".to_string(),
+            plist::Value::String("TestExec".into()),
+        ),
+    ]));
+    info.to_file_xml(app.join("Info.plist")).unwrap();
+    let mut command = std::process::Command::new("/usr/bin/codesign");
+    command.args(["-f", "-s", "-"]);
+    if include_entitlements {
+        let entitlements = root.join("entitlements.plist");
+        let requested = plist::Value::Dictionary(plist::Dictionary::from_iter([(
+            "get-task-allow".to_string(),
+            plist::Value::Boolean(true),
+        )]));
+        requested.to_file_xml(&entitlements).unwrap();
+        command.arg("--entitlements").arg(entitlements);
+    }
+    let status = command.arg(&app).status().unwrap();
+    assert!(status.success());
+    app
+}
+
 #[test]
 fn patch_accepts_matching_uuid_and_warns_without_one() {
     let ipa = build_ipa(&thin_macho_with_uuid(0, 0x11, 0xAA));
