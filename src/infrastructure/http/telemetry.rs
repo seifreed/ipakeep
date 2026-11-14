@@ -194,7 +194,7 @@ fn request_error_type(error: &reqwest::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_response_bytes, send_with_observability};
+    use super::{read_response_bytes, read_response_text, send_with_observability};
     use crate::infrastructure::observability::log_capture::LogCapture;
     use reqwest::Client;
     use wiremock::matchers::{method, path};
@@ -321,5 +321,44 @@ mod tests {
         assert!(logs.contains("http.response.headers_received"));
         assert!(logs.contains("DEBUG"));
         assert!(!logs.contains("WARN"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn truncated_response_body_is_logged_and_returned_as_an_error() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
+        let address = listener.local_addr().expect("local address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("HTTP connection");
+            let mut request = Vec::new();
+            let mut chunk = [0; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut chunk).expect("HTTP request");
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..count]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nx")
+                .expect("truncated HTTP response");
+        });
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let client = Client::new();
+        let response = client
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("response headers");
+
+        assert!(read_response_text(response).await.is_err());
+        assert!(
+            capture
+                .contents()
+                .contains("http.response.body_read_failed")
+        );
+        server.join().expect("server thread");
     }
 }
