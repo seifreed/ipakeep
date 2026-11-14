@@ -135,6 +135,37 @@ pub(super) struct AuthInfoOutput {
     has_cookies: bool,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_segment, to_value};
+    use serde::Serialize;
+
+    struct FailingSerialize;
+
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("serialization failed"))
+        }
+    }
+
+    #[test]
+    fn sanitizing_an_empty_filename_segment_uses_placeholder() {
+        assert_eq!(sanitize_segment(""), "_");
+    }
+
+    #[test]
+    fn to_value_maps_serializer_failures() {
+        assert!(
+            to_value(&FailingSerialize)
+                .unwrap_err()
+                .contains("failed to serialize result")
+        );
+    }
+}
+
 impl From<&Account> for AuthInfoOutput {
     fn from(account: &Account) -> Self {
         Self {
