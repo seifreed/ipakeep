@@ -181,4 +181,21 @@ mod tests {
                 .contains("unknown output format: yaml")
         );
     }
+
+    #[test]
+    fn records_successful_and_failed_command_results() {
+        let span = tracing::info_span!(
+            "test.command",
+            outcome = tracing::field::Empty,
+            duration_ms = tracing::field::Empty,
+        );
+
+        record_command_result(&span, &Ok(()), Instant::now(), "test");
+        record_command_result(
+            &span,
+            &Err("expected failure".into()),
+            Instant::now(),
+            "test",
+        );
+    }
 }
