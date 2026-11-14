@@ -121,4 +121,12 @@ mod tests {
                 if message == "missing authentication endpoint in bag.xml"
         ));
     }
+
+    #[tokio::test]
+    async fn reports_invalid_bag_url_as_network_error() {
+        let client = AppleHttpClient::new().expect("client");
+        let result = resolve_auth_endpoint(&client, "not a URL", "GUID").await;
+
+        assert!(matches!(result, Err(AppStoreError::NetworkError(_))));
+    }
 }
