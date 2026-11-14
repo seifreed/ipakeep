@@ -451,6 +451,44 @@ fn dylib_thinning_rejects_missing_and_non_arm64_files() {
 }
 
 #[test]
+fn dylib_thinning_handles_thin_duplicate_and_out_of_range_slices() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let thin = dir.path().join("ThinDylib");
+    write_minimal_arm64_macho(&thin);
+    assert!(!thin_to_arm64_inplace(&thin).unwrap());
+
+    let duplicate = dir.path().join("DuplicateArm64");
+    let mut fat = Vec::new();
+    fat.extend(FAT_MAGIC.to_be_bytes());
+    fat.extend(2_u32.to_be_bytes());
+    for offset in [0x1000_u32, 0x2000] {
+        for word in [CPU_TYPE_ARM64, 0, offset, 0x40, 12] {
+            fat.extend(word.to_be_bytes());
+        }
+    }
+    fs::write(&duplicate, fat).unwrap();
+    assert!(
+        thin_to_arm64_inplace(&duplicate)
+            .unwrap_err()
+            .contains("multiple arm64 slices")
+    );
+
+    let outside = dir.path().join("OutOfRange");
+    let mut fat = Vec::new();
+    fat.extend(FAT_MAGIC.to_be_bytes());
+    fat.extend(1_u32.to_be_bytes());
+    for word in [CPU_TYPE_ARM64, 0, 0x1000, 0x40, 12] {
+        fat.extend(word.to_be_bytes());
+    }
+    fs::write(&outside, fat).unwrap();
+    assert!(
+        thin_to_arm64_inplace(&outside)
+            .unwrap_err()
+            .contains("slice offset past end of file")
+    );
+}
+
+#[test]
 fn ensure_simulator_dylib_with_signer_thins_patches_and_signs() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("UniversalDylib");
