@@ -378,6 +378,16 @@ mod tests {
             "Payload/Game.app/SC_Info/Game.sinf"
         );
 
+        let empty_manifest = plist_bytes(plist::Value::Dictionary(plist::Dictionary::new()));
+        let empty = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            ("Payload/Game.app/SC_Info/Manifest.plist", &empty_manifest),
+        ]);
+        assert_eq!(
+            targets(&empty, &sinfs(1)).unwrap()[0].0,
+            "Payload/Game.app/SC_Info/Game.sinf"
+        );
+
         let mut wrong_type = plist::Dictionary::new();
         wrong_type.insert(
             "SinfPaths".into(),
@@ -420,6 +430,17 @@ mod tests {
                 .unwrap()
                 .len(),
             3
+        );
+
+        let primary_only = SinfManifest {
+            primary_paths: vec!["SC_Info/Game.sinf".into()],
+            replication_paths: Vec::new(),
+        };
+        assert_eq!(
+            manifest_sinf_targets("Payload/Game.app/", primary_only, &sinfs(1))
+                .unwrap()
+                .len(),
+            1
         );
 
         let mut targets = Vec::new();
