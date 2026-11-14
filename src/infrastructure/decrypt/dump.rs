@@ -115,13 +115,40 @@ pub struct DumpRequest<'a> {
 /// IPA cannot be patched.
 pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
     let work = temp_dir("dump")?;
-    let result = match req.dumper {
-        Dumper::Builtin => run_builtin(req, &work),
-        Dumper::FoulDecrypt => run_fouldecrypt(req, &work),
-        external => run_external(external, req.bundle_id, &work),
-    };
+    let result = dispatch_dump(
+        req,
+        &work,
+        run_builtin,
+        |req, work| {
+            run_fouldecrypt(
+                req,
+                work,
+                || std::env::var(SSH_PASSWORD_ENV).ok(),
+                require_program,
+                run_remote,
+                std::thread::sleep,
+            )
+        },
+        |dumper, bundle_id, work| {
+            run_external(dumper, bundle_id, work, require_program, run_inherit)
+        },
+    );
     let _ = std::fs::remove_dir_all(&work);
     result
+}
+
+fn dispatch_dump(
+    req: &DumpRequest,
+    work: &Path,
+    builtin: impl FnOnce(&DumpRequest, &Path) -> Result<Vec<u8>, String>,
+    foul_decrypt: impl FnOnce(&DumpRequest, &Path) -> Result<Vec<u8>, String>,
+    external: impl FnOnce(Dumper, &str, &Path) -> Result<Vec<u8>, String>,
+) -> Result<Vec<u8>, String> {
+    match req.dumper {
+        Dumper::Builtin => builtin(req, work),
+        Dumper::FoulDecrypt => foul_decrypt(req, work),
+        dumper => external(dumper, req.bundle_id, work),
+    }
 }
 
 fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
@@ -305,12 +332,18 @@ fn prepare_agent(override_path: Option<&Path>, work: &Path) -> Result<PathBuf, S
     Ok(directory.join("ipakeep_dump.py"))
 }
 
-fn run_external(dumper: Dumper, bundle_id: &str, work: &Path) -> Result<Vec<u8>, String> {
+fn run_external(
+    dumper: Dumper,
+    bundle_id: &str,
+    work: &Path,
+    mut require: impl FnMut(&str) -> Result<(), String>,
+    run: impl FnOnce(Command) -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
     let (program, args) = external_argv(dumper, bundle_id, work)?;
-    require_program(&program)?;
+    require(&program)?;
     let mut command = Command::new(&program);
     command.args(&args);
-    run_inherit(command)?;
+    run(command)?;
 
     let produced = newest_ipa(work)
         .ok_or_else(|| format!("{program} produced no .ipa in {}", work.display()))?;
@@ -326,28 +359,16 @@ const SSH_PAUSE: Duration = Duration::from_millis(1500);
 
 /// Decrypt an installed app's Mach-O slices ON DISK with `FoulDecrypt` (no app
 /// launch), repackage into an IPA on the device, pull it, and verify.
-fn run_fouldecrypt(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
-    let password = std::env::var(SSH_PASSWORD_ENV)
-        .ok()
-        .filter(|value| !value.is_empty());
-    run_fouldecrypt_with(
-        req,
-        work,
-        password.as_deref(),
-        require_program,
-        run_remote,
-        std::thread::sleep,
-    )
-}
-
-fn run_fouldecrypt_with(
+fn run_fouldecrypt(
     req: &DumpRequest,
     work: &Path,
-    password: Option<&str>,
+    read_password: impl FnOnce() -> Option<String>,
     mut require: impl FnMut(&str) -> Result<(), String>,
     mut remote: impl FnMut((String, Vec<String>), Option<&str>) -> Result<(), String>,
     pause: impl Fn(Duration),
 ) -> Result<Vec<u8>, String> {
+    let password = read_password().filter(|value| !value.is_empty());
+    let password = password.as_deref();
     let use_password = password.is_some_and(|value| !value.is_empty());
     require("ssh")?;
     require("scp")?;
@@ -609,6 +630,84 @@ mod tests {
         path
     }
 
+    fn request(dumper: Dumper) -> DumpRequest<'static> {
+        DumpRequest {
+            dumper,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: None,
+            device: DumpDevice::Usb,
+            agent: None,
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        }
+    }
+
+    #[test]
+    fn dump_dispatch_selects_each_backend() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        for (dumper, expected) in [
+            (Dumper::Builtin, b"builtin".as_slice()),
+            (Dumper::FoulDecrypt, b"foul".as_slice()),
+            (Dumper::Bagbak, b"external".as_slice()),
+        ] {
+            let result = dispatch_dump(
+                &request(dumper),
+                work.path(),
+                |_, _| Ok(b"builtin".to_vec()),
+                |_, _| Ok(b"foul".to_vec()),
+                |_, _, _| Ok(b"external".to_vec()),
+            )
+            .expect("selected backend result");
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn external_dump_reports_tool_and_output_failures() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let required = run_external(
+            Dumper::Bagbak,
+            "com.example.app",
+            work.path(),
+            |_| Err("tool missing".into()),
+            |_| panic!("missing tool must stop before execution"),
+        );
+        assert!(required.unwrap_err().contains("tool missing"));
+
+        let failed = run_external(
+            Dumper::Bagbak,
+            "com.example.app",
+            work.path(),
+            |_| Ok(()),
+            |_| Err("tool failed".into()),
+        );
+        assert!(failed.unwrap_err().contains("tool failed"));
+
+        let absent = run_external(
+            Dumper::Bagbak,
+            "com.example.app",
+            work.path(),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+        assert!(absent.unwrap_err().contains("produced no .ipa"));
+
+        let invalid = run_external(
+            Dumper::FridaIosDump,
+            "com.example.app",
+            work.path(),
+            |_| Ok(()),
+            |command| {
+                let output = command.get_args().nth(1).expect("output IPA path");
+                std::fs::write(output, b"invalid IPA").expect("write fake output");
+                Ok(())
+            },
+        );
+        assert!(invalid.unwrap_err().contains("Zip"));
+    }
+
     #[test]
     fn prepares_bundled_agent_files_and_keeps_an_override() {
         let work = tempfile::tempdir().expect("temporary directory");
@@ -660,8 +759,13 @@ mod tests {
         .expect("write Frida launcher");
         let path = std::env::join_paths([first.path()]).expect("PATH value");
 
-        let selected = python_with_frida(Some("  ".into()), Some(&path), |candidate| {
-            candidate == "launcher-python"
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        let selected = tracing::subscriber::with_default(subscriber, || {
+            python_with_frida(Some("  ".into()), Some(&path), |candidate| {
+                candidate == "launcher-python"
+            })
         })
         .expect("launcher interpreter");
         assert_eq!(selected, "launcher-python");
@@ -751,10 +855,10 @@ mod tests {
             drop_undumped_extensions: false,
         };
         let mut calls = 0;
-        let result = run_fouldecrypt_with(
+        let result = run_fouldecrypt(
             &request,
             work.path(),
-            Some("secret"),
+            || Some("secret".into()),
             |_| Ok(()),
             |(_, args), password| {
                 calls += 1;
@@ -774,6 +878,21 @@ mod tests {
             error.contains("Zip"),
             "unexpected validation error: {error}"
         );
+
+        let missing_work = tempfile::tempdir().expect("missing download directory");
+        let missing = run_fouldecrypt(
+            &request,
+            missing_work.path(),
+            || Some(String::new()),
+            |_| Ok(()),
+            |_, password| {
+                assert_eq!(password, None);
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(missing.contains("FoulDecrypt produced no IPA"));
     }
 
     #[test]
@@ -791,10 +910,10 @@ mod tests {
             drop_undumped_extensions: false,
         };
         for (password, failed_tool) in [(None, "ssh"), (None, "scp"), (Some("pw"), "sshpass")] {
-            let error = run_fouldecrypt_with(
+            let error = run_fouldecrypt(
                 &request,
                 work.path(),
-                password,
+                || password.map(str::to_string),
                 |tool| {
                     (tool != failed_tool)
                         .then_some(())
@@ -810,10 +929,10 @@ mod tests {
         for failed_call in 1..=3 {
             let mut calls = 0;
             assert!(
-                run_fouldecrypt_with(
+                run_fouldecrypt(
                     &request,
                     work.path(),
-                    None,
+                    || None,
                     |_| Ok(()),
                     |_, _| {
                         calls += 1;
