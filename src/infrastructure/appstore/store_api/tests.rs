@@ -194,6 +194,20 @@ fn serve_json_once(body: &'static str) -> (String, JoinHandle<String>) {
     (format!("http://{address}"), server)
 }
 
+#[test]
+fn read_request_headers_stops_when_the_peer_closes_early() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        read_request_headers(&mut stream)
+    });
+    let client = TcpStream::connect(address).unwrap();
+    client.shutdown(std::net::Shutdown::Write).unwrap();
+
+    assert!(server.join().unwrap().is_empty());
+}
+
 fn read_request_headers(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut chunk = [0; 1024];
