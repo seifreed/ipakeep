@@ -453,4 +453,36 @@ mod tests {
             .is_err()
         );
     }
+
+    #[tokio::test]
+    async fn trusted_device_and_sms_endpoints_map_request_errors() {
+        let client = reqwest::Client::new();
+        let url = "not a valid URL";
+
+        assert!(
+            request_trusted_device_notification_with_headers(&client, url, anisette_headers())
+                .await
+                .is_err()
+        );
+        assert!(
+            list_trusted_phone_numbers_with_headers(&client, url, anisette_headers())
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_trusted_device_code_with_headers(&client, url, anisette_headers(), "123456")
+                .await
+                .is_err()
+        );
+        assert!(
+            request_sms_with_headers(&client, url, anisette_headers(), 7)
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_sms_code_with_headers(&client, url, anisette_headers(), 7, "123456")
+                .await
+                .is_err()
+        );
+    }
 }
