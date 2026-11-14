@@ -5,6 +5,7 @@ use super::srp_response::two_factor_required_result;
 use super::*;
 use crate::infrastructure::http::plist_codec::encode_plist;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use std::collections::HashMap;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -159,6 +160,21 @@ fn two_factor_status_error_omits_untrusted_response_body() {
     };
     assert!(message.contains("HTTP 401"));
     assert!(!message.contains("private-response-value"));
+}
+
+#[test]
+fn build_header_map_rejects_invalid_names_and_values() {
+    let invalid_name = HashMap::from([("bad header".into(), "value".into())]);
+    assert!(matches!(
+        http::build_header_map(&invalid_name),
+        Err(AppStoreError::NetworkError(_))
+    ));
+
+    let invalid_value = HashMap::from([("X-Test".into(), "bad\nvalue".into())]);
+    assert!(matches!(
+        http::build_header_map(&invalid_value),
+        Err(AppStoreError::NetworkError(_))
+    ));
 }
 
 #[tokio::test]
