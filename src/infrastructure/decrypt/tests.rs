@@ -857,6 +857,24 @@ fn undumped_extension_fails_with_hint_or_is_dropped_on_request() {
 }
 
 #[test]
+fn dump_file_readers_report_missing_directories_and_invalid_paths() {
+    let work = tempfile::TempDir::new().unwrap();
+    let missing = work.path().join("missing");
+    assert!(read_chunks(&missing, "slice.bin").unwrap().is_none());
+
+    let not_directory = work.path().join("file");
+    std::fs::write(&not_directory, b"x").unwrap();
+    assert!(read_chunks(&not_directory, "slice.bin").is_err());
+    assert!(read_whole_or_chunks(&not_directory, "slice.bin").is_err());
+
+    let directory_as_file = work.path().join("directory");
+    std::fs::create_dir(&directory_as_file).unwrap();
+    assert!(read_whole_or_chunks(work.path(), "directory").is_err());
+    std::fs::create_dir(work.path().join("directory.uuid")).unwrap();
+    assert!(read_uuid_sidecar(work.path(), "directory").is_err());
+}
+
+#[test]
 fn macho_parser_handles_fat64_and_malformed_or_unknown_slices() {
     let slices = [
         (
