@@ -798,6 +798,16 @@ mod tests {
             write_provisioning_files(&work.path().join("missing.app"), Some(&output), &result)
                 .unwrap_err();
         assert!(error.contains("embedding profile"));
+
+        let output_file = work.path().join("not-a-directory");
+        std::fs::write(&output_file, b"blocker").unwrap();
+        assert!(write_provisioning_files(&work.path(), Some(&output_file), &result).is_err());
+
+        let artifact_directory = work.path().join("artifact-directory");
+        std::fs::create_dir_all(artifact_directory.join("embedded.mobileprovision")).unwrap();
+        assert!(
+            write_provisioning_files(&work.path(), Some(&artifact_directory), &result).is_err()
+        );
     }
 
     #[tokio::test]
