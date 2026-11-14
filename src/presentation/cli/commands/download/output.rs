@@ -135,6 +135,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_defaults_to_current_directory_and_reports_creation_errors() {
+        assert!(matches!(
+            OutputDestination::resolve(None, 1).expect("default output"),
+            OutputDestination::Directory(path) if path == PathBuf::from(".")
+        ));
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("not-a-directory");
+        std::fs::write(&file_path, b"file").unwrap();
+        let error =
+            prepare_output_destination(&OutputDestination::Directory(file_path)).unwrap_err();
+
+        assert!(error.starts_with("failed to create output dir:"));
+    }
+
+    #[test]
     fn derive_ipa_filename_sanitizes_remote_metadata_segments() {
         let metadata = serde_json::json!({
             "softwareVersionBundleId": "../bad\\bundle",
