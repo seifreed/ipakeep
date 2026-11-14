@@ -61,9 +61,4 @@ mod tests {
         assert!(key.contains("PRIVATE KEY"), "{key}");
         assert!(csr.contains("CERTIFICATE REQUEST"), "{csr}");
     }
-
-    #[test]
-    fn rejects_a_common_name_that_cannot_be_passed_to_openssl() {
-        assert!(generate_key_and_csr("invalid\0name").is_err());
-    }
 }

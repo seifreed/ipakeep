@@ -58,6 +58,26 @@ async fn login_with_2fa_success() {
 }
 
 #[tokio::test]
+async fn login_with_2fa_credential_save_failure_returns_error() {
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_with_2fa()
+        .return_once(|_, _, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials
+        .expect_save_account()
+        .return_once(|_| Err(CredentialError::SaveFailed("disk full".into())));
+    let use_case = AuthLogin::new(app_store, credentials);
+
+    assert!(matches!(
+        use_case
+            .login_with_2fa("test@example.com", "password", "123456", "guid123")
+            .await,
+        Err(AppStoreError::Unexpected(_))
+    ));
+}
+
+#[tokio::test]
 async fn login_credential_save_failure_returns_error() {
     let mut app_store = AppStoreRepo::new();
     app_store
@@ -207,4 +227,24 @@ async fn execute_grandslam_preserves_store_front_from_spd() {
         .unwrap();
 
     assert_eq!(result.store_front, "143441-2,26");
+}
+
+#[tokio::test]
+async fn execute_grandslam_credential_save_failure_returns_error() {
+    let mut app_store = AppStoreRepo::new();
+    app_store
+        .expect_authenticate_grandslam()
+        .return_once(|_, _, _| Ok(test_account()));
+    let mut credentials = CredentialRepo::new();
+    credentials
+        .expect_save_account()
+        .return_once(|_| Err(CredentialError::SaveFailed("disk full".into())));
+    let use_case = AuthLogin::new(app_store, credentials);
+
+    assert!(matches!(
+        use_case
+            .execute_grandslam("test@example.com", "password", "guid123", None)
+            .await,
+        Err(AppStoreError::Unexpected(_))
+    ));
 }
