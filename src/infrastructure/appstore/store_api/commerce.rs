@@ -147,24 +147,25 @@ pub(super) async fn download(
         )
         .await?;
 
-    let failure_type = response
-        .body
+    parse_download_response(&response.body)
+}
+
+fn parse_download_response(body: &serde_json::Value) -> Result<Vec<DownloadItem>, AppStoreError> {
+    let failure_type = body
         .get("failureType")
-        .and_then(|v| v.as_str())
+        .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     if !failure_type.is_empty() {
-        let message = response
-            .body
+        let message = body
             .get("customerMessage")
-            .and_then(|v| v.as_str())
+            .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown download error");
         return Err(AppStoreError::DownloadFailed(message.to_string()));
     }
 
-    let song_list = response
-        .body
+    let song_list = body
         .get("songList")
-        .and_then(|v| v.as_array())
+        .and_then(serde_json::Value::as_array)
         .ok_or_else(|| AppStoreError::Unexpected("missing songList in download response".into()))?;
 
     let mut items = Vec::new();
