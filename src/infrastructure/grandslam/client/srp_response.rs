@@ -22,6 +22,38 @@ pub(super) fn parse_srp_init_response(
     a: Vec<u8>,
     anisette: AnisetteData,
 ) -> Result<SrpInitResponse, AppStoreError> {
+    let params = parse_srp_parameters(inner)?;
+    tracing::debug!(
+        service = "ipakeep",
+        component = "grandslam",
+        operation = "srp_init",
+        event_name = "auth.srp.parameters_received",
+        sp = %params.sp,
+        iterations = params.iterations,
+        salt_len = params.salt.len(),
+        b_pub_len = params.b_pub.len(),
+        "received SRP init parameters"
+    );
+    Ok(SrpInitResponse {
+        sp: params.sp,
+        salt: params.salt,
+        iterations: params.iterations,
+        b_pub: params.b_pub,
+        c: params.c,
+        a,
+        anisette,
+    })
+}
+
+struct SrpInitParameters {
+    sp: String,
+    salt: Vec<u8>,
+    iterations: u32,
+    b_pub: Vec<u8>,
+    c: String,
+}
+
+fn parse_srp_parameters(inner: &JsonValue) -> Result<SrpInitParameters, AppStoreError> {
     let sp = inner
         .get("sp")
         .and_then(|v| v.as_str())
@@ -31,31 +63,10 @@ pub(super) fn parse_srp_init_response(
     let salt = extract_base64(inner, "s").map_err(|e| {
         AppStoreError::AuthenticationFailed(format!("missing salt in SRP init: {e}"))
     })?;
-
-    let iterations = u32::try_from(
-        inner
-            .get("i")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(10_000),
-    )
-    .unwrap_or(10_000);
-
+    let iterations = srp_iterations(inner);
     let b_pub = extract_base64(inner, "B").map_err(|e| {
         AppStoreError::AuthenticationFailed(format!("missing server ephemeral in SRP init: {e}"))
     })?;
-
-    tracing::debug!(
-        service = "ipakeep",
-        component = "grandslam",
-        operation = "srp_init",
-        event_name = "auth.srp.parameters_received",
-        sp = %sp,
-        iterations,
-        salt_len = salt.len(),
-        b_pub_len = b_pub.len(),
-        "received SRP init parameters"
-    );
-
     let c = inner
         .get("c")
         .and_then(|v| v.as_str())
@@ -67,16 +78,23 @@ pub(super) fn parse_srp_init_response(
             "missing continuation handle in SRP init".into(),
         ));
     }
-
-    Ok(SrpInitResponse {
+    Ok(SrpInitParameters {
         sp,
         salt,
         iterations,
         b_pub,
         c,
-        a,
-        anisette,
     })
+}
+
+fn srp_iterations(inner: &JsonValue) -> u32 {
+    u32::try_from(
+        inner
+            .get("i")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(10_000),
+    )
+    .unwrap_or(10_000)
 }
 
 /// Build the 2FA challenge result from the `-21669` complete response.
