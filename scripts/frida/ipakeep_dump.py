@@ -414,8 +414,6 @@ def run_dump(args) -> int:
             type(error).__name__,
         )
         return 2
-    process_names = bundle_process_names(bundles)
-
     os.makedirs(args.out, exist_ok=True)
     device = get_device(args.device)
 
