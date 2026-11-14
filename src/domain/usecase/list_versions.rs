@@ -103,4 +103,22 @@ mod tests {
 
         assert_eq!(versions[0].external_version_id, "100");
     }
+
+    #[tokio::test]
+    async fn list_versions_propagates_repository_errors() {
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_list_versions()
+            .return_once(|_, _, _| Err(AppStoreError::NetworkError("offline".into())));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(account())));
+        let use_case = ListVersions::new(app_store, credentials);
+
+        assert!(matches!(
+            use_case.execute(12345, "guid123").await,
+            Err(AppStoreError::NetworkError(message)) if message == "offline"
+        ));
+    }
 }
