@@ -217,17 +217,21 @@ async fn success_status_reports_response_body_read_failures() {
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    let (release_server, wait_for_release) = std::sync::mpsc::channel();
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nx")
             .unwrap();
+        stream.flush().unwrap();
+        wait_for_release.recv().unwrap();
     });
     let response = reqwest::Client::new()
         .get(format!("http://{address}/"))
         .send()
         .await
         .unwrap();
+    release_server.send(()).unwrap();
 
     assert!(matches!(
         http::ensure_success_status(response, "fixture").await,
