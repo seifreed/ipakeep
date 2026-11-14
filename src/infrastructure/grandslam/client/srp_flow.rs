@@ -18,9 +18,18 @@ pub(super) async fn init(
     client: &reqwest::Client,
     email: &str,
 ) -> Result<SrpInitResponse, AppStoreError> {
+    let anisette = resolve_anisette(client).await?;
+    init_with_anisette(client, GRANDSLAM_URL, email, anisette).await
+}
+
+async fn init_with_anisette(
+    client: &reqwest::Client,
+    url: &str,
+    email: &str,
+    anisette: AnisetteData,
+) -> Result<SrpInitResponse, AppStoreError> {
     let a = generate_a();
     let a_pub = compute_a_pub(&a);
-    let anisette = resolve_anisette(client).await?;
     let body = serde_json::json!({
         "Header": {
             "Version": "1.0.1",
@@ -34,7 +43,7 @@ pub(super) async fn init(
         },
     });
 
-    let response = http::post_plist(client, GRANDSLAM_URL, &body, Some(&anisette.headers)).await?;
+    let response = http::post_plist(client, url, &body, Some(&anisette.headers)).await?;
     let inner = extract_response(&response)?;
     let ec = check_grandslam_status(inner, "SRP init")?;
     if ec != 0 {
@@ -59,6 +68,16 @@ pub(super) async fn complete(
     password: &str,
     init: &SrpInitResponse,
 ) -> Result<SrpCompleteResult, AppStoreError> {
+    complete_at(client, GRANDSLAM_URL, email, password, init).await
+}
+
+async fn complete_at(
+    client: &reqwest::Client,
+    url: &str,
+    email: &str,
+    password: &str,
+    init: &SrpInitResponse,
+) -> Result<SrpCompleteResult, AppStoreError> {
     let derived = derive_srp_password(password, &init.salt, init.iterations, &init.sp);
     let (m1, session_key) = compute_client_proof(
         &init.a,
@@ -70,7 +89,7 @@ pub(super) async fn complete(
     )
     .map_err(|e| AppStoreError::AuthenticationFailed(format!("SRP proof failed: {e}")))?;
 
-    let inner = send_complete_request(client, email, init, &m1).await?;
+    let inner = send_complete_request(client, url, email, init, &m1).await?;
     if let Some(server_proof_required) = second_factor_server_proof_required(read_status(&inner)) {
         if server_proof_required {
             verify_server_proof_response(&inner, init, &m1, &session_key)?;
@@ -90,6 +109,7 @@ pub(super) async fn complete(
 
 async fn send_complete_request(
     client: &reqwest::Client,
+    url: &str,
     email: &str,
     init: &SrpInitResponse,
     m1: &[u8],
@@ -107,8 +127,7 @@ async fn send_complete_request(
         },
     });
 
-    let response =
-        http::post_plist(client, GRANDSLAM_URL, &body, Some(&init.anisette.headers)).await?;
+    let response = http::post_plist(client, url, &body, Some(&init.anisette.headers)).await?;
     extract_response(&response).cloned()
 }
 
@@ -171,7 +190,50 @@ pub enum SrpCompleteResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{second_factor_server_proof_required, srp_init_error};
+    use super::{
+        SrpInitResponse, complete_at, init_with_anisette, second_factor_server_proof_required,
+        srp_init_error,
+    };
+    use crate::domain::error::AppStoreError;
+    use crate::infrastructure::grandslam::anisette::AnisetteData;
+    use crate::infrastructure::http::plist_codec::encode_plist;
+    use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+    use serde_json::json;
+    use std::collections::HashMap;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn anisette_fixture() -> AnisetteData {
+        AnisetteData {
+            headers: HashMap::from([("X-Apple-I-MD".into(), "otp".into())]),
+            cpd: json!({"X-Apple-I-MD": "otp"}),
+        }
+    }
+
+    fn init_fixture() -> SrpInitResponse {
+        SrpInitResponse {
+            sp: "s2k".into(),
+            salt: vec![1, 2, 3],
+            iterations: 1,
+            b_pub: vec![2],
+            c: "continuation".into(),
+            a: vec![1],
+            anisette: anisette_fixture(),
+        }
+    }
+
+    async fn mock_response(route: &str, response: serde_json::Value) -> MockServer {
+        let server = MockServer::start().await;
+        let body = encode_plist(&response).expect("response plist");
+        Mock::given(method("POST"))
+            .and(path(route))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(body, "application/x-apple-plist"),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
 
     #[test]
     fn identifies_grandslam_two_factor_statuses() {
@@ -193,5 +255,120 @@ mod tests {
     #[test]
     fn other_init_errors_keep_their_code() {
         assert!(srp_init_error(-20970).to_string().contains("-20970"));
+    }
+
+    #[tokio::test]
+    async fn init_parses_parameters_and_maps_apple_rejections() {
+        let response = json!({
+            "Response": {
+                "Status": {"hsc": 200, "ec": 0},
+                "sp": "s2k_fo",
+                "s": BASE64.encode([1u8, 2]),
+                "i": 2,
+                "B": BASE64.encode([3u8, 4]),
+                "c": "continue"
+            }
+        });
+        let server = mock_response("/init", response).await;
+        let client = reqwest::Client::new();
+        let init = init_with_anisette(
+            &client,
+            &format!("{}/init", server.uri()),
+            "user@example.com",
+            anisette_fixture(),
+        )
+        .await
+        .expect("SRP init");
+        assert_eq!(init.sp, "s2k_fo");
+        assert_eq!(init.salt, [1, 2]);
+        assert_eq!(init.b_pub, [3, 4]);
+        assert_eq!(init.c, "continue");
+
+        let rejected = mock_response(
+            "/init",
+            json!({"Response":{"Status":{"hsc":200,"ec":-80045}}}),
+        )
+        .await;
+        assert!(matches!(
+            init_with_anisette(
+                &client,
+                &format!("{}/init", rejected.uri()),
+                "user@example.com",
+                anisette_fixture()
+            )
+            .await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message.contains("rejected the Anisette")
+        ));
+    }
+
+    #[tokio::test]
+    async fn complete_maps_server_status_and_two_factor_responses() {
+        let client = reqwest::Client::new();
+        let failed = mock_response(
+            "/complete",
+            json!({"Response":{"Status":{"hsc":200,"ec":-1}}}),
+        )
+        .await;
+        assert!(matches!(
+            complete_at(
+                &client,
+                &format!("{}/complete", failed.uri()),
+                "user@example.com",
+                "password",
+                &init_fixture()
+            )
+            .await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message.contains("error code -1")
+        ));
+
+        let trusted = mock_response(
+            "/complete",
+            json!({"Response":{"Status":{"hsc":409,"ec":0,"au":"trustedDeviceSecondaryAuth"}}}),
+        )
+        .await;
+        assert!(matches!(
+            complete_at(
+                &client,
+                &format!("{}/complete", trusted.uri()),
+                "user@example.com",
+                "password",
+                &init_fixture()
+            )
+            .await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message.contains("missing server proof")
+        ));
+
+        let sms = mock_response(
+            "/complete",
+            json!({"Response":{"Status":"-21669","au":"secondaryAuth"}}),
+        )
+        .await;
+        assert!(matches!(
+            complete_at(
+                &client,
+                &format!("{}/complete", sms.uri()),
+                "user@example.com",
+                "password",
+                &init_fixture()
+            )
+            .await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message.contains("missing spd")
+        ));
+
+        let malformed_srp = SrpInitResponse {
+            b_pub: vec![0],
+            ..init_fixture()
+        };
+        assert!(matches!(
+            complete_at(
+                &client,
+                "http://127.0.0.1:1/complete",
+                "user@example.com",
+                "password",
+                &malformed_srp
+            )
+            .await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message.contains("SRP proof failed")
+        ));
     }
 }
