@@ -14,6 +14,9 @@ pub mod purchases;
 pub mod resolve_app;
 pub mod search;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use auth_info::AuthInfo;
 pub use auth_login::{AuthLogin, GrandslamCredentials};
 pub use auth_revoke::AuthRevoke;

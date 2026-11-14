@@ -47,25 +47,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entity::Account;
     use crate::domain::repository::{AppStoreRepo, CredentialRepo};
-
-    fn test_account() -> Account {
-        Account {
-            email: "test@example.com".into(),
-            name: "Test User".into(),
-            password_token: "token123".into(),
-            directory_services_id: "dsid123".into(),
-            store_front: "143441-2,26".into(),
-            pod: "3".into(),
-            idms_token: None,
-            dsid: None,
-            adsid: None,
-            grandslam_session_key: None,
-            grandslam_continuation: None,
-            cookies: Vec::new(),
-        }
-    }
+    use crate::domain::usecase::test_support::test_account;
 
     #[tokio::test]
     async fn purchase_success() {
