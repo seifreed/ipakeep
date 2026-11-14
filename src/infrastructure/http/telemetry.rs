@@ -149,6 +149,10 @@ fn record_body_read(
         );
         return;
     }
+    record_body_read_success(status, duration_ms, body_bytes);
+}
+
+fn record_body_read_success(status: u16, duration_ms: u64, body_bytes: Option<usize>) {
     if let Some(body_bytes) = body_bytes {
         tracing::debug!(
             service = "ipakeep",
