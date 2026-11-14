@@ -187,6 +187,45 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rejects_a_decrypted_ipa_without_a_matching_profile_before_installing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ipa = dir.path().join("decrypted.ipa");
+        let info = br#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.test</string></dict></plist>"#;
+        let mut executable = Vec::new();
+        for value in [0xfeed_facf_u32, 0x0100_000c, 0, 2, 0, 0, 0, 0] {
+            executable.extend(value.to_le_bytes());
+        }
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in [
+            ("Payload/Test.app/Info.plist", info.as_slice()),
+            ("Payload/Test.app/TestExec", executable.as_slice()),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, bytes).unwrap();
+        }
+        fs::write(&ipa, writer.finish().unwrap().into_inner()).unwrap();
+        let request = InstallRequest {
+            ipa: &ipa,
+            device: "device",
+            identity: "identity",
+            provisioning_profiles: &[],
+            entitlements: None,
+            launch: false,
+            legacy_device: false,
+        };
+
+        assert!(
+            install_ipa(&request)
+                .unwrap_err()
+                .contains("no provisioning profile matches com.example.test")
+        );
+    }
+
     #[test]
     fn workdir_install_rejects_invalid_archives_before_signing_or_device_commands() {
         let dir = tempfile::TempDir::new().unwrap();
