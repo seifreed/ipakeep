@@ -348,6 +348,16 @@ mod tests {
     }
 
     #[test]
+    fn plan_entries_rejects_page_keys_outside_sc_info() {
+        let names = set(&["Payload/App.app/App.supf"]);
+        assert!(
+            plan_entries(&names)
+                .unwrap_err()
+                .contains("outside SC_Info")
+        );
+    }
+
+    #[test]
     fn supf_ranking_prefers_v5_then_supf_then_supp() {
         let names = set(&[
             "Payload/App.app/SC_Info/App.v5.supf",
@@ -399,6 +409,7 @@ mod tests {
     #[test]
     fn is_excluded_matches_go_exclude_set() {
         assert!(is_excluded_ipa_entry("iTunesMetadata.plist", false));
+        assert!(is_excluded_ipa_entry("Payload/META-INF", false));
         assert!(is_excluded_ipa_entry(
             "Payload/App.app/SC_Info/App.sinf",
             false
@@ -409,6 +420,14 @@ mod tests {
         ));
         assert!(!is_excluded_ipa_entry(
             "Payload/App.app/Watch/W.app/W",
+            true
+        ));
+        assert!(is_excluded_ipa_entry(
+            "Payload/App.app/WatchKitSupport2",
+            false
+        ));
+        assert!(is_excluded_ipa_entry(
+            "Payload/App.app/Frameworks/Foo.dSYM/Contents/Info.plist",
             true
         ));
         assert!(!is_excluded_ipa_entry("Payload/App.app/App", false));
@@ -480,6 +499,10 @@ mod tests {
             "Payload/App.app/App".to_string(),
             b"decrypted-binary".to_vec(),
         );
+        replacements.insert(
+            "Payload/App.app/SC_Info/Replacement.sinf".to_string(),
+            b"replacement-sinf".to_vec(),
+        );
 
         let out = assemble(&path, &replacements, false).unwrap();
         let _ = std::fs::remove_file(&path);
@@ -498,6 +521,7 @@ mod tests {
         // SC_Info and iTunesMetadata are stripped.
         assert!(!members.contains_key("Payload/App.app/SC_Info/App.sinf"));
         assert!(!members.contains_key("Payload/App.app/SC_Info/App.v5.supf"));
+        assert!(!members.contains_key("Payload/App.app/SC_Info/Replacement.sinf"));
         assert!(!members.contains_key("iTunesMetadata.plist"));
     }
 }
