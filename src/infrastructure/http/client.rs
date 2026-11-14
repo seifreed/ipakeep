@@ -395,3 +395,62 @@ fn decode_plist_body(
             ))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{build_plist_request, should_preserve_server_error};
+    use std::collections::HashMap;
+
+    #[test]
+    fn plist_requests_apply_default_and_custom_headers() {
+        let client = reqwest::Client::new();
+        let default = build_plist_request(&client, "https://example.test", b"plist", None)
+            .build()
+            .expect("default request");
+        assert_eq!(
+            default.headers()[reqwest::header::CONTENT_TYPE],
+            "application/x-apple-plist"
+        );
+        assert_eq!(default.headers()[reqwest::header::ACCEPT], "*/*");
+        assert_eq!(
+            default.body().and_then(reqwest::Body::as_bytes),
+            Some(&b"plist"[..])
+        );
+
+        let headers = HashMap::from([
+            ("Content-Type".into(), "application/xml".into()),
+            ("x-request-id".into(), "42".into()),
+        ]);
+        let custom = build_plist_request(&client, "https://example.test", b"plist", Some(&headers))
+            .build()
+            .expect("custom request");
+        assert_eq!(
+            custom.headers()[reqwest::header::CONTENT_TYPE],
+            "application/xml"
+        );
+        assert_eq!(custom.headers()["x-request-id"], "42");
+    }
+
+    #[test]
+    fn authentication_preserves_only_retryable_server_statuses() {
+        for status in [
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            reqwest::StatusCode::FOUND,
+            reqwest::StatusCode::NOT_FOUND,
+        ] {
+            assert!(should_preserve_server_error(true, status));
+        }
+        for status in [
+            reqwest::StatusCode::OK,
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::BAD_REQUEST,
+        ] {
+            assert!(!should_preserve_server_error(true, status));
+            assert!(!should_preserve_server_error(false, status));
+        }
+        assert!(!should_preserve_server_error(
+            false,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+    }
+}
