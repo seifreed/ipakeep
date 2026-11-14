@@ -61,3 +61,29 @@ pub fn handle_install_ipa(
 pub fn handle_unlock_runtime(path: Option<&Path>) -> Result<(), String> {
     unlock_runtime_path(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_handles_empty_bundle_and_missing_path() {
+        let directory = tempfile::tempdir().expect("bundle directory");
+        assert!(handle_prepare(directory.path()).is_ok());
+        assert!(handle_prepare(&directory.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn run_rejects_an_empty_explicit_simulator_id() {
+        let target = SimulatorTarget {
+            udid: Some(" ".into()),
+            device: None,
+        };
+        assert!(handle_run("com.example.app", &[], false, &target, None).is_err());
+    }
+
+    #[test]
+    fn unlock_rejects_a_path_outside_simulator_runtime() {
+        assert!(handle_unlock_runtime(Some(Path::new("/tmp/runtime"))).is_err());
+    }
+}

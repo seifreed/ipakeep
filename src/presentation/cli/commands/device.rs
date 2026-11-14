@@ -16,3 +16,25 @@ pub fn handle_install(request: &InstallRequest<'_>) -> Result<(), String> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_reports_missing_ipa_without_running_device_commands() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let ipa = directory.path().join("missing.ipa");
+        let request = InstallRequest {
+            ipa: &ipa,
+            device: "device",
+            identity: "identity",
+            provisioning_profiles: &[],
+            entitlements: None,
+            launch: false,
+            legacy_device: false,
+        };
+
+        assert!(handle_install(&request).is_err());
+    }
+}
