@@ -5,13 +5,42 @@ use serde_json::Value as JsonValue;
 
 /// Parse an [`Account`] from decrypted SPD plist data.
 pub(super) fn parse_spd_account(spd: &JsonValue) -> Account {
+    let fields = parse_account_fields(spd);
+    log_account_dsid(&fields.dsid);
+    // GrandSlam service tokens are not MZFinance passwordToken values.
+    let password_token = string_from_keys(spd, &["token", "passwordToken"]);
+    let store_front = string_from_keys(spd, &["storeFront", "store-front"]);
+    let pod = string_from_keys(spd, &["pod"]);
+    let dsid = (!fields.dsid.is_empty()).then(|| fields.dsid.clone());
+    Account {
+        email: fields.email,
+        name: fields.name,
+        password_token,
+        directory_services_id: fields.dsid,
+        store_front,
+        pod,
+        idms_token: fields.idms_token,
+        dsid,
+        adsid: fields.adsid,
+        grandslam_session_key: fields.grandslam_session_key,
+        grandslam_continuation: fields.grandslam_continuation,
+        cookies: Vec::new(),
+    }
+}
+
+struct AccountFields {
+    dsid: String,
+    idms_token: Option<String>,
+    adsid: Option<String>,
+    grandslam_session_key: Option<String>,
+    grandslam_continuation: Option<String>,
+    email: String,
+    name: String,
+}
+
+fn parse_account_fields(spd: &JsonValue) -> AccountFields {
     let tokens = spd.get("Token").unwrap_or(spd);
-    // The numeric account DSID (`DsPrsId`) is what MZFinance commerce expects in
-    // X-Dsid. It is a plist integer, so it must be read number-aware; reading it
-    // as a string only would fall through to `adsid` (the long GrandSlam identity
-    // id), which MZFinance rejects with failureType 2001 ("account could not be
-    // found"). `adsid` is deliberately not a fallback here.
-    let dsid = string_or_number_from_keys(spd, &["dsid", "DsPrsId", "DirectoryServicesID"]);
+    let dsid = account_dsid(spd);
     let idms_token = optional_string_from_keys(tokens, &["idms-token", "IDMSToken", "GsIdmsToken"])
         .or_else(|| optional_string_from_keys(spd, &["idms-token", "IDMSToken", "GsIdmsToken"]));
     let adsid = optional_string_from_keys(spd, &["adsid"]);
@@ -23,7 +52,27 @@ pub(super) fn parse_spd_account(spd: &JsonValue) -> Account {
     let first_name = string_from_keys(spd, &["firstName", "fn"]);
     let last_name = string_from_keys(spd, &["lastName", "ln"]);
     let name = format!("{first_name} {last_name}").trim().to_string();
+    AccountFields {
+        dsid,
+        idms_token,
+        adsid,
+        grandslam_session_key,
+        grandslam_continuation,
+        email,
+        name,
+    }
+}
 
+fn account_dsid(spd: &JsonValue) -> String {
+    // The numeric account DSID (`DsPrsId`) is what MZFinance commerce expects in
+    // X-Dsid. It is a plist integer, so it must be read number-aware; reading it
+    // as a string only would fall through to `adsid` (the long GrandSlam identity
+    // id), which MZFinance rejects with failureType 2001 ("account could not be
+    // found"). `adsid` is deliberately not a fallback here.
+    string_or_number_from_keys(spd, &["dsid", "DsPrsId", "DirectoryServicesID"])
+}
+
+fn log_account_dsid(dsid: &str) {
     tracing::debug!(
         service = "ipakeep",
         component = "grandslam",
@@ -33,33 +82,6 @@ pub(super) fn parse_spd_account(spd: &JsonValue) -> Account {
         dsid_numeric = !dsid.is_empty() && dsid.bytes().all(|b| b.is_ascii_digit()),
         "parsed GrandSlam SPD account fields"
     );
-
-    // GrandSlam service tokens are not MZFinance passwordToken values.
-    let password_token = string_from_keys(spd, &["token", "passwordToken"]);
-
-    let store_front = string_from_keys(spd, &["storeFront", "store-front"]);
-    let pod = string_from_keys(spd, &["pod"]);
-
-    let dsid_opt = if dsid.is_empty() {
-        None
-    } else {
-        Some(dsid.clone())
-    };
-
-    Account {
-        email,
-        name,
-        password_token,
-        directory_services_id: dsid,
-        store_front,
-        pod,
-        idms_token,
-        dsid: dsid_opt,
-        adsid,
-        grandslam_session_key,
-        grandslam_continuation,
-        cookies: Vec::new(),
-    }
 }
 
 fn string_from_keys(value: &JsonValue, keys: &[&str]) -> String {
