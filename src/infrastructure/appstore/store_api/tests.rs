@@ -269,3 +269,11 @@ fn response_is_store_error_detects_failure_and_message() {
         &serde_json::json!({ "failureType": "" })
     ));
 }
+
+#[test]
+fn appstore_query_url_rejects_invalid_base_urls() {
+    assert!(matches!(
+        appstore_query_url("not a URL", &[]),
+        Err(AppStoreError::NetworkError(_))
+    ));
+}
