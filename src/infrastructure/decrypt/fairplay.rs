@@ -400,6 +400,41 @@ fn sinf_field(sinf: &[u8], wanted: [u8; 4]) -> Result<&[u8], String> {
 /// Unwrap the account credential against a SINF priv record to obtain the
 /// per-app 16-byte work key.
 fn derive_work16(credential: &[u8], sinf: &[u8]) -> Result<[u8; 16], String> {
+    let inputs = sinf_priv_inputs(sinf)?;
+    if credential.len() != 16 {
+        return Err("invalid SINF priv-record dimensions".to_string());
+    }
+
+    let mut md_input = Vec::with_capacity(inputs.name.len() + inputs.iviv.len());
+    md_input.extend_from_slice(inputs.name);
+    md_input.extend_from_slice(inputs.iviv);
+    let iv = md5::compute(&md_input);
+
+    let mut key = [0u8; 16];
+    for (dst, &src) in key.iter_mut().zip(credential.iter()) {
+        *dst = src ^ b'0';
+    }
+
+    let clear = aes128_cbc_decrypt_no_pad(&key, &iv.0, inputs.encrypted_priv)?;
+    if clear.len() < 48
+        || &clear[0..4] != b"itun"
+        || &clear[20..24] != b"key "
+        || &clear[44..48] != b"iviv"
+    {
+        return Err("credential does not decode this SINF priv record".to_string());
+    }
+    let mut work = [0u8; 16];
+    work.copy_from_slice(&clear[24..40]);
+    Ok(work)
+}
+
+struct SinfPrivInputs<'a> {
+    name: &'a [u8],
+    iviv: &'a [u8],
+    encrypted_priv: &'a [u8],
+}
+
+fn sinf_priv_inputs(sinf: &[u8]) -> Result<SinfPrivInputs<'_>, String> {
     let name_field = sinf_field(sinf, *b"name")?;
     let name = match name_field.iter().position(|&b| b == 0) {
         Some(i) => &name_field[..i],
@@ -422,34 +457,14 @@ fn derive_work16(credential: &[u8], sinf: &[u8]) -> Result<[u8; 16], String> {
         }
         _ => return Err("unsupported SINF priv-record length".to_string()),
     };
-
-    if credential.len() != 16 || iviv.len() != 16 {
+    if iviv.len() != 16 {
         return Err("invalid SINF priv-record dimensions".to_string());
     }
-
-    let mut md_input = Vec::with_capacity(name.len() + iviv.len());
-    md_input.extend_from_slice(name);
-    md_input.extend_from_slice(iviv);
-    let iv = md5::compute(&md_input);
-
-    let mut key = [0u8; 16];
-    for (dst, &src) in key.iter_mut().zip(credential.iter()) {
-        *dst = src ^ b'0';
-    }
-
-    let clear = aes128_cbc_decrypt_no_pad(&key, &iv.0, raw_priv)?;
-
-    if clear.len() < 48
-        || &clear[0..4] != b"itun"
-        || &clear[20..24] != b"key "
-        || &clear[44..48] != b"iviv"
-    {
-        return Err("credential does not decode this SINF priv record".to_string());
-    }
-
-    let mut work = [0u8; 16];
-    work.copy_from_slice(&clear[24..40]);
-    Ok(work)
+    Ok(SinfPrivInputs {
+        name,
+        iviv,
+        encrypted_priv: raw_priv,
+    })
 }
 
 /// Offset of the 32-byte key for `absolute_page` in a SUPP (one table indexing
