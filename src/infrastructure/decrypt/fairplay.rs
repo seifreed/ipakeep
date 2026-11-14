@@ -1264,6 +1264,7 @@ mod tests {
                 .len(),
             432
         );
+        assert!(sinf_priv_inputs(&make_sinf(b"app", &[0; 16], &[0; 439])).is_err());
         let mut bad_trailer = vec![0; 440];
         bad_trailer[439] = 1;
         assert!(sinf_priv_inputs(&make_sinf(b"app", &[0; 16], &bad_trailer)).is_err());
