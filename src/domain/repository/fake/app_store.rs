@@ -280,7 +280,19 @@ mod tests {
             id: 7,
             number: "+34•••".into(),
         };
-        let repo = FakeAppStoreRepository::new()
+        let repo = configured_repository(&account, &app, &item, &version, &phone);
+
+        (repo, account, app, item, version, phone)
+    }
+
+    fn configured_repository(
+        account: &Account,
+        app: &App,
+        item: &DownloadItem,
+        version: &AppVersion,
+        phone: &TrustedPhoneNumber,
+    ) -> FakeAppStoreRepository {
+        FakeAppStoreRepository::new()
             .with_authenticate_result(Ok(account.clone()))
             .with_authenticate_with_2fa_result(Ok(account.clone()))
             .with_authenticate_grandslam_result(Ok(account.clone()))
@@ -300,14 +312,12 @@ mod tests {
                 version: app.version.clone(),
                 platforms: vec!["iphone".into()],
                 purchase_date: Some("2021-01-01T00:00:00Z".into()),
-            }]));
-
-        (repo, account, app, item, version, phone)
+            }]))
     }
 
     #[tokio::test]
-    async fn configured_results_cover_repository_surface() {
-        let (repo, account, app, item, version, phone) = configured_repo();
+    async fn configured_authentication_results_cover_repository_surface() {
+        let (repo, account, _app, _item, _version, phone) = configured_repo();
 
         assert_eq!(
             repo.authenticate("email", "pass", "guid")
@@ -343,6 +353,11 @@ mod tests {
         repo.validate_sms_code("123", "idms", 7, "111111")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn configured_catalog_results_cover_repository_surface() {
+        let (repo, account, app, item, version, _phone) = configured_repo();
         assert_eq!(repo.search("term", "es", 5).await.unwrap()[0].id, app.id);
         assert_eq!(
             repo.lookup("com.example.app", "es")
@@ -374,7 +389,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_calls_cover_repository_surface() {
+    async fn configured_authentication_calls_are_recorded() {
         let (repo, account, _app, _item, _version, _phone) = configured_repo();
 
         let _ = repo.authenticate("email", "pass", "guid").await;
@@ -391,6 +406,20 @@ mod tests {
         let _ = repo.list_trusted_phone_numbers("123", "idms").await;
         let _ = repo.request_sms("123", "idms", 7).await;
         let _ = repo.validate_sms_code("123", "idms", 7, "111111").await;
+        assert_eq!(repo.authenticate_calls().len(), 1);
+        assert_eq!(repo.authenticate_with_2fa_calls().len(), 1);
+        assert_eq!(repo.authenticate_grandslam_calls().len(), 1);
+        assert_eq!(repo.validate_trusted_device_code_calls().len(), 1);
+        assert_eq!(repo.list_trusted_phone_numbers_calls().len(), 1);
+        assert_eq!(repo.validate_sms_code_calls().len(), 1);
+        let inner = repo.lock_inner();
+        assert_eq!(inner.request_trusted_device_notification_calls.len(), 1);
+        assert_eq!(inner.request_sms_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn configured_catalog_calls_are_recorded() {
+        let (repo, account, _app, _item, _version, _phone) = configured_repo();
         let _ = repo.search("term", "es", 5).await;
         let _ = repo.lookup("com.example.app", "es").await;
         let _ = repo.purchase(&account, 42, "guid").await;
@@ -400,13 +429,6 @@ mod tests {
         let _ = repo.download_bytes("https://example.invalid/app.ipa").await;
         let _ = repo.list_versions(&account, 42, "guid").await;
         let _ = repo.list_purchases(&account, 10).await;
-
-        assert_eq!(repo.authenticate_calls().len(), 1);
-        assert_eq!(repo.authenticate_with_2fa_calls().len(), 1);
-        assert_eq!(repo.authenticate_grandslam_calls().len(), 1);
-        assert_eq!(repo.validate_trusted_device_code_calls().len(), 1);
-        assert_eq!(repo.list_trusted_phone_numbers_calls().len(), 1);
-        assert_eq!(repo.validate_sms_code_calls().len(), 1);
         assert_eq!(repo.search_calls().len(), 1);
         assert_eq!(repo.lookup_calls().len(), 1);
         assert_eq!(repo.purchase_calls().len(), 1);
@@ -414,8 +436,5 @@ mod tests {
         assert_eq!(repo.download_bytes_calls().len(), 1);
         assert_eq!(repo.list_versions_calls().len(), 1);
         assert_eq!(repo.list_purchases_calls().len(), 1);
-        let inner = repo.lock_inner();
-        assert_eq!(inner.request_trusted_device_notification_calls.len(), 1);
-        assert_eq!(inner.request_sms_calls.len(), 1);
     }
 }

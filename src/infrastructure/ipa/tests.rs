@@ -7,7 +7,28 @@ fn test_ipa_bytes() -> Vec<u8> {
 fn test_ipa_bytes_with_manifest(manifest: Option<plist::Dictionary>) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default();
+    write_info_plist(&mut writer, options);
 
+    writer
+        .start_file("Payload/Test.app/TestExec", options.unix_permissions(0o755))
+        .expect("start executable");
+    writer.write_all(b"binary").expect("write executable");
+
+    writer
+        .add_symlink("Payload/Test.app/Frameworks/Current", "Versions/A", options)
+        .expect("add symlink");
+
+    if let Some(manifest) = manifest {
+        write_manifest(&mut writer, options, manifest);
+    }
+
+    writer.finish().expect("finish zip").into_inner()
+}
+
+fn write_info_plist(
+    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    options: zip::write::SimpleFileOptions,
+) {
     writer
         .start_file("Payload/Test.app/Info.plist", options)
         .expect("start Info.plist");
@@ -21,30 +42,23 @@ fn test_ipa_bytes_with_manifest(manifest: Option<plist::Dictionary>) -> Vec<u8> 
         .to_writer_xml(&mut info_bytes)
         .expect("write info");
     writer.write_all(&info_bytes).expect("write Info.plist");
+}
 
+fn write_manifest(
+    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+    options: zip::write::SimpleFileOptions,
+    manifest: plist::Dictionary,
+) {
     writer
-        .start_file("Payload/Test.app/TestExec", options.unix_permissions(0o755))
-        .expect("start executable");
-    writer.write_all(b"binary").expect("write executable");
-
+        .start_file("Payload/Test.app/SC_Info/Manifest.plist", options)
+        .expect("start manifest");
+    let mut manifest_bytes = Vec::new();
+    plist::Value::Dictionary(manifest)
+        .to_writer_xml(&mut manifest_bytes)
+        .expect("write manifest");
     writer
-        .add_symlink("Payload/Test.app/Frameworks/Current", "Versions/A", options)
-        .expect("add symlink");
-
-    if let Some(manifest) = manifest {
-        writer
-            .start_file("Payload/Test.app/SC_Info/Manifest.plist", options)
-            .expect("start manifest");
-        let mut manifest_bytes = Vec::new();
-        plist::Value::Dictionary(manifest)
-            .to_writer_xml(&mut manifest_bytes)
-            .expect("write manifest");
-        writer
-            .write_all(&manifest_bytes)
-            .expect("write manifest bytes");
-    }
-
-    writer.finish().expect("finish zip").into_inner()
+        .write_all(&manifest_bytes)
+        .expect("write manifest bytes");
 }
 
 fn zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
