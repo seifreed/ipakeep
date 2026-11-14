@@ -225,4 +225,24 @@ mod tests {
                 .contains("did not contain Payload/*.app")
         );
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn install_rejects_missing_and_invalid_ipa_before_device_commands() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ipa = dir.path().join("input.ipa");
+        let request = InstallRequest {
+            ipa: &ipa,
+            device: "device",
+            identity: "identity",
+            provisioning_profiles: &[],
+            entitlements: None,
+            launch: false,
+            legacy_device: false,
+        };
+
+        assert!(install_ipa(&request).unwrap_err().contains("No such file"));
+        fs::write(&ipa, b"not an IPA").unwrap();
+        assert!(install_ipa(&request).is_err());
+    }
 }
