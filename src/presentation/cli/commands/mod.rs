@@ -25,9 +25,18 @@ use std::time::Instant;
 
 /// Get the device GUID (MAC address) for Apple API requests.
 pub fn get_guid() -> String {
-    mac_address::get_mac_address().ok().flatten().map_or_else(
+    guid_from_mac_address(
+        mac_address::get_mac_address()
+            .ok()
+            .flatten()
+            .map(|address| address.to_string()),
+    )
+}
+
+fn guid_from_mac_address(address: Option<String>) -> String {
+    address.map_or_else(
         || "000000000000".to_string(),
-        |addr| addr.to_string().replace(':', "").to_uppercase(),
+        |address| address.replace(':', "").to_uppercase(),
     )
 }
 
@@ -111,11 +120,20 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_app_id, save_artifact};
+    use super::{guid_from_mac_address, resolve_app_id, save_artifact};
     use crate::domain::entity::test_support::app;
     use crate::domain::error::AppStoreError;
     use crate::domain::repository::FakeAppStoreRepository;
     use crate::infrastructure::observability::log_capture::LogCapture;
+
+    #[test]
+    fn guid_uses_mac_address_or_zero_fallback() {
+        assert_eq!(guid_from_mac_address(None), "000000000000");
+        assert_eq!(
+            guid_from_mac_address(Some("aa:bb:cc:dd:ee:ff".into())),
+            "AABBCCDDEEFF"
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn resolve_app_id_logs_resolution_without_app_ref_value() {
