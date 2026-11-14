@@ -437,4 +437,68 @@ mod tests {
         assert_eq!(repo.list_versions_calls().len(), 1);
         assert_eq!(repo.list_purchases_calls().len(), 1);
     }
+
+    #[tokio::test]
+    async fn unconfigured_repository_methods_return_their_defaults() {
+        let repo = FakeAppStoreRepository::new();
+        let account = account();
+
+        assert!(matches!(
+            repo.authenticate("email", "pass", "guid").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.authenticate_with_2fa("email", "pass", "code", "guid")
+                .await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.authenticate_grandslam("email", "pass", "guid").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        repo.request_trusted_device_notification("123", "token")
+            .await
+            .unwrap();
+        repo.validate_trusted_device_code("123", "token", "123456")
+            .await
+            .unwrap();
+        assert!(
+            repo.list_trusted_phone_numbers("123", "token")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        repo.request_sms("123", "token", 7).await.unwrap();
+        repo.validate_sms_code("123", "token", 7, "123456")
+            .await
+            .unwrap();
+        assert!(matches!(
+            repo.search("term", "us", 5).await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.lookup("com.example.app", "us").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.purchase(&account, 42, "guid").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.list_purchases(&account, 10).await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.download(&account, 42, "guid", None).await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.download_bytes("https://example.invalid/app.ipa").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            repo.list_versions(&account, 42, "guid").await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+    }
 }
