@@ -640,9 +640,10 @@ mod tests {
             "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; *) printf '%s' '{\"ok\":true}' ;; esac",
         );
 
-        let account = store_login_with_helper(Some(helper.clone()), "a@b.c", "secret", None)
-            .await
-            .expect("store login");
+        let account =
+            store_login_with_helper(Some(helper.clone()), "a@b.c", "secret", Some("123456"))
+                .await
+                .expect("store login");
         let response =
             store_request_with_helper(Some(helper), "purchase", &serde_json::json!({"id": 42}))
                 .await
@@ -669,6 +670,10 @@ mod tests {
         ));
 
         let invalid = write_helper(directory.path(), "cat >/dev/null\nprintf not-json");
+        assert!(matches!(
+            store_login_with_helper(Some(invalid.clone()), "a@b.c", "secret", None).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("invalid JSON")
+        ));
         assert!(matches!(
             store_request_with_helper(Some(invalid), "purchase", &Value::Null).await,
             Err(AppStoreError::NetworkError(message)) if message.contains("invalid JSON")
