@@ -503,6 +503,22 @@ fn arm_supf_record_offset(
     wanted_cpu: u32,
     wanted_subtype: u32,
 ) -> Result<usize, String> {
+    let header_size = supf_header_size(supf)?;
+    let count = be_u32(supf, 8)?;
+    if count == 0 || count > 16 {
+        return Err("invalid SUPF architecture count".to_string());
+    }
+    find_supf_record_offset(
+        supf,
+        required_pages,
+        wanted_cpu,
+        wanted_subtype,
+        header_size,
+        count,
+    )
+}
+
+fn supf_header_size(supf: &[u8]) -> Result<usize, String> {
     if supf.len() < 12 || (supf[0] != 3 && supf[0] != 5) {
         return Err("unsupported SUPF format".to_string());
     }
@@ -515,13 +531,17 @@ fn arm_supf_record_offset(
         return Err("unsupported SUPF format".to_string());
     }
 
-    let header_size = if supf[0] == 3 { 32usize } else { 12usize };
+    Ok(if supf[0] == 3 { 32 } else { 12 })
+}
 
-    let count = be_u32(supf, 8)?;
-    if count == 0 || count > 16 {
-        return Err("invalid SUPF architecture count".to_string());
-    }
-
+fn find_supf_record_offset(
+    supf: &[u8],
+    required_pages: usize,
+    wanted_cpu: u32,
+    wanted_subtype: u32,
+    header_size: usize,
+    count: u32,
+) -> Result<usize, String> {
     let mut pos = 12usize;
     for _ in 0..count {
         if pos + 4 + header_size > supf.len() {
