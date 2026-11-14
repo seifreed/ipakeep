@@ -106,8 +106,53 @@ async fn authenticate_with_attempt(
     guid: &str,
     has_auth_code: bool,
 ) -> Result<Account, AppStoreError> {
+    let request = build_auth_request(auth_url, email, password, guid, has_auth_code)?;
+    for attempt in 0..MAX_RETRIES {
+        match send_auth_attempt(client, &request).await? {
+            AuthAttemptOutcome::Transient(reason, status) => {
+                if schedule_transient_retry(reason, status, attempt).await {
+                    continue;
+                }
+                return Err(reason.exhausted_error(status));
+            }
+            AuthAttemptOutcome::SpuriousFailure => {
+                if schedule_spurious_retry(attempt).await {
+                    continue;
+                }
+                break;
+            }
+            AuthAttemptOutcome::Response(response) => {
+                return parse_auth_response(&response.body, &response.headers);
+            }
+        }
+    }
+
+    Err(AppStoreError::AuthenticationFailed(
+        "authentication failed after retries".into(),
+    ))
+}
+
+struct AuthRequest {
+    url: String,
+    plist_xml: Vec<u8>,
+    headers: HashMap<String, String>,
+}
+
+enum AuthAttemptOutcome {
+    Transient(TransientReason, reqwest::StatusCode),
+    SpuriousFailure,
+    Response(crate::infrastructure::http::client::HttpResponse<serde_json::Value>),
+}
+
+fn build_auth_request(
+    auth_url: &str,
+    email: &str,
+    password: &str,
+    guid: &str,
+    has_auth_code: bool,
+) -> Result<AuthRequest, AppStoreError> {
     let is_mzfinance_auth = auth_url.contains("MZFinance.woa/wa/authenticate");
-    let auth_url = auth_url_with_guid(auth_url, guid, has_auth_code);
+    let url = auth_url_with_guid(auth_url, guid, has_auth_code);
     let login_attempt = if has_auth_code { "2" } else { "4" };
     let mut plist_pairs = vec![
         ("appleId", email),
@@ -131,54 +176,69 @@ async fn authenticate_with_attempt(
         );
     }
 
-    for attempt in 0..MAX_RETRIES {
-        let request_headers = request_headers(&auth_url, &plist_xml, &headers).await?;
+    Ok(AuthRequest {
+        url,
+        plist_xml,
+        headers,
+    })
+}
 
-        let response = client
-            .post_auth_plist_bytes(&auth_url, &plist_xml, Some(&request_headers))
-            .await
-            .map_err(|e| AppStoreError::NetworkError(e.to_string()))?;
+async fn send_auth_attempt(
+    client: &AppleHttpClient,
+    request: &AuthRequest,
+) -> Result<AuthAttemptOutcome, AppStoreError> {
+    let headers = request_headers(&request.url, &request.plist_xml, &request.headers).await?;
+    let response = client
+        .post_auth_plist_bytes(&request.url, &request.plist_xml, Some(&headers))
+        .await
+        .map_err(|error| AppStoreError::NetworkError(error.to_string()))?;
 
-        if let Some(reason) = transient_retry_reason(response.status, response.body.is_null()) {
-            if attempt < MAX_RETRIES - 1 {
-                tracing::warn!(
-                    service = "ipakeep",
-                    component = "authentication",
-                    operation = "apple_login",
-                    event_name = "auth.retry.scheduled",
-                    attempt = attempt + 1,
-                    max_attempts = MAX_RETRIES,
-                    reason = reason.label(),
-                    status = %response.status,
-                    retry_after_ms = RETRY_DELAY_MS,
-                    "retrying Apple authentication"
-                );
-                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                continue;
-            }
-            return Err(reason.exhausted_error(response.status));
-        }
-
-        let failure_type = response
-            .body
-            .get("failureType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        if failure_type == SPURIOUS_FAILURE_TYPE {
-            if attempt < MAX_RETRIES - 1 {
-                tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                continue;
-            }
-            break;
-        }
-
-        return parse_auth_response(&response.body, &response.headers);
+    if let Some(reason) = transient_retry_reason(response.status, response.body.is_null()) {
+        return Ok(AuthAttemptOutcome::Transient(reason, response.status));
+    }
+    if response
+        .body
+        .get("failureType")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        == SPURIOUS_FAILURE_TYPE
+    {
+        return Ok(AuthAttemptOutcome::SpuriousFailure);
     }
 
-    Err(AppStoreError::AuthenticationFailed(
-        "authentication failed after retries".into(),
-    ))
+    Ok(AuthAttemptOutcome::Response(response))
+}
+
+async fn schedule_transient_retry(
+    reason: TransientReason,
+    status: reqwest::StatusCode,
+    attempt: u32,
+) -> bool {
+    if attempt >= MAX_RETRIES - 1 {
+        return false;
+    }
+    tracing::warn!(
+        service = "ipakeep",
+        component = "authentication",
+        operation = "apple_login",
+        event_name = "auth.retry.scheduled",
+        attempt = attempt + 1,
+        max_attempts = MAX_RETRIES,
+        reason = reason.label(),
+        status = %status,
+        retry_after_ms = RETRY_DELAY_MS,
+        "retrying Apple authentication"
+    );
+    tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+    true
+}
+
+async fn schedule_spurious_retry(attempt: u32) -> bool {
+    if attempt >= MAX_RETRIES - 1 {
+        return false;
+    }
+    tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+    true
 }
 
 async fn request_headers(
