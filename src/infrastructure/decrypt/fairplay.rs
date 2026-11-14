@@ -977,6 +977,27 @@ mod tests {
     }
 
     #[test]
+    fn sinf_parser_rejects_truncated_atoms_and_duplicate_containers_or_fields() {
+        assert!(atom_children(&[0; 7], 0, 7).is_err());
+        assert!(atom_children(&[0; 8], 0, 8).is_err());
+
+        let duplicate_schi = atom(
+            *b"sinf",
+            &[atom(*b"schi", b""), atom(*b"schi", b"")].concat(),
+        );
+        assert!(sinf_field(&duplicate_schi, *b"name").is_err());
+
+        let duplicate_name = atom(
+            *b"sinf",
+            &atom(
+                *b"schi",
+                &[atom(*b"name", b"a"), atom(*b"name", b"b")].concat(),
+            ),
+        );
+        assert!(sinf_field(&duplicate_name, *b"name").is_err());
+    }
+
+    #[test]
     fn is_arcade_sinf_detects_key_tag_four() {
         assert!(is_arcade_sinf(&synthetic_sinf(&[4, 0, 0, 0])));
         assert!(!is_arcade_sinf(&synthetic_sinf(&[1, 0, 0, 0])));
@@ -1044,6 +1065,31 @@ mod tests {
         // pos = 4 + 20 = 24, first key at 24 + 4 = 28.
         assert_eq!(pclass_page_key_offset(&supp, 0).unwrap(), 28);
         assert_eq!(pclass_page_key_offset(&supp, 1).unwrap(), 28 + 32);
+    }
+
+    #[test]
+    fn pclass_parser_rejects_unknown_format_and_invalid_counts() {
+        assert!(pclass_page_key_offset(b"unknown!", 0).is_err());
+
+        let mut empty = vec![4u8, 0, 0, 0];
+        empty.extend_from_slice(&0u32.to_be_bytes());
+        assert!(pclass_page_key_offset(&empty, 0).is_err());
+
+        let mut truncated = vec![4u8, 0, 0, 0];
+        truncated.extend_from_slice(&2u32.to_be_bytes());
+        assert!(pclass_page_key_offset(&truncated, 0).is_err());
+    }
+
+    #[test]
+    fn supf_parser_rejects_unknown_formats_and_architecture_tables() {
+        assert!(supf_header_size(b"bad format!").is_err());
+        assert!(arm_supf_record_offset(&[0; 12], 1, CPU_TYPE_ARM64, 0).is_err());
+
+        let mut empty = vec![5u8];
+        empty.extend_from_slice(b"502");
+        empty.extend_from_slice(&[0; 4]);
+        empty.extend_from_slice(&0u32.to_be_bytes());
+        assert!(arm_supf_record_offset(&empty, 1, CPU_TYPE_ARM64, 0).is_err());
     }
 
     #[test]
