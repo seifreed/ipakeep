@@ -73,6 +73,11 @@ fn booted_simulator_runtime_root() -> Result<PathBuf, String> {
 #[cfg(target_os = "macos")]
 fn runtime_root_from_pid_path(pid: &str) -> Result<PathBuf, String> {
     let output = command_output(command_with_args("ps", &["-p", pid, "-o", "command="]))?;
+    runtime_root_from_process_path(&output)
+}
+
+#[cfg(target_os = "macos")]
+fn runtime_root_from_process_path(output: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(output.trim());
     path.parent()
         .and_then(Path::parent)
@@ -84,6 +89,11 @@ fn runtime_root_from_pid_path(pid: &str) -> Result<PathBuf, String> {
 #[cfg(target_os = "macos")]
 fn runtime_root_from_lsof(pid: &str) -> Result<PathBuf, String> {
     let output = command_output(command_with_args("lsof", &["-p", pid]))?;
+    runtime_root_from_lsof_output(&output)
+}
+
+#[cfg(target_os = "macos")]
+fn runtime_root_from_lsof_output(output: &str) -> Result<PathBuf, String> {
     output
         .lines()
         .filter_map(|line| line.find('/').map(|index| &line[index..]))
@@ -142,6 +152,29 @@ mod tests {
     fn runtime_detection_rejects_invalid_process_paths() {
         assert!(runtime_root_from_pid_path("not-a-pid").is_err());
         assert!(runtime_root_from_lsof("99999999").is_err());
+    }
+
+    #[test]
+    fn process_path_resolves_runtime_root() {
+        assert_eq!(
+            runtime_root_from_process_path(
+                "/Library/Developer/CoreSimulator/Volumes/iOS_23.simruntime/Contents/Resources/RuntimeRoot/bin/launchd_sim\n"
+            )
+            .unwrap(),
+            PathBuf::from(
+                "/Library/Developer/CoreSimulator/Volumes/iOS_23.simruntime/Contents/Resources/RuntimeRoot"
+            )
+        );
+    }
+
+    #[test]
+    fn lsof_output_resolves_runtime_root_and_rejects_unrelated_paths() {
+        let output = "COMMAND PID NAME\nlaunchd_sim 42 /Library/Developer/iOS_23.simruntime/Contents/Resources/RuntimeRoot/usr/lib/dyld\n";
+        assert_eq!(
+            runtime_root_from_lsof_output(output).unwrap(),
+            PathBuf::from("/Library/Developer/iOS_23.simruntime/Contents/Resources/RuntimeRoot")
+        );
+        assert!(runtime_root_from_lsof_output("COMMAND PID NAME\nfoo 42 /tmp/foo\n").is_err());
     }
 
     #[test]
