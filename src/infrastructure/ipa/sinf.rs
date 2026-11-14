@@ -305,13 +305,13 @@ mod tests {
 
     #[test]
     fn manifest_maps_multiple_sinfs_and_deduplicates_replication_paths() {
-        let manifest = manifest(
+        let valid_manifest = manifest(
             &["SC_Info/A.sinf", "SC_Info/B.sinf"],
             &["SC_Info/A.sinf", "SC_Info/B-copy.sinf"],
         );
         let bytes = ipa(&[
             ("Payload/Game.app/Info.plist", &info()),
-            ("Payload/Game.app/SC_Info/Manifest.plist", &manifest),
+            ("Payload/Game.app/SC_Info/Manifest.plist", &valid_manifest),
         ]);
         assert_eq!(
             targets(&bytes, &sinfs(2)).unwrap(),
@@ -320,6 +320,23 @@ mod tests {
                 ("Payload/Game.app/SC_Info/B.sinf".into(), vec![1]),
                 ("Payload/Game.app/SC_Info/B-copy.sinf".into(), vec![1]),
             ]
+        );
+
+        let mismatched_manifest = manifest(
+            &["SC_Info/A.sinf", "SC_Info/B.sinf"],
+            &["SC_Info/A-copy.sinf"],
+        );
+        let mismatched = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            (
+                "Payload/Game.app/SC_Info/Manifest.plist",
+                &mismatched_manifest,
+            ),
+        ]);
+        assert!(
+            targets(&mismatched, &sinfs(2))
+                .unwrap_err()
+                .contains("cannot map 1 sinf replication paths to 2 sinfs")
         );
     }
 
