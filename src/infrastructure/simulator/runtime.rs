@@ -34,20 +34,7 @@ pub fn unlock_runtime_path(path: Option<&Path>) -> Result<(), String> {
         }
 
         let backup = tempfile_like_backup_path();
-        fs::create_dir(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
-        let path_str = path.to_string_lossy().to_string();
-        let backup_str = backup.to_string_lossy().to_string();
-        run_checked(command_with_args(
-            "cp",
-            &["-R", &format!("{path_str}/."), &backup_str],
-        ))?;
-        run_checked(command_with_args("mount_tmpfs", &[&path_str]))?;
-        run_checked(command_with_args(
-            "cp",
-            &["-R", &format!("{backup_str}/."), &path_str],
-        ))?;
-        fs::remove_dir_all(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
-        Ok(())
+        overlay_runtime(path, &backup)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -55,6 +42,23 @@ pub fn unlock_runtime_path(path: Option<&Path>) -> Result<(), String> {
         let _ = path;
         Err("unlock-runtime is only available on macOS".into())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn overlay_runtime(path: &Path, backup: &Path) -> Result<(), String> {
+    fs::create_dir(backup).map_err(|error| format!("{}: {error}", backup.display()))?;
+    let path_str = path.to_string_lossy().to_string();
+    let backup_str = backup.to_string_lossy().to_string();
+    run_checked(command_with_args(
+        "cp",
+        &["-R", &format!("{path_str}/."), &backup_str],
+    ))?;
+    run_checked(command_with_args("mount_tmpfs", &[&path_str]))?;
+    run_checked(command_with_args(
+        "cp",
+        &["-R", &format!("{backup_str}/."), &path_str],
+    ))?;
+    fs::remove_dir_all(backup).map_err(|error| format!("{}: {error}", backup.display()))
 }
 
 #[cfg(target_os = "macos")]
