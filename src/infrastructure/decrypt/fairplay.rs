@@ -190,7 +190,7 @@ fn select_slice(raw: Vec<ArmSlice>) -> Result<ArmSlice, String> {
         }
     }
 
-    let mut slices = if !plain.is_empty() {
+    let slices = if !plain.is_empty() {
         plain
     } else if !arm64e.is_empty() {
         arm64e
@@ -199,7 +199,10 @@ fn select_slice(raw: Vec<ArmSlice>) -> Result<ArmSlice, String> {
     } else {
         arm32
     };
+    select_single_slice(slices)
+}
 
+fn select_single_slice(mut slices: Vec<ArmSlice>) -> Result<ArmSlice, String> {
     // Fat 32-bit apps pair armv7 with armv7s or armv6; armv7 runs on every
     // device that runs either.
     if slices.len() > 1 && slices[0].cpu == CPU_TYPE_ARM {
