@@ -176,7 +176,7 @@ fn write_private_file(path: &Path, content: &str) -> Result<(), CredentialError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::keychain::test_support::test_account;
+    use crate::domain::entity::test_support::test_account;
     use crate::infrastructure::observability::log_capture::LogCapture;
     use tempfile::TempDir;
 

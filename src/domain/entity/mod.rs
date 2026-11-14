@@ -1,5 +1,8 @@
 //! Domain entities — pure business objects with no external dependencies.
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub mod account;
 pub mod app;
 pub mod download_item;

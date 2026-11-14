@@ -184,7 +184,7 @@ impl CredentialRepository for MacOSKeychain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::keychain::test_support::test_account;
+    use crate::domain::entity::test_support::test_account;
 
     /// Build a unique keychain instance for a given test name and attempt
     /// to delete any pre-existing item so the test starts from a clean slate.

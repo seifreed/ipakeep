@@ -38,18 +38,8 @@ impl<'a, R: CatalogRepository + ?Sized> ResolveApp<'a, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::entity::App;
+    use crate::domain::entity::test_support::app;
     use crate::domain::repository::AppStoreRepo;
-
-    fn app(id: i64) -> App {
-        App {
-            id,
-            bundle_id: "com.example.app".into(),
-            name: "Example".into(),
-            version: "1.0".into(),
-            price: 0.0,
-        }
-    }
 
     #[tokio::test]
     async fn numeric_id_skips_repository_calls() {

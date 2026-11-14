@@ -64,9 +64,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entity::test_support::test_account;
     use crate::domain::error::AppStoreError;
     use crate::domain::repository::{AppStoreRepo, CredentialRepo};
-    use crate::domain::usecase::test_support::test_account;
 
     #[tokio::test]
     async fn download_without_auto_purchase() {

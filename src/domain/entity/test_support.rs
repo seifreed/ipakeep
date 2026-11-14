@@ -1,6 +1,6 @@
-use crate::domain::entity::Account;
+use super::{Account, App};
 
-pub(super) fn test_account() -> Account {
+pub(crate) fn test_account() -> Account {
     Account {
         email: "test@example.com".into(),
         name: "Test User".into(),
@@ -14,5 +14,15 @@ pub(super) fn test_account() -> Account {
         grandslam_session_key: None,
         grandslam_continuation: None,
         cookies: Vec::new(),
+    }
+}
+
+pub(crate) fn app(id: i64) -> App {
+    App {
+        id,
+        bundle_id: "com.example.app".into(),
+        name: "Example".into(),
+        version: "1.0".into(),
+        price: 0.0,
     }
 }

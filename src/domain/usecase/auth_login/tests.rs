@@ -1,7 +1,7 @@
 use super::*;
+use crate::domain::entity::test_support::test_account;
 use crate::domain::error::CredentialError;
 use crate::domain::repository::{AppStoreRepo, CredentialRepo};
-use crate::domain::usecase::test_support::test_account;
 
 #[tokio::test]
 async fn login_success_saves_credentials() {

@@ -115,19 +115,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::resolve_app_id;
-    use crate::domain::entity::App;
+    use crate::domain::entity::test_support::app;
     use crate::domain::repository::FakeAppStoreRepository;
     use crate::infrastructure::observability::log_capture::LogCapture;
-
-    fn app(id: i64) -> App {
-        App {
-            id,
-            bundle_id: "com.example.app".into(),
-            name: "Example".into(),
-            version: "1.0".into(),
-            price: 0.0,
-        }
-    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn resolve_app_id_logs_resolution_without_app_ref_value() {

@@ -36,9 +36,9 @@ where
 mod tests {
     use super::*;
     use crate::domain::entity::Account;
+    use crate::domain::entity::test_support::test_account;
     use crate::domain::error::CredentialError;
     use crate::domain::repository::CredentialRepo;
-    use crate::domain::usecase::test_support::test_account;
 
     #[tokio::test]
     async fn info_returns_stored_account() {
