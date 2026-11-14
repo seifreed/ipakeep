@@ -652,6 +652,20 @@ mod tests {
     }
 
     #[test]
+    fn run_remote_passes_password_only_through_environment() {
+        assert!(
+            run_remote(
+                (
+                    "/bin/sh".into(),
+                    vec!["-c".into(), "test \"$SSHPASS\" = secret".into()],
+                ),
+                Some("secret"),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn parses_known_dumpers_and_rejects_unknown() {
         assert_eq!(Dumper::parse("builtin").unwrap(), Dumper::Builtin);
         assert_eq!(
