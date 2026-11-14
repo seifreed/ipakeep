@@ -107,16 +107,7 @@ impl AppleHttpClient {
 
         ensure_success_status("GET", status, text.as_bytes())?;
 
-        let value = decode_json_or_plist(&text).map_err(|e| {
-            crate::domain::error::AppStoreError::NetworkError(format!(
-                "response decode failed for HTTP {status}: {e}"
-            ))
-        })?;
-        let body = serde_json::from_value(value).map_err(|e| {
-            crate::domain::error::AppStoreError::NetworkError(format!(
-                "response conversion failed for HTTP {status}: {e}"
-            ))
-        })?;
+        let body = decode_get_body(status, &text)?;
 
         Ok(HttpResponse {
             status,
@@ -364,6 +355,22 @@ fn should_preserve_server_error(preserve: bool, status: reqwest::StatusCode) -> 
         && (status.is_server_error()
             || status.is_redirection()
             || status == reqwest::StatusCode::NOT_FOUND)
+}
+
+fn decode_get_body<T: DeserializeOwned>(
+    status: reqwest::StatusCode,
+    text: &str,
+) -> Result<T, crate::domain::error::AppStoreError> {
+    let value = decode_json_or_plist(text).map_err(|e| {
+        crate::domain::error::AppStoreError::NetworkError(format!(
+            "response decode failed for HTTP {status}: {e}"
+        ))
+    })?;
+    serde_json::from_value(value).map_err(|e| {
+        crate::domain::error::AppStoreError::NetworkError(format!(
+            "response conversion failed for HTTP {status}: {e}"
+        ))
+    })
 }
 
 fn decode_plist_body(
