@@ -36,3 +36,45 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::{App, test_support::app};
+    use crate::domain::error::AppStoreError;
+    use crate::domain::repository::FakeAppStoreRepository;
+
+    #[tokio::test]
+    async fn search_prints_results_in_json() {
+        let repository = FakeAppStoreRepository::new().with_search_result(Ok(vec![app(7)]));
+
+        assert!(
+            handle_search("example", 5, "us", repository, &OutputFormat::Json)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_handles_empty_results() {
+        let repository = FakeAppStoreRepository::new().with_search_result(Ok(Vec::<App>::new()));
+
+        assert!(
+            handle_search("missing", 5, "us", repository, &OutputFormat::Text)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn search_maps_repository_errors() {
+        let repository = FakeAppStoreRepository::new()
+            .with_search_result(Err(AppStoreError::NetworkError("offline".into())));
+
+        let error = handle_search("example", 5, "us", repository, &OutputFormat::Text)
+            .await
+            .expect_err("search should fail");
+
+        assert!(error.starts_with("search failed:"));
+    }
+}

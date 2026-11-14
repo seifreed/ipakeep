@@ -41,3 +41,53 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::{AppVersion, test_support::test_account};
+    use crate::domain::error::AppStoreError;
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+
+    #[tokio::test]
+    async fn list_versions_prints_results() {
+        let repository =
+            FakeAppStoreRepository::new().with_list_versions_result(Ok(vec![AppVersion {
+                external_version_id: "42".into(),
+                version_string: "1.0".into(),
+            }]));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_list_versions("42", "us", repository, credentials, &OutputFormat::Json)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_versions_handles_empty_results() {
+        let repository =
+            FakeAppStoreRepository::new().with_list_versions_result(Ok(Vec::<AppVersion>::new()));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_list_versions("42", "us", repository, credentials, &OutputFormat::Text)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_versions_maps_repository_errors() {
+        let repository = FakeAppStoreRepository::new()
+            .with_list_versions_result(Err(AppStoreError::NetworkError("offline".into())));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        let error = handle_list_versions("42", "us", repository, credentials, &OutputFormat::Text)
+            .await
+            .expect_err("version listing should fail");
+
+        assert!(error.starts_with("list-versions failed:"));
+    }
+}

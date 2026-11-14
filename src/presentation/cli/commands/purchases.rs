@@ -35,3 +35,61 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::{OwnedApp, test_support::test_account};
+    use crate::domain::error::AppStoreError;
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+
+    fn owned_app() -> OwnedApp {
+        OwnedApp {
+            id: 7,
+            bundle_id: "com.example.app".into(),
+            name: "Example".into(),
+            version: "1.0".into(),
+            platforms: vec!["iphone".into()],
+            purchase_date: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn purchases_prints_results() {
+        let repository =
+            FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![owned_app()]));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_purchases(10, repository, credentials, &OutputFormat::Json)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn purchases_handles_empty_results() {
+        let repository =
+            FakeAppStoreRepository::new().with_list_purchases_result(Ok(Vec::<OwnedApp>::new()));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_purchases(10, repository, credentials, &OutputFormat::Text)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn purchases_maps_repository_errors() {
+        let repository = FakeAppStoreRepository::new()
+            .with_list_purchases_result(Err(AppStoreError::NetworkError("offline".into())));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        let error = handle_purchases(10, repository, credentials, &OutputFormat::Text)
+            .await
+            .expect_err("purchases should fail");
+
+        assert!(error.starts_with("purchases failed:"));
+    }
+}

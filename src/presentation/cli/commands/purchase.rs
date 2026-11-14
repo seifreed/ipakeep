@@ -69,6 +69,131 @@ fn print_purchase_success(format: &OutputFormat, app_name: &str) -> Result<(), S
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::test_support::{app, test_account};
+    use crate::domain::error::AppStoreError;
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+
+    #[tokio::test]
+    async fn purchase_prints_json_success() {
+        let repository = FakeAppStoreRepository::new()
+            .with_lookup_result(Ok(Some(app(7))))
+            .with_purchase_result(Ok(()));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_purchase(
+                "com.example.app",
+                "us",
+                repository,
+                credentials,
+                &OutputFormat::Json
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn purchase_prints_text_success() {
+        let repository = FakeAppStoreRepository::new()
+            .with_lookup_result(Ok(Some(app(7))))
+            .with_purchase_result(Ok(()));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        assert!(
+            handle_purchase(
+                "com.example.app",
+                "us",
+                repository,
+                credentials,
+                &OutputFormat::Text
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn purchase_reports_unknown_app() {
+        let repository = FakeAppStoreRepository::new().with_lookup_result(Ok(None));
+        let credentials = InMemoryCredentialRepository::new();
+
+        let error = handle_purchase(
+            "com.example.app",
+            "us",
+            repository,
+            credentials,
+            &OutputFormat::Text,
+        )
+        .await
+        .expect_err("missing apps should fail");
+
+        assert!(error.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn purchase_rejects_paid_app() {
+        let mut paid_app = app(7);
+        paid_app.price = 1.99;
+        let repository = FakeAppStoreRepository::new().with_lookup_result(Ok(Some(paid_app)));
+        let credentials = InMemoryCredentialRepository::new();
+
+        let error = handle_purchase(
+            "com.example.app",
+            "us",
+            repository,
+            credentials,
+            &OutputFormat::Text,
+        )
+        .await
+        .expect_err("paid apps must be rejected");
+
+        assert!(error.contains("Only free apps are supported"));
+    }
+
+    #[tokio::test]
+    async fn purchase_maps_lookup_errors() {
+        let repository = FakeAppStoreRepository::new()
+            .with_lookup_result(Err(AppStoreError::NetworkError("offline".into())));
+        let credentials = InMemoryCredentialRepository::new();
+
+        let error = handle_purchase(
+            "com.example.app",
+            "us",
+            repository,
+            credentials,
+            &OutputFormat::Text,
+        )
+        .await
+        .expect_err("lookup should fail");
+
+        assert!(error.starts_with("lookup failed:"));
+    }
+
+    #[tokio::test]
+    async fn purchase_maps_purchase_errors() {
+        let repository = FakeAppStoreRepository::new()
+            .with_lookup_result(Ok(Some(app(7))))
+            .with_purchase_result(Err(AppStoreError::NetworkError("offline".into())));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        let error = handle_purchase(
+            "com.example.app",
+            "us",
+            repository,
+            credentials,
+            &OutputFormat::Text,
+        )
+        .await
+        .expect_err("purchase should fail");
+
+        assert!(error.starts_with("purchase failed:"));
+    }
+}
+
 /// Result of a purchase for JSON output.
 #[derive(Debug, Serialize)]
 struct PurchaseResult {
