@@ -560,6 +560,109 @@ fn patch_rejects_dump_with_mismatched_uuid() {
 }
 
 #[test]
+fn dump_names_escape_bundle_paths_and_keep_legacy_fallback() {
+    assert_eq!(
+        dump_filenames("Payload/Test.app/Frameworks/Foo%Bar/Foo", "arm64"),
+        ["Frameworks%2FFoo%25Bar%2FFoo.arm64.bin", "Foo.arm64.bin"]
+    );
+    assert_eq!(dump_filenames("TestExec", "arm64"), ["TestExec.arm64.bin"]);
+}
+
+#[test]
+fn chunked_dump_handles_absence_invalid_offsets_and_gaps() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(read_chunks(dir.path(), "slice.bin").unwrap(), None);
+
+    std::fs::write(dir.path().join("slice.bin.part.nope"), b"x").unwrap();
+    assert!(
+        read_chunks(dir.path(), "slice.bin")
+            .unwrap_err()
+            .contains("invalid chunk offset")
+    );
+    std::fs::remove_file(dir.path().join("slice.bin.part.nope")).unwrap();
+
+    std::fs::write(dir.path().join("slice.bin.part.2"), b"cd").unwrap();
+    assert!(
+        read_chunks(dir.path(), "slice.bin")
+            .unwrap_err()
+            .contains("does not follow 0 assembled bytes")
+    );
+    std::fs::write(dir.path().join("slice.bin.part.0"), b"ab").unwrap();
+    assert_eq!(
+        read_chunks(dir.path(), "slice.bin").unwrap(),
+        Some(b"abcd".to_vec())
+    );
+}
+
+#[test]
+fn uuid_sidecar_parsing_accepts_dashes_and_rejects_bad_hex() {
+    let dir = tempfile::TempDir::new().unwrap();
+    assert_eq!(read_uuid_sidecar(dir.path(), "slice.bin").unwrap(), None);
+    std::fs::write(
+        dir.path().join("slice.bin.uuid"),
+        "00112233-4455-6677-8899-aabbccddeeff\n",
+    )
+    .unwrap();
+    assert_eq!(
+        read_uuid_sidecar(dir.path(), "slice.bin").unwrap(),
+        Some([
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff,
+        ])
+    );
+    std::fs::write(dir.path().join("slice.bin.uuid"), "GG").unwrap();
+    assert!(
+        read_uuid_sidecar(dir.path(), "slice.bin")
+            .unwrap_err()
+            .contains("not a 16-byte hex UUID")
+    );
+}
+
+#[test]
+fn read_if_macho_skips_directories_short_and_non_macho_entries() {
+    let ipa = build_ipa_with(&[
+        ("Payload/Test.app/", b""),
+        ("Payload/Test.app/short", b"ab"),
+        ("Payload/Test.app/data", b"data"),
+        (
+            "Payload/Test.app/TestExec",
+            &thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11),
+        ),
+    ]);
+    let mut archive = open_archive(&ipa).unwrap();
+    assert_eq!(read_if_macho(&mut archive, 0).unwrap(), None);
+    assert_eq!(read_if_macho(&mut archive, 1).unwrap(), None);
+    assert_eq!(read_if_macho(&mut archive, 2).unwrap(), None);
+    assert!(read_if_macho(&mut archive, 3).unwrap().is_some());
+}
+
+#[test]
+fn bundle_executable_requires_a_nonempty_info_plist_value() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let mut dictionary = plist::Dictionary::new();
+    dictionary.insert(
+        "CFBundleExecutable".into(),
+        plist::Value::String("TestExec".into()),
+    );
+    let info = plist::Value::Dictionary(dictionary);
+    info.to_file_xml(dir.path().join("Info.plist")).unwrap();
+    assert_eq!(bundle_executable_on_disk(dir.path()).unwrap(), "TestExec");
+
+    let mut dictionary = plist::Dictionary::new();
+    dictionary.insert(
+        "CFBundleExecutable".into(),
+        plist::Value::String(String::new()),
+    );
+    let empty = plist::Value::Dictionary(dictionary);
+    empty.to_file_xml(dir.path().join("Info.plist")).unwrap();
+    assert!(
+        bundle_executable_on_disk(dir.path())
+            .unwrap_err()
+            .contains("missing CFBundleExecutable")
+    );
+}
+
+#[test]
 fn patch_accepts_matching_uuid_and_warns_without_one() {
     let ipa = build_ipa(&thin_macho_with_uuid(0, 0x11, 0xAA));
     let dir = tempfile::TempDir::new().unwrap();
