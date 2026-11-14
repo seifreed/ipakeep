@@ -97,6 +97,7 @@ mod tests {
     fn classifies_each_risk_tier() {
         let verdicts = classify(&dict(&[
             "get-task-allow",
+            "com.example.custom-entitlement",
             "com.apple.security.application-groups",
             "com.apple.developer.healthkit",
             "com.apple.private.security.no-sandbox",
@@ -109,6 +110,7 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(risk("get-task-allow"), EntitlementRisk::Ok);
+        assert_eq!(risk("com.example.custom-entitlement"), EntitlementRisk::Ok);
         assert_eq!(
             risk("com.apple.security.application-groups"),
             EntitlementRisk::NeedsProvisioning
