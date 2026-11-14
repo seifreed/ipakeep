@@ -179,13 +179,30 @@ fn record_body_read_success(status: u16, duration_ms: u64, body_bytes: Option<us
 }
 
 fn request_error_type(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
+    request_error_category(RequestErrorFlags {
+        timeout: error.is_timeout(),
+        connect: error.is_connect(),
+        request: error.is_request(),
+        body: error.is_body(),
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct RequestErrorFlags {
+    timeout: bool,
+    connect: bool,
+    request: bool,
+    body: bool,
+}
+
+fn request_error_category(flags: RequestErrorFlags) -> &'static str {
+    if flags.timeout {
         "timeout"
-    } else if error.is_connect() {
+    } else if flags.connect {
         "connect"
-    } else if error.is_request() {
+    } else if flags.request {
         "request"
-    } else if error.is_body() {
+    } else if flags.body {
         "body"
     } else {
         "other"
@@ -194,11 +211,50 @@ fn request_error_type(error: &reqwest::Error) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_response_bytes, read_response_text, send_with_observability};
+    use super::{
+        RequestErrorFlags, read_response_bytes, read_response_text, request_error_category,
+        send_with_observability,
+    };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use reqwest::Client;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn request_error_category_maps_each_reqwest_failure_class() {
+        assert_eq!(
+            request_error_category(RequestErrorFlags {
+                timeout: true,
+                ..RequestErrorFlags::default()
+            }),
+            "timeout"
+        );
+        assert_eq!(
+            request_error_category(RequestErrorFlags {
+                connect: true,
+                ..RequestErrorFlags::default()
+            }),
+            "connect"
+        );
+        assert_eq!(
+            request_error_category(RequestErrorFlags {
+                request: true,
+                ..RequestErrorFlags::default()
+            }),
+            "request"
+        );
+        assert_eq!(
+            request_error_category(RequestErrorFlags {
+                body: true,
+                ..RequestErrorFlags::default()
+            }),
+            "body"
+        );
+        assert_eq!(
+            request_error_category(RequestErrorFlags::default()),
+            "other"
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn logs_safe_http_metadata_without_query_or_response_body() {
