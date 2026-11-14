@@ -20,6 +20,36 @@ const USER_AGENT: &str = "akd/1.0 CFNetwork/1560.4.3 Darwin/24.2.0";
 /// disabling certificate verification.
 const APPLE_ROOT_CA: &[u8] = include_bytes!("apple_root_ca.pem");
 
+pub(crate) fn build_plist_request(
+    client: &Client,
+    url: &str,
+    plist_xml: &[u8],
+    headers: Option<&HashMap<String, String>>,
+) -> reqwest::RequestBuilder {
+    let content_type = headers
+        .and_then(|extra| {
+            extra
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str())
+        })
+        .unwrap_or("application/x-apple-plist");
+
+    let mut request = client
+        .post(url)
+        .header("Content-Type", content_type)
+        .header("Accept", "*/*")
+        .body(plist_xml.to_vec());
+    if let Some(extra_headers) = headers {
+        for (key, value) in extra_headers {
+            if !key.eq_ignore_ascii_case("content-type") {
+                request = request.header(key.as_str(), value.as_str());
+            }
+        }
+    }
+    request
+}
+
 /// An Apple HTTP client that spoofs the Configurator User-Agent.
 #[derive(Clone)]
 pub struct AppleHttpClient {
@@ -228,44 +258,13 @@ impl AppleHttpClient {
         headers: Option<&HashMap<String, String>>,
         preserve_server_errors: bool,
     ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
-        let response = self.send_plist_request(url, plist_xml, headers).await?;
+        let response = send_with_observability(
+            &self.client,
+            build_plist_request(&self.client, url, plist_xml, headers),
+        )
+        .await
+        .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
         Self::parse_plist_response(response, preserve_server_errors).await
-    }
-
-    async fn send_plist_request(
-        &self,
-        url: &str,
-        plist_xml: &[u8],
-        headers: Option<&HashMap<String, String>>,
-    ) -> Result<reqwest::Response, crate::domain::error::AppStoreError> {
-        let content_type = headers
-            .and_then(|extra| {
-                extra
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, value)| value.as_str())
-            })
-            .unwrap_or("application/x-apple-plist");
-
-        let mut request = self.client.post(url);
-        request = request
-            .header("Content-Type", content_type)
-            .header("Accept", "*/*")
-            .body(plist_xml.to_vec());
-
-        if let Some(extra_headers) = headers {
-            for (key, value) in extra_headers {
-                if key.eq_ignore_ascii_case("content-type") {
-                    continue;
-                }
-                request = request.header(key.as_str(), value.as_str());
-            }
-        }
-
-        let response = send_with_observability(&self.client, request)
-            .await
-            .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
-        Ok(response)
     }
 
     async fn parse_plist_response(

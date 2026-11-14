@@ -1,6 +1,7 @@
 //! HTTP helpers for the `GrandSlam` client.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::client::build_plist_request;
 use crate::infrastructure::http::plist_codec::{decode_plist, encode_plist};
 use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -17,21 +18,12 @@ pub(super) async fn post_plist(
     let plist_xml = encode_plist(body)
         .map_err(|e| AppStoreError::NetworkError(format!("plist encode failed: {e}")))?;
 
-    let mut request = client
-        .post(url)
-        .header("Content-Type", "application/x-apple-plist")
-        .header("Accept", "*/*")
-        .body(plist_xml);
-
-    if let Some(h) = extra_headers {
-        for (k, v) in h {
-            request = request.header(k.as_str(), v.as_str());
-        }
-    }
-
-    let response = send_with_observability(client, request)
-        .await
-        .map_err(|e| AppStoreError::NetworkError(format!("HTTP POST failed: {e}")))?;
+    let response = send_with_observability(
+        client,
+        build_plist_request(client, url, &plist_xml, extra_headers),
+    )
+    .await
+    .map_err(|e| AppStoreError::NetworkError(format!("HTTP POST failed: {e}")))?;
 
     let status = response.status();
     let bytes = read_response_bytes(response)
