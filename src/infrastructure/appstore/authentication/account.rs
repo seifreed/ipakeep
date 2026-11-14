@@ -75,3 +75,44 @@ fn response_cookies(headers: &reqwest::header::HeaderMap) -> Vec<String> {
         .map(std::string::ToString::to_string)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_account_from_response;
+    use crate::domain::error::AppStoreError;
+    use reqwest::header::{HeaderMap, HeaderValue, SET_COOKIE};
+    use serde_json::json;
+
+    #[test]
+    fn rejects_missing_required_account_fields() {
+        let headers = HeaderMap::new();
+        assert!(matches!(
+            build_account_from_response(&json!({"passwordToken": "token"}), &headers),
+            Err(AppStoreError::AuthenticationFailed(message)) if message == "missing dsPersonId"
+        ));
+        assert!(matches!(
+            build_account_from_response(
+                &json!({"passwordToken": "token", "dsPersonId": "123"}),
+                &headers
+            ),
+            Err(AppStoreError::AuthenticationFailed(message)) if message == "missing accountInfo"
+        ));
+    }
+
+    #[test]
+    fn ignores_header_values_that_are_not_valid_text() {
+        let mut headers = HeaderMap::new();
+        let invalid = HeaderValue::from_bytes(b"\xff").expect("header value");
+        headers.insert("pod", invalid.clone());
+        headers.append(SET_COOKIE, invalid);
+
+        let account = build_account_from_response(
+            &json!({"passwordToken": "token", "dsPersonId": "123", "accountInfo": {}}),
+            &headers,
+        )
+        .expect("account fields are valid");
+
+        assert!(account.pod.is_empty());
+        assert!(account.cookies.is_empty());
+    }
+}
