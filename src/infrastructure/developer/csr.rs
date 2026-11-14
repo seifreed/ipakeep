@@ -61,4 +61,9 @@ mod tests {
         assert!(key.contains("PRIVATE KEY"), "{key}");
         assert!(csr.contains("CERTIFICATE REQUEST"), "{csr}");
     }
+
+    #[test]
+    fn reports_command_errors_for_nul_in_the_common_name() {
+        assert!(generate_key_and_csr("invalid\0name").is_err());
+    }
 }
