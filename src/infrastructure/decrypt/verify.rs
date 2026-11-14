@@ -54,44 +54,9 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
         let Some((name, bytes)) = read_if_macho(&mut archive, index)? else {
             continue;
         };
-        let Ok(slices) = macho::parse(&bytes) else {
-            ok = false;
-            machos.push(MachoVerify {
-                entry: name,
-                slices: Vec::new(),
-            });
-            continue;
-        };
-
-        ok &= !slices.is_empty();
-        let mut slice_reports = Vec::new();
-        for slice in &slices {
-            let cryptid_zero = slice
-                .encryption
-                .is_none_or(|encryption| encryption.cryptid == 0);
-            let looks_decrypted = slice.encryption.map(|_| {
-                slice
-                    .crypt_range()
-                    .is_some_and(|(start, end)| looks_decrypted(&bytes[start..end]))
-            });
-            if !cryptid_zero {
-                still_encrypted.push(format!("{name}[{}]", slice.arch));
-                ok = false;
-            }
-            if looks_decrypted == Some(false) {
-                ok = false;
-            }
-            slice_reports.push(SliceVerify {
-                arch: slice.arch.clone(),
-                cryptid_zero,
-                valid: true,
-                looks_decrypted,
-            });
-        }
-        machos.push(MachoVerify {
-            entry: name,
-            slices: slice_reports,
-        });
+        let (macho, valid) = verify_macho(name, &bytes, &mut still_encrypted);
+        ok &= valid;
+        machos.push(macho);
     }
 
     Ok(VerifyReport {
@@ -99,6 +64,71 @@ pub fn verify_ipa(ipa_bytes: &[u8]) -> Result<VerifyReport, String> {
         machos,
         still_encrypted,
     })
+}
+
+fn verify_macho(
+    name: String,
+    bytes: &[u8],
+    still_encrypted: &mut Vec<String>,
+) -> (MachoVerify, bool) {
+    let Ok(slices) = macho::parse(bytes) else {
+        return (
+            MachoVerify {
+                entry: name,
+                slices: Vec::new(),
+            },
+            false,
+        );
+    };
+
+    let mut valid = !slices.is_empty();
+    let mut reports = Vec::with_capacity(slices.len());
+    for slice in slices {
+        reports.push(verify_slice(
+            &name,
+            bytes,
+            &slice,
+            still_encrypted,
+            &mut valid,
+        ));
+    }
+    (
+        MachoVerify {
+            entry: name,
+            slices: reports,
+        },
+        valid,
+    )
+}
+
+fn verify_slice(
+    name: &str,
+    bytes: &[u8],
+    slice: &macho::Slice,
+    still_encrypted: &mut Vec<String>,
+    valid: &mut bool,
+) -> SliceVerify {
+    let cryptid_zero = slice
+        .encryption
+        .is_none_or(|encryption| encryption.cryptid == 0);
+    let looks_decrypted = slice.encryption.map(|_| {
+        slice
+            .crypt_range()
+            .is_some_and(|(start, end)| looks_decrypted(&bytes[start..end]))
+    });
+    if !cryptid_zero {
+        still_encrypted.push(format!("{name}[{}]", slice.arch));
+        *valid = false;
+    }
+    if looks_decrypted == Some(false) {
+        *valid = false;
+    }
+    SliceVerify {
+        arch: slice.arch.clone(),
+        cryptid_zero,
+        valid: true,
+        looks_decrypted,
+    }
 }
 
 /// Accept an IPA only when every Mach-O slice passes [`verify_ipa`].
