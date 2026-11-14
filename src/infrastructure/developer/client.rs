@@ -295,6 +295,12 @@ mod tests {
         let server = MockServer::start().await;
         mount_plist(
             &server,
+            "listTeams.action",
+            json!({"teams": [{"teamId": "TEAM", "name": "Example"}]}),
+        )
+        .await;
+        mount_plist(
+            &server,
             "ios/listDevices.action",
             json!({"devices": [{"deviceId": "1", "deviceNumber": "UDID"}]}),
         )
@@ -329,6 +335,18 @@ mod tests {
         assert_eq!(result.certificate_serial, "01");
         assert_eq!(result.mobileprovision, b"PROFILE");
         assert!(!result.key_pem.is_empty());
+
+        let automatic_request = super::super::ProvisionRequest {
+            account: &account,
+            team_id: None,
+            device_udid: "UDID",
+            device_name: "device",
+            app_id_id: "APP",
+        };
+        let automatic = super::super::provision_with_client(&automatic_request, &client(&server))
+            .await
+            .expect("first team provisioning flow");
+        assert_eq!(automatic.team_id, "TEAM");
     }
 
     #[tokio::test]
