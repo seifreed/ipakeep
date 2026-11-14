@@ -92,17 +92,7 @@ pub fn init_logging(verbose: bool) -> Result<(), String> {
 /// Install a panic hook that records crash location without panic payload data.
 pub fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
-        let (source_file, line) = match info.location() {
-            Some(location) => (
-                Path::new(location.file())
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
-                location.line(),
-            ),
-            None => ("unknown".into(), 0),
-        };
+        let (source_file, line) = panic_location(info.location());
         tracing::error!(
             service = "ipakeep",
             component = "runtime",
@@ -123,6 +113,20 @@ fn panic_payload_type(payload: &(dyn Any + Send)) -> &'static str {
     }
 }
 
+fn panic_location(location: Option<&std::panic::Location<'_>>) -> (String, u32) {
+    match location {
+        Some(location) => (
+            Path::new(location.file())
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            location.line(),
+        ),
+        None => ("unknown".into(), 0),
+    }
+}
+
 /// Return a sanitized deployment environment label for structured spans.
 #[must_use]
 pub fn environment() -> String {
@@ -135,7 +139,14 @@ pub fn environment() -> String {
 }
 
 fn read_env(name: &str) -> Result<Option<String>, String> {
-    match std::env::var(name) {
+    read_env_result(name, std::env::var(name))
+}
+
+fn read_env_result(
+    name: &str,
+    value: Result<String, std::env::VarError>,
+) -> Result<Option<String>, String> {
+    match value {
         Ok(value) => Ok(Some(value)),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} must contain valid UTF-8")),
@@ -153,11 +164,12 @@ fn sanitize_environment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LogFormat, LoggingConfig, environment, install_panic_hook, panic_payload_type,
-        sanitize_environment,
+        LogFormat, LoggingConfig, environment, install_panic_hook, panic_location,
+        panic_payload_type, read_env_result, sanitize_environment,
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::io::{self, Write};
+    use std::os::unix::ffi::OsStringExt;
 
     struct FailingWriter;
 
@@ -213,6 +225,23 @@ mod tests {
         let payload = String::from("credential-secret");
         assert_eq!(panic_payload_type(&payload), "string");
         assert_eq!(panic_payload_type(&42_u8), "non_string");
+    }
+
+    #[test]
+    fn panic_location_handles_missing_source_metadata() {
+        assert_eq!(panic_location(None), ("unknown".into(), 0));
+    }
+
+    #[test]
+    fn environment_reader_rejects_non_utf8_values() {
+        let error = read_env_result(
+            "IPAKEEP_TEST",
+            Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(error, "IPAKEEP_TEST must contain valid UTF-8");
     }
 
     #[test]
