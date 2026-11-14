@@ -370,3 +370,13 @@ fn read_be_word(bytes: &[u8], offset: usize, width: usize) -> Option<u64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_be_word;
+
+    #[test]
+    fn read_be_word_rejects_unsupported_widths() {
+        assert_eq!(read_be_word(&[0; 8], 0, 3), None);
+    }
+}

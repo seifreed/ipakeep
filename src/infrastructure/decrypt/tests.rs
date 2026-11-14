@@ -73,6 +73,26 @@ fn fat_macho(slices: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
     bytes
 }
 
+fn fat64_macho(slices: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend(0xcafe_babf_u32.to_be_bytes());
+    bytes.extend(u32::try_from(slices.len()).unwrap().to_be_bytes());
+    let mut offset = 8 + slices.len() * 32;
+    for (cputype, cpusubtype, slice) in slices {
+        bytes.extend(cputype.to_be_bytes());
+        bytes.extend(cpusubtype.to_be_bytes());
+        bytes.extend(u64::try_from(offset).unwrap().to_be_bytes());
+        bytes.extend(u64::try_from(slice.len()).unwrap().to_be_bytes());
+        bytes.extend(0_u32.to_be_bytes());
+        bytes.extend(0_u32.to_be_bytes());
+        offset += slice.len();
+    }
+    for (_, _, slice) in slices {
+        bytes.extend(slice);
+    }
+    bytes
+}
+
 fn build_ipa(executable: &[u8]) -> Vec<u8> {
     zip_members(&[
         ("Payload/Test.app/Info.plist", INFO_PLIST.as_bytes()),
@@ -834,4 +854,47 @@ fn undumped_extension_fails_with_hint_or_is_dropped_on_request() {
         names.iter().all(|name| !name.contains("Notify.appex")),
         "{names:?}"
     );
+}
+
+#[test]
+fn macho_parser_handles_fat64_and_malformed_or_unknown_slices() {
+    let slices = [
+        (
+            CPU_TYPE_ARM64,
+            0,
+            thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11),
+        ),
+        (
+            CPU_TYPE_X86_64,
+            0,
+            thin_macho(CPU_TYPE_X86_64, 0, MINOS_16, 0x22),
+        ),
+    ];
+    let fat = fat64_macho(&slices);
+    assert!(macho::is_macho(&fat));
+    assert_eq!(macho::parse(&fat).unwrap().len(), 2);
+    let repacked = macho::retain_slices(&fat, |_| true).unwrap();
+    assert_eq!(macho::parse(&repacked).unwrap().len(), 2);
+    assert_eq!(
+        macho::parse(&macho::retain_slices(&fat, |index| index == 1).unwrap()).unwrap()[0].arch,
+        "x86_64"
+    );
+
+    let mut unknown = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11);
+    unknown[4..8].copy_from_slice(&0x1234_u32.to_le_bytes());
+    unknown[32..36].copy_from_slice(&0xdead_beef_u32.to_le_bytes());
+    assert!(macho::parse(&unknown).unwrap()[0].arch.starts_with("cpu-"));
+    unknown[36..40].copy_from_slice(&0_u32.to_le_bytes());
+    assert!(macho::parse(&unknown).unwrap_err().contains("zero-size"));
+
+    let legacy = fat_macho(&[(
+        0x1234,
+        0x5678,
+        [0xce, 0xfa, 0xed, 0xfe, 0x34, 0x12, 0, 0, 0x78, 0x56, 0, 0].to_vec(),
+    )]);
+    assert!(macho::parse(&legacy).unwrap()[0].encryption.is_none());
+    assert!(!macho::is_macho(b"bad!"));
+    assert!(!macho::is_macho(&[]));
+    assert!(macho::parse(b"bad!").is_err());
+    assert!(macho::retain_slices(&slices[0].2, |_| true).is_err());
 }
