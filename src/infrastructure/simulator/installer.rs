@@ -6,6 +6,7 @@ use super::{
     temp_workdir,
 };
 use crate::infrastructure::ipa::{extract_ipa, find_app_bundle};
+use crate::infrastructure::signing::collect_sign_targets;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,41 +51,10 @@ pub(super) fn sign_app_bundle(
     entitlements: Option<&Path>,
 ) -> Result<(), String> {
     let mut targets = Vec::new();
-    collect_sign_targets(app, &mut targets)?;
+    collect_sign_targets(app, &mut targets, &is_macho_file)?;
     targets.sort_by_key(|path| path.components().count());
     for target in targets.iter().rev() {
         run_checked(codesign_command(target, identity, entitlements))?;
-    }
-    Ok(())
-}
-
-fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_file() {
-        if path.extension().is_some_and(|ext| ext == "dylib") && is_macho_file(path)? {
-            targets.push(path.to_path_buf());
-        }
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-
-    let is_code_bundle = path.extension().is_some_and(|ext| {
-        matches!(
-            ext.to_string_lossy().as_ref(),
-            "framework" | "appex" | "app"
-        )
-    });
-    if is_code_bundle {
-        targets.push(path.to_path_buf());
-    }
-
-    for entry in fs::read_dir(path).map_err(|e| format!("{}: {e}", path.display()))? {
-        collect_sign_targets(&entry.map_err(|e| e.to_string())?.path(), targets)?;
     }
     Ok(())
 }
@@ -128,25 +98,5 @@ mod tests {
                 "/tmp/App.app",
             ]
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn collect_sign_targets_skips_symlinked_bundles() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let outside = dir.path().join("Outside.framework");
-        let link = dir
-            .path()
-            .join("App.app")
-            .join("Frameworks")
-            .join("Linked.framework");
-        fs::create_dir_all(&outside).unwrap();
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-
-        let mut targets = Vec::new();
-        collect_sign_targets(dir.path(), &mut targets).unwrap();
-
-        assert!(!targets.iter().any(|target| target == &link));
     }
 }

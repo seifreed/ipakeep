@@ -1,9 +1,10 @@
 //! Per-bundle provisioning and entitlement validation for physical devices.
 
-use super::{InstallRequest, bundle_identifier, collect_sign_targets};
+use super::{InstallRequest, bundle_identifier};
 use crate::infrastructure::decrypt::extract_entitlements;
 use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::exec::run_inherit;
+use crate::infrastructure::signing::collect_sign_targets;
 use plist::{Dictionary, Value};
 use std::fs;
 use std::io::Cursor;
@@ -64,7 +65,7 @@ pub(super) fn sign_bundle(
         .map(|path| Profile::read(path))
         .collect::<Result<Vec<_>, _>>()?;
     let mut targets = Vec::new();
-    collect_sign_targets(app, &mut targets)?;
+    collect_sign_targets(app, &mut targets, &|_| Ok(true))?;
     targets.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
     // Validate every bundle before changing any signatures.
     let mut prepared = Vec::new();

@@ -70,30 +70,6 @@ fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<()
     Ok(())
 }
 
-fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), String> {
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if metadata.is_file() {
-        if path.extension().is_some_and(|ext| ext == "dylib") {
-            targets.push(path.to_path_buf());
-        }
-        return Ok(());
-    }
-    if path
-        .extension()
-        .is_some_and(|ext| ext == "framework" || ext == "appex" || ext == "app")
-    {
-        targets.push(path.to_path_buf());
-    }
-    for entry in fs::read_dir(path).map_err(|error| format!("{}: {error}", path.display()))? {
-        collect_sign_targets(&entry.map_err(|error| error.to_string())?.path(), targets)?;
-    }
-    Ok(())
-}
-
 fn install_command(app: &Path, device: &str, legacy: bool) -> Command {
     let mut command = if legacy {
         let mut command = Command::new("ideviceinstaller");
@@ -143,6 +119,7 @@ fn bundle_identifier(app: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::signing::collect_sign_targets;
 
     #[test]
     fn rejects_invalid_profile_before_embedding_it() {
@@ -165,7 +142,7 @@ mod tests {
         fs::write(&dylib, []).unwrap();
 
         let mut targets = Vec::new();
-        collect_sign_targets(&app, &mut targets).unwrap();
+        collect_sign_targets(&app, &mut targets, &|_| Ok(true)).unwrap();
         targets.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
         assert_eq!(targets[0], dylib);
         assert_eq!(targets[1], framework);

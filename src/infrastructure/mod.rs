@@ -15,4 +15,5 @@ pub mod ipa;
 pub mod keychain;
 pub mod mcp;
 pub mod observability;
+pub(crate) mod signing;
 pub mod simulator;
