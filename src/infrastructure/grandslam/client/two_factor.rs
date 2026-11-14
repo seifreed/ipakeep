@@ -248,5 +248,14 @@ mod tests {
             validate_trusted_device_response(reqwest::StatusCode::OK, b"not a plist"),
             Err(AppStoreError::NetworkError(_))
         ));
+        assert!(matches!(
+            validate_trusted_device_response(reqwest::StatusCode::BAD_REQUEST, b"ignored"),
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
+        let missing_code = encode_plist(&serde_json::json!({})).expect("missing-code plist");
+        assert!(matches!(
+            validate_trusted_device_response(reqwest::StatusCode::OK, &missing_code),
+            Err(AppStoreError::NetworkError(_))
+        ));
     }
 }
