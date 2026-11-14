@@ -235,7 +235,41 @@ mod tests {
             check_failure(&other, 7, AppStoreError::PurchaseFailed),
             Err(AppStoreError::PurchaseFailed(message)) if message == "item is temporarily unavailable"
         ));
+        assert!(matches!(
+            check_failure(
+                &json!({"error": {"code": 7}}),
+                7,
+                AppStoreError::PurchaseFailed
+            ),
+            Err(AppStoreError::PurchaseFailed(message)) if message == "unknown App Store error"
+        ));
         assert!(check_failure(&json!({}), 7, AppStoreError::PurchaseFailed).is_ok());
+    }
+
+    #[test]
+    fn commerce_requests_serialize_account_and_version_fields() {
+        let account = Account {
+            email: "user@example.com".into(),
+            name: "User".into(),
+            password_token: "password-token".into(),
+            directory_services_id: "123".into(),
+            store_front: "143441-1".into(),
+            pod: "48".into(),
+            idms_token: None,
+            dsid: None,
+            adsid: None,
+            grandslam_session_key: None,
+            grandslam_continuation: None,
+            cookies: Vec::new(),
+        };
+        let payload = request(&account, 42, Some("9"));
+
+        assert_eq!(payload["appId"], 42);
+        assert_eq!(payload["externalVersionId"], "9");
+        assert_eq!(payload["account"]["directoryServicesIdentifier"], "123");
+        assert_eq!(payload["account"]["storeFront"], "143441-1");
+        assert_eq!(owned_apps_request(&account, 25)["limit"], 25);
+        assert_eq!(request(&account, 42, None)["externalVersionId"], "");
     }
 
     #[test]
@@ -249,6 +283,7 @@ mod tests {
         assert_eq!(versions.len(), 2);
         assert_eq!(versions[0].external_version_id, "894490049");
         assert_eq!(versions[1].version_string, "1.377");
+        assert!(parse_versions(&json!({})).is_empty());
     }
 
     #[test]
@@ -300,6 +335,26 @@ mod tests {
     }
 
     #[test]
+    fn owned_app_optional_fields_default_and_filter_invalid_values() {
+        let apps = parse_owned_apps(&json!({
+            "apps": [
+                {"trackId": 8},
+                {"trackId": 9, "platforms": ["iphone", 7], "purchaseDate": ""},
+                {"trackId": 10, "platforms": "iphone", "purchaseDate": 7}
+            ]
+        }));
+
+        assert_eq!(apps[0].bundle_id, "");
+        assert_eq!(apps[0].name, "");
+        assert_eq!(apps[0].version, "");
+        assert!(apps[0].platforms.is_empty());
+        assert_eq!(apps[1].platforms, ["iphone"]);
+        assert!(apps[1].purchase_date.is_none());
+        assert!(apps[2].platforms.is_empty());
+        assert!(apps[2].purchase_date.is_none());
+    }
+
+    #[test]
     fn parses_a_staged_item_like_a_download_response() {
         let item = staged_item(&json!({"item": {
             "URL": "/tmp/download-1/package.ipa",
@@ -312,6 +367,7 @@ mod tests {
         assert_eq!(item.sinfs[0].data, [1, 2, 3]);
         assert_eq!(item.metadata["softwareVersionBundleId"], "com.example");
         assert!(staged_item(&json!({})).is_err());
+        assert!(staged_item(&json!({"item": {}})).is_err());
     }
 
     #[test]
