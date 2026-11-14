@@ -57,3 +57,39 @@ fn legacy_purchase_headers(account: &Account) -> HashMap<String, String> {
     headers.insert("X-Apple-Store-Front".into(), store_front.to_string());
     headers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_US_STORE_FRONT, auth_headers};
+    use crate::domain::entity::test_support::test_account;
+    use crate::domain::error::AppStoreError;
+    use crate::infrastructure::http::AppleHttpClient;
+
+    #[test]
+    fn builds_legacy_headers_and_seeds_optional_cookies() {
+        let client = AppleHttpClient::new().expect("HTTP client");
+        let mut account = test_account();
+        account.store_front.clear();
+
+        let headers = auth_headers(&client, &account).expect("legacy headers");
+        assert_eq!(headers["X-Token"], account.password_token);
+        assert_eq!(headers["X-Apple-Store-Front"], DEFAULT_US_STORE_FRONT);
+        assert_eq!(headers["X-Dsid"], account.directory_services_id);
+
+        account.cookies = vec!["session=example; Path=/; Secure".into()];
+        assert!(auth_headers(&client, &account).is_ok());
+    }
+
+    #[test]
+    fn rejects_accounts_without_a_purchase_password_token() {
+        let client = AppleHttpClient::new().expect("HTTP client");
+        let mut account = test_account();
+        account.password_token.clear();
+
+        assert!(matches!(
+            auth_headers(&client, &account),
+            Err(AppStoreError::AuthenticationFailed(message))
+                if message.contains("missing MZFinance passwordToken")
+        ));
+    }
+}
