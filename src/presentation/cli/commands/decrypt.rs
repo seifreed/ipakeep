@@ -645,4 +645,37 @@ mod tests {
         assert!(handle_verify(&ipa, &OutputFormat::Json).is_err());
         assert!(handle_verify(&ipa, &OutputFormat::Text).is_err());
     }
+
+    #[test]
+    fn provisioning_artifacts_are_written_and_profile_is_embedded() {
+        let work = tempfile::tempdir().unwrap();
+        let app = work.path().join("Demo.app");
+        let output = work.path().join("provisioned");
+        std::fs::create_dir(&app).unwrap();
+        let result = ProvisionResult {
+            team_id: "TEAM".into(),
+            mobileprovision: b"profile".to_vec(),
+            key_pem: b"key".to_vec(),
+            certificate_der: b"certificate".to_vec(),
+            certificate_serial: "serial".into(),
+        };
+
+        assert_eq!(
+            write_provisioning_files(&app, Some(&output), &result).unwrap(),
+            output
+        );
+        assert_eq!(
+            std::fs::read(output.join("embedded.mobileprovision")).unwrap(),
+            b"profile"
+        );
+        assert_eq!(std::fs::read(output.join("key.pem")).unwrap(), b"key");
+        assert_eq!(
+            std::fs::read(output.join("certificate.der")).unwrap(),
+            b"certificate"
+        );
+        assert_eq!(
+            std::fs::read(app.join("embedded.mobileprovision")).unwrap(),
+            b"profile"
+        );
+    }
 }
