@@ -1,9 +1,10 @@
 //! Per-bundle provisioning and entitlement validation for physical devices.
 
-use super::{InstallRequest, bundle_identifier};
+use super::InstallRequest;
 use crate::infrastructure::decrypt::extract_entitlements;
 use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::exec::run_inherit;
+use crate::infrastructure::ipa::bundle_identifier;
 use crate::infrastructure::signing::collect_sign_targets;
 use plist::{Dictionary, Value};
 use std::fs;

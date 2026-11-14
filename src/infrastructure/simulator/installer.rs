@@ -5,7 +5,7 @@ use super::{
     SimulatorTarget, codesign_command, install_app, prepare_path, run_app, run_checked,
     temp_workdir,
 };
-use crate::infrastructure::ipa::{extract_ipa, find_app_bundle};
+use crate::infrastructure::ipa::{bundle_identifier, extract_ipa, find_app_bundle};
 use crate::infrastructure::signing::collect_sign_targets;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,13 @@ pub(super) fn install_ipa(
     install_app(&app, target)?;
 
     if run_after_install {
-        run_app(&bundle_id(&app)?, &[], console, target, entitlements)?;
+        run_app(
+            &bundle_identifier(&app)?,
+            &[],
+            console,
+            target,
+            entitlements,
+        )?;
     }
     Ok(app)
 }
@@ -57,17 +63,6 @@ pub(super) fn sign_app_bundle(
         run_checked(codesign_command(target, identity, entitlements))?;
     }
     Ok(())
-}
-
-fn bundle_id(app: &Path) -> Result<String, String> {
-    let info = app.join("Info.plist");
-    let plist = plist::Value::from_file(&info).map_err(|e| format!("{}: {e}", info.display()))?;
-    plist
-        .as_dictionary()
-        .and_then(|dict| dict.get("CFBundleIdentifier"))
-        .and_then(plist::Value::as_string)
-        .map(ToString::to_string)
-        .ok_or_else(|| format!("{} missing CFBundleIdentifier", info.display()))
 }
 
 #[cfg(test)]

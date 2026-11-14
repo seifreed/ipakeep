@@ -2,7 +2,7 @@
 
 use crate::infrastructure::decrypt::ensure_decrypted;
 use crate::infrastructure::exec::{require_program, run_inherit, temp_dir};
-use crate::infrastructure::ipa::{extract_ipa, find_app_bundle};
+use crate::infrastructure::ipa::{bundle_identifier, extract_ipa, find_app_bundle};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -105,17 +105,6 @@ fn launch_command(bundle_id: &str, device: &str, legacy: bool) -> Command {
     command
 }
 
-fn bundle_identifier(app: &Path) -> Result<String, String> {
-    let info = plist::Value::from_file(app.join("Info.plist"))
-        .map_err(|error| format!("{}: {error}", app.join("Info.plist").display()))?;
-    info.as_dictionary()
-        .and_then(|dict| dict.get("CFBundleIdentifier"))
-        .and_then(plist::Value::as_string)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| format!("{} missing CFBundleIdentifier", app.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,22 +136,6 @@ mod tests {
         assert_eq!(targets[0], dylib);
         assert_eq!(targets[1], framework);
         assert_eq!(targets[2], app);
-    }
-
-    #[test]
-    fn bundle_identifier_reads_info_plist() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let app = dir.path().join("App.app");
-        fs::create_dir_all(&app).unwrap();
-        let mut info = Vec::new();
-        plist::Value::Dictionary(plist::Dictionary::from_iter([(
-            String::from("CFBundleIdentifier"),
-            plist::Value::String("com.example.app".into()),
-        )]))
-        .to_writer_xml(&mut info)
-        .unwrap();
-        fs::write(app.join("Info.plist"), info).unwrap();
-        assert_eq!(bundle_identifier(&app).unwrap(), "com.example.app");
     }
 
     #[test]

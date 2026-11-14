@@ -41,6 +41,20 @@ pub(crate) fn find_app_bundle(workdir: &Path) -> Result<PathBuf, String> {
     Err("IPA did not contain Payload/*.app".into())
 }
 
+/// Read the non-empty `CFBundleIdentifier` from an extracted app bundle.
+pub(crate) fn bundle_identifier(app: &Path) -> Result<String, String> {
+    let info = app.join("Info.plist");
+    let plist =
+        plist::Value::from_file(&info).map_err(|error| format!("{}: {error}", info.display()))?;
+    plist
+        .as_dictionary()
+        .and_then(|dictionary| dictionary.get("CFBundleIdentifier"))
+        .and_then(plist::Value::as_string)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{} missing CFBundleIdentifier", info.display()))
+}
+
 /// Verify the MD5 checksum of downloaded bytes.
 ///
 /// An empty `expected` checksum is treated as "no checksum available" and

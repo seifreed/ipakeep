@@ -92,6 +92,39 @@ fn find_app_bundle_ignores_symlinked_app_directories() {
     assert!(find_app_bundle(temp_dir.path()).is_err());
 }
 
+#[test]
+fn bundle_identifier_reads_nonempty_info_plist_value() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let app = temp_dir.path().join("Example.app");
+    std::fs::create_dir(&app).expect("create app bundle");
+    write_bundle_identifier(&app, "com.example.app");
+
+    assert_eq!(bundle_identifier(&app).unwrap(), "com.example.app");
+}
+
+#[test]
+fn bundle_identifier_rejects_empty_info_plist_value() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let app = temp_dir.path().join("Example.app");
+    std::fs::create_dir(&app).expect("create app bundle");
+    write_bundle_identifier(&app, "");
+
+    assert!(bundle_identifier(&app).is_err());
+}
+
+fn write_bundle_identifier(app: &std::path::Path, identifier: &str) {
+    let mut dictionary = plist::Dictionary::new();
+    dictionary.insert(
+        "CFBundleIdentifier".into(),
+        plist::Value::String(identifier.into()),
+    );
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(dictionary)
+        .to_writer_xml(&mut bytes)
+        .expect("encode Info.plist");
+    std::fs::write(app.join("Info.plist"), bytes).expect("write Info.plist");
+}
+
 fn zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
     let mut file = archive.by_name(name).ok()?;
