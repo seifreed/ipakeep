@@ -844,6 +844,41 @@ mod tests {
         atom(*b"sinf", &schi)
     }
 
+    fn encrypted_sinf(credential: &[u8; 16], legacy_length: bool) -> (Vec<u8>, [u8; 16]) {
+        use aes::cipher::block_padding::NoPadding;
+        use aes::cipher::{BlockEncryptMut, KeyIvInit};
+        use cbc::Encryptor;
+
+        let iviv = [0x5Au8; 16];
+        let mut clear = vec![0u8; if legacy_length { 432 } else { 448 }];
+        clear[..4].copy_from_slice(b"itun");
+        clear[20..24].copy_from_slice(b"key ");
+        let work = [0xA5u8; 16];
+        clear[24..40].copy_from_slice(&work);
+        clear[44..48].copy_from_slice(b"iviv");
+
+        let key = credential.map(|byte| byte ^ b'0');
+        let mut iv_input = b"app".to_vec();
+        iv_input.extend_from_slice(&iviv);
+        let iv = md5::compute(iv_input);
+        let mut encrypted = clear;
+        let encrypted_len = encrypted.len();
+        Encryptor::<Aes128>::new_from_slices(&key, &iv.0)
+            .expect("AES key and IV")
+            .encrypt_padded_mut::<NoPadding>(&mut encrypted, encrypted_len)
+            .expect("encrypt SINF priv record");
+        if legacy_length {
+            encrypted.extend_from_slice(&[0u8; 8]);
+        }
+
+        let mut schi = Vec::new();
+        schi.extend_from_slice(&atom(*b"name", b"app\x00"));
+        schi.extend_from_slice(&atom(*b"iviv", &iviv));
+        schi.extend_from_slice(&atom(*b"priv", &encrypted));
+        let schi = atom(*b"schi", &schi);
+        (atom(*b"sinf", &schi), work)
+    }
+
     /// A minimal thin arm64 Mach-O carrying one `LC_ENCRYPTION_INFO_64` command.
     fn thin_arm64_macho(cryptid: u32) -> Vec<u8> {
         let mut data = vec![0u8; 8192];
@@ -1159,6 +1194,68 @@ mod tests {
         // 15-byte credential is rejected before any AES work.
         assert!(derive_work16(&[0u8; 15], &sinf).is_err());
         assert!(!credential_decodes(&[0u8; 15], &sinf));
+    }
+
+    #[test]
+    fn derives_work_key_from_modern_and_legacy_sinf_records() {
+        let credential = [0x31u8; 16];
+        for legacy_length in [false, true] {
+            let (sinf, expected) = encrypted_sinf(&credential, legacy_length);
+            assert_eq!(derive_work16(&credential, &sinf).unwrap(), expected);
+            assert!(credential_decodes(&credential, &sinf));
+            assert!(!credential_decodes(&[0x32; 16], &sinf));
+        }
+    }
+
+    #[test]
+    fn decrypt_binary_handles_unencrypted_and_malformed_metadata() {
+        assert!(
+            decrypt_binary(&thin_arm64_macho(0), b"", b"", b"")
+                .unwrap()
+                .is_none()
+        );
+
+        let encrypted = thin_arm64_macho(1);
+        let credential = [0x31u8; 16];
+        let (sinf, _) = encrypted_sinf(&credential, false);
+        assert!(decrypt_binary(&encrypted, b"bad sinf", b"", &credential).is_err());
+        assert!(decrypt_binary(&encrypted, &sinf, b"bad supf", &credential).is_err());
+        assert!(decrypt_binary(&encrypted, &sinf, b"", &[0x32; 16]).is_err());
+
+        let mut missing_pclass_page = vec![4u8, 0, 0, 0];
+        missing_pclass_page.extend_from_slice(&1u32.to_be_bytes());
+        missing_pclass_page.extend_from_slice(&[0u8; 32]);
+        assert!(decrypt_binary(&encrypted, &sinf, &missing_pclass_page, &credential).is_err());
+    }
+
+    #[test]
+    fn decrypt_binary_decrypts_supf_and_pclass_pages() {
+        let encrypted = thin_arm64_macho(1);
+        let credential = [0x31u8; 16];
+        let (sinf, _) = encrypted_sinf(&credential, false);
+
+        let mut supf = vec![5u8];
+        supf.extend_from_slice(b"502");
+        supf.extend_from_slice(&[0u8; 4]);
+        supf.extend_from_slice(&1u32.to_be_bytes());
+        supf.extend_from_slice(&44u32.to_be_bytes());
+        supf.extend_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
+        supf.extend_from_slice(&0u32.to_be_bytes());
+        supf.extend_from_slice(&1u32.to_be_bytes());
+        supf.extend_from_slice(&[0u8; 32]);
+
+        let mut supp = vec![4u8, 0, 0, 0];
+        supp.extend_from_slice(&2u32.to_be_bytes());
+        supp.extend_from_slice(&[0u8; 64]);
+
+        for records in [&supf, &supp] {
+            let (decrypted, pages) = decrypt_binary(&encrypted, &sinf, records, &credential)
+                .expect("decrypt Mach-O")
+                .expect("encrypted slice");
+            assert_eq!(pages, 1);
+            assert_eq!(&decrypted[48..52], &[0, 0, 0, 0]);
+            assert_ne!(&decrypted[4096..8192], &encrypted[4096..8192]);
+        }
     }
 
     #[test]
