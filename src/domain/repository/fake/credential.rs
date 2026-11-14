@@ -141,4 +141,16 @@ mod tests {
 
         assert!(repo.load_account().await.unwrap().is_some());
     }
+
+    #[tokio::test]
+    async fn default_repository_recovers_a_poisoned_lock() {
+        let repo = InMemoryCredentialRepository::default();
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = repo.inner.lock().expect("repository lock");
+            panic!("poison repository lock");
+        }));
+
+        assert!(poisoned.is_err());
+        assert!(repo.load_account().await.unwrap().is_none());
+    }
 }
