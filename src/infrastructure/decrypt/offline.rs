@@ -219,6 +219,30 @@ fn credential_dirs() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn plan_entry() -> PlanEntry {
+        PlanEntry {
+            binary_path: "Payload/Game.app/Game".into(),
+            supf_path: "Payload/Game.app/SC_Info/Game.supf".into(),
+            sinf_path: "Payload/Game.app/SC_Info/Game.sinf".into(),
+            bundle: "Payload/Game.app".into(),
+        }
+    }
+
+    fn atom(tag: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut atom = Vec::with_capacity(payload.len() + 8);
+        atom.extend_from_slice(&u32::try_from(payload.len() + 8).unwrap().to_be_bytes());
+        atom.extend_from_slice(tag);
+        atom.extend_from_slice(payload);
+        atom
+    }
+
+    fn arcade_sinf() -> Vec<u8> {
+        let mut key = Vec::new();
+        key.extend_from_slice(&atom(b"key ", &[4, 0, 0, 0]));
+        atom(b"sinf", &atom(b"schi", &key))
+    }
 
     #[test]
     fn only_existing_local_ipas_are_accepted() {
@@ -245,5 +269,94 @@ mod tests {
         let ok = work.path().join("ok.bin");
         std::fs::write(&ok, [7u8; 16]).unwrap();
         assert_eq!(read_credential(&ok).unwrap(), vec![7u8; 16]);
+    }
+
+    #[test]
+    fn arcade_entries_require_and_select_the_arcade_credential() {
+        let sinf = arcade_sinf();
+        let standard = vec![1; CREDENTIAL_SIZE];
+        let arcade = vec![2; CREDENTIAL_SIZE];
+        let without_arcade = Credentials {
+            standard: standard.clone(),
+            arcade: None,
+        };
+        let with_arcade = Credentials {
+            standard: standard.clone(),
+            arcade: Some(arcade.clone()),
+        };
+
+        assert_eq!(
+            entry_credential(&without_arcade, b"ordinary").unwrap(),
+            standard
+        );
+        assert!(entry_credential(&without_arcade, &sinf).is_err());
+        assert_eq!(entry_credential(&with_arcade, &sinf).unwrap(), arcade);
+    }
+
+    #[test]
+    fn sinf_lookup_prefers_binary_license_then_enclosing_app() {
+        let entry = plan_entry();
+        let own_names = BTreeSet::from([entry.sinf_path.clone()]);
+        let own_members = BTreeMap::from([(entry.sinf_path.clone(), vec![1, 2, 3])]);
+        assert_eq!(
+            read_entry_sinf(&own_members, &own_names, &entry).unwrap(),
+            [1, 2, 3]
+        );
+
+        let fallback = "Payload/Game.app/SC_Info/Game.sinf".to_string();
+        let fallback_names = BTreeSet::from([fallback.clone()]);
+        let fallback_members = BTreeMap::from([(fallback, vec![4, 5, 6])]);
+        assert_eq!(
+            read_entry_sinf(&fallback_members, &fallback_names, &entry).unwrap(),
+            [4, 5, 6]
+        );
+        assert!(read_entry_sinf(&BTreeMap::new(), &BTreeSet::new(), &entry).is_err());
+    }
+
+    #[test]
+    fn decrypt_entry_reports_missing_members_and_wrong_credentials() {
+        let entry = plan_entry();
+        let creds = Credentials {
+            standard: vec![0; CREDENTIAL_SIZE],
+            arcade: None,
+        };
+        let empty_names = BTreeSet::from([entry.sinf_path.clone()]);
+        assert!(
+            decrypt_entry(&BTreeMap::new(), &empty_names, &entry, &creds)
+                .unwrap_err()
+                .contains("missing binary")
+        );
+
+        let missing_page_key = BTreeMap::from([
+            (entry.binary_path.clone(), vec![0]),
+            (entry.sinf_path.clone(), b"invalid sinf".to_vec()),
+        ]);
+        assert!(
+            decrypt_entry(&missing_page_key, &empty_names, &entry, &creds)
+                .unwrap_err()
+                .contains("missing page-key")
+        );
+
+        let wrong_credential = BTreeMap::from([
+            (entry.binary_path.clone(), vec![0]),
+            (entry.sinf_path.clone(), b"invalid sinf".to_vec()),
+            (entry.supf_path.clone(), vec![0]),
+        ]);
+        assert!(
+            decrypt_entry(&wrong_credential, &empty_names, &entry, &creds)
+                .unwrap_err()
+                .contains("different Apple ID")
+        );
+    }
+
+    #[test]
+    fn offline_entry_points_reject_invalid_ipa_before_loading_credentials() {
+        let path = Path::new("not-an-ipa.txt");
+        assert!(
+            run_offline(path, false)
+                .unwrap_err()
+                .contains("not an .ipa")
+        );
+        assert!(run_offline(path, true).unwrap_err().contains("not an .ipa"));
     }
 }
