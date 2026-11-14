@@ -456,6 +456,21 @@ fn verify_rejects_fat_binary_without_slices() {
     assert!(ensure_decrypted(ipa).is_err());
 }
 
+#[test]
+fn verify_reports_malformed_macho_and_empty_encryption_ranges() {
+    let malformed = verify_ipa(&build_ipa(&MH_MAGIC_64.to_le_bytes())).unwrap();
+    assert!(!malformed.ok);
+    assert!(malformed.machos[0].slices.is_empty());
+
+    let mut empty_range = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0);
+    empty_range[44..48].copy_from_slice(&0_u32.to_le_bytes());
+    empty_range[48..52].copy_from_slice(&0_u32.to_le_bytes());
+    let report = verify_ipa(&build_ipa(&empty_range)).unwrap();
+    assert!(!report.ok);
+    assert!(report.still_encrypted.is_empty());
+    assert_eq!(report.machos[0].slices[0].looks_decrypted, Some(false));
+}
+
 const LC_UUID: u32 = 0x1b;
 const CPU_SUBTYPE_ARM64E: u32 = 2;
 
