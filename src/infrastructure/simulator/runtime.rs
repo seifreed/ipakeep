@@ -129,4 +129,29 @@ mod tests {
 
         assert!(!is_tmpfs_mount(dir.path()).unwrap());
     }
+
+    #[test]
+    fn unlock_rejects_paths_outside_simulator_runtimes_before_commands() {
+        assert_eq!(
+            unlock_runtime_path(Some(Path::new("/tmp/RuntimeRoot"))).unwrap_err(),
+            "path must be inside an iOS .simruntime"
+        );
+    }
+
+    #[test]
+    fn runtime_detection_rejects_invalid_process_paths() {
+        assert!(runtime_root_from_pid_path("not-a-pid").is_err());
+        assert!(runtime_root_from_lsof("99999999").is_err());
+    }
+
+    #[test]
+    fn backup_path_is_created_under_the_system_temp_directory() {
+        let path = tempfile_like_backup_path();
+        assert_eq!(path.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("ipakeep-simruntime-"))
+        );
+    }
 }
