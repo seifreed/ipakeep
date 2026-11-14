@@ -125,13 +125,12 @@ pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
 }
 
 fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
-    let python = python_with_frida()?;
-    let pulled;
-    let ipa = match (req.ipa, req.device) {
-        (Some(ipa), _) => ipa,
+    let (python, ipa) = match (req.ipa, req.device) {
+        (Some(ipa), _) => (python_with_frida()?, ipa.to_path_buf()),
         (None, DumpDevice::Usb) => {
-            pulled = pull_installed_bundle(&python, req.bundle_id, work)?;
-            &pulled
+            let python = python_with_frida()?;
+            let ipa = pull_installed_bundle(&python, req.bundle_id, work)?;
+            (python, ipa)
         }
         (None, DumpDevice::Local) => {
             return Err("dumping on this Mac needs --ipa <encrypted.ipa> to patch".into());
@@ -142,7 +141,7 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
         python: &python,
         agent: &agent,
         bundle_id: req.bundle_id,
-        ipa,
+        ipa: &ipa,
         device: req.device,
         out_dir: work,
         settle: req.settle,
@@ -152,7 +151,7 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     command.args(&args);
     run_inherit(command)?;
 
-    let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    let ipa_bytes = std::fs::read(&ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     ensure_decrypted(patch_ipa_decrypted_with(
         &ipa_bytes,
         work,
@@ -575,6 +574,27 @@ mod tests {
         ] {
             assert!(bundled.with_file_name(name).is_file());
         }
+    }
+
+    #[test]
+    fn local_builtin_dump_requires_an_ipa_before_checking_python() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let request = DumpRequest {
+            dumper: Dumper::Builtin,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: None,
+            device: DumpDevice::Local,
+            agent: None,
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        };
+
+        assert_eq!(
+            run_builtin(&request, work.path()).unwrap_err(),
+            "dumping on this Mac needs --ipa <encrypted.ipa> to patch"
+        );
     }
 
     #[test]
