@@ -212,6 +212,20 @@ fn patch_errors_when_dump_missing() {
 }
 
 #[test]
+fn patch_rejects_ipa_without_encrypted_machos() {
+    let mut executable = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11);
+    executable[48..52].copy_from_slice(&0_u32.to_le_bytes());
+    let ipa = build_ipa(&executable);
+    let dir = tempfile::TempDir::new().unwrap();
+
+    assert!(
+        patch_ipa_decrypted(&ipa, dir.path())
+            .unwrap_err()
+            .contains("no encrypted Mach-O slices")
+    );
+}
+
+#[test]
 fn patch_errors_on_size_mismatch() {
     let ipa = build_ipa(&thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0x11));
     let dir = tempfile::TempDir::new().unwrap();
@@ -538,18 +552,13 @@ fn patch_thins_fat_binary_dropping_undumped_slices() {
     let dir = tempfile::TempDir::new().unwrap();
     std::fs::write(dir.path().join("TestExec.arm64.bin"), plaintext()).unwrap();
 
-    let outcome = patch_with_report(&ipa, dir.path(), false).unwrap();
-
-    assert_eq!(
-        outcome.dropped_slices,
-        vec!["Payload/Test.app/TestExec[arm64e]".to_string()]
-    );
-    let exec = read_entry(&outcome.ipa, "Payload/Test.app/TestExec");
+    let patched = patch_ipa_decrypted(&ipa, dir.path()).unwrap();
+    let exec = read_entry(&patched, "Payload/Test.app/TestExec");
     let slices = macho::parse(&exec).unwrap();
     assert_eq!(slices.len(), 1);
     assert_eq!(slices[0].arch, "arm64");
     assert_eq!(slices[0].encryption.unwrap().cryptid, 0);
-    assert!(verify_ipa(&outcome.ipa).unwrap().ok);
+    assert!(verify_ipa(&patched).unwrap().ok);
 }
 
 #[test]
