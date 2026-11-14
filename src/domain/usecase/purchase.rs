@@ -66,6 +66,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn purchase_rejection_is_propagated() {
+        let mut app_store = AppStoreRepo::new();
+        app_store
+            .expect_purchase()
+            .return_once(|_, _, _| Err(AppStoreError::PurchaseFailed("rejected".into())));
+        let mut credentials = CredentialRepo::new();
+        credentials
+            .expect_load_account()
+            .return_once(|| Ok(Some(test_account())));
+
+        let use_case = Purchase::new(app_store, credentials);
+        assert!(matches!(
+            use_case.execute(12345, "guid123").await,
+            Err(AppStoreError::PurchaseFailed(message)) if message == "rejected"
+        ));
+    }
+
+    #[tokio::test]
     async fn purchase_fails_without_login() {
         let app_store = AppStoreRepo::new();
         let mut credentials = CredentialRepo::new();
