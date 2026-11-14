@@ -53,8 +53,15 @@ pub(super) async fn owned_apps(
 /// not name one.
 pub(super) fn take_staged_package(url: &str) -> Option<Result<Vec<u8>, AppStoreError>> {
     let staging = dirs::config_dir()?.join("ipakeep").join(STAGING_DIRECTORY);
-    let directory = staged_package_directory(&staging, Path::new(url))?;
-    let bytes = std::fs::read(url)
+    take_staged_package_at(&staging, Path::new(url))
+}
+
+fn take_staged_package_at(
+    staging: &Path,
+    package: &Path,
+) -> Option<Result<Vec<u8>, AppStoreError>> {
+    let directory = staged_package_directory(staging, package)?;
+    let bytes = std::fs::read(package)
         .map_err(|error| AppStoreError::NetworkError(format!("read staged package: {error}")));
     if let Err(error) = std::fs::remove_dir_all(&directory) {
         tracing::warn!(
@@ -330,5 +337,24 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn reads_and_removes_a_staged_package() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let staging = root.path().join(STAGING_DIRECTORY);
+        let download = staging.join("download-2");
+        std::fs::create_dir_all(&download).expect("download directory");
+        let package = download.join("package.ipa");
+        std::fs::write(&package, b"staged IPA").expect("package");
+
+        assert_eq!(
+            take_staged_package_at(&staging, &package)
+                .expect("package is staged")
+                .expect("package can be read"),
+            b"staged IPA"
+        );
+        assert!(!download.exists());
+        assert!(take_staged_package("https://example.test/package.ipa").is_none());
     }
 }
