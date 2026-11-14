@@ -492,4 +492,27 @@ mod tests {
                 .contains("missing CFBundleExecutable")
         );
     }
+
+    #[test]
+    fn corrupt_manifest_entry_header_is_reported() {
+        let mut bytes = ipa(&[
+            ("Payload/Game.app/Info.plist", &info()),
+            (
+                "Payload/Game.app/SC_Info/Manifest.plist",
+                &manifest(&["SC_Info/Game.sinf"], &[]),
+            ),
+        ]);
+        let local_headers = bytes
+            .windows(4)
+            .enumerate()
+            .filter_map(|(index, window)| (window == b"PK\x03\x04").then_some(index))
+            .collect::<Vec<_>>();
+        bytes[local_headers[1]] = 0;
+
+        assert!(
+            targets(&bytes, &sinfs(1))
+                .unwrap_err()
+                .contains("Invalid local file header")
+        );
+    }
 }
