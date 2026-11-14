@@ -8,6 +8,7 @@ use ipakeep::domain::repository::{
 };
 use ipakeep::infrastructure::appstore::bag::resolve_auth_endpoint;
 use ipakeep::infrastructure::appstore::{AppleApiConfig, AppleAppStoreRepository};
+use ipakeep::infrastructure::developer::DeveloperClient;
 use ipakeep::infrastructure::http::AppleHttpClient;
 use ipakeep::infrastructure::http::plist_codec::encode_plist;
 use std::sync::Arc;
@@ -30,6 +31,11 @@ fn test_account() -> Account {
         grandslam_continuation: None,
         cookies: Vec::new(),
     }
+}
+
+#[tokio::test]
+async fn developer_client_rejects_missing_grandslam_state_before_network() {
+    assert!(DeveloperClient::for_account(&test_account()).await.is_err());
 }
 
 fn test_config(server: &MockServer) -> AppleApiConfig {

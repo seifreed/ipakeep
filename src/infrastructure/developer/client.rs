@@ -17,6 +17,9 @@ use std::future::Future;
 const BASE_URL: &str = "https://developerservices2.apple.com/services/QH65B2/";
 const XCODE_TOKEN_APP: &str = "com.apple.gs.xcode.auth";
 
+#[cfg(test)]
+static TEST_APP_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Live client bound to a logged-in account.
 pub struct DeveloperClient {
     http: AppleHttpClient,
@@ -35,10 +38,14 @@ impl DeveloperClient {
     pub async fn for_account(account: &Account) -> Result<Self, String> {
         let http = AppleHttpClient::new().map_err(|e| e.to_string())?;
         let grandslam = GrandSlamClient::new(http.client().clone());
-        let gs_token = grandslam
-            .request_app_token(account, XCODE_TOKEN_APP)
-            .await
-            .map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        let test_token = TEST_APP_TOKEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        #[cfg(not(test))]
+        let test_token = None;
+        let gs_token = app_token_for_account(&grandslam, account, test_token).await?;
         Self::finish_authentication(account, http, gs_token, |client| async move {
             resolve_anisette(&client).await
         })
@@ -177,6 +184,20 @@ impl DeveloperClient {
                 .await?,
         )
     }
+}
+
+async fn app_token_for_account(
+    grandslam: &GrandSlamClient,
+    account: &Account,
+    test_token: Option<String>,
+) -> Result<String, String> {
+    if let Some(token) = test_token {
+        return Ok(token);
+    }
+    grandslam
+        .request_app_token(account, XCODE_TOKEN_APP)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -353,6 +374,42 @@ mod tests {
         assert_eq!(client.identity_id, "12345");
         assert_eq!(client.gs_token, "gs-token");
         assert_eq!(client.anisette.headers["X-Apple-I-MD"], "otp");
+    }
+
+    #[tokio::test]
+    async fn for_account_uses_local_anisette_service_after_app_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "X-Apple-I-MD": "remote-md",
+                "X-Apple-I-MD-M": "remote-md-m"
+            })))
+            .mount(&server)
+            .await;
+        TEST_APP_TOKEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace("app-token".into());
+        crate::infrastructure::grandslam::set_test_remote_url(Some(server.uri()));
+
+        let result = DeveloperClient::for_account(&account()).await;
+
+        crate::infrastructure::grandslam::set_test_remote_url(None);
+        let client = result.expect("developer client");
+        assert_eq!(client.gs_token, "app-token");
+        assert_eq!(client.anisette.headers["X-Apple-I-MD"], "remote-md");
+    }
+
+    #[tokio::test]
+    async fn app_token_errors_are_reported_without_account_state() {
+        let grandslam = GrandSlamClient::new(reqwest::Client::new());
+
+        assert!(
+            app_token_for_account(&grandslam, &account(), None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

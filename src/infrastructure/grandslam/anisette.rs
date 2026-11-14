@@ -7,7 +7,7 @@
 mod fields;
 mod time;
 
-#[cfg(not(ipakeep_modern_adi))]
+#[cfg(any(not(ipakeep_modern_adi), test))]
 mod remote;
 
 use crate::domain::error::AppStoreError;
@@ -17,7 +17,7 @@ use crate::infrastructure::exec::observed_output;
 use fields::current_locale;
 #[cfg(any(ipakeep_modern_adi, test))]
 use fields::{AnisetteFields, build_cpd, build_headers};
-#[cfg(not(ipakeep_modern_adi))]
+#[cfg(any(not(ipakeep_modern_adi), test))]
 use remote::fetch_remote;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -84,6 +84,10 @@ struct OtpTokens {
 /// or returns an incomplete payload.
 #[cfg(ipakeep_modern_adi)]
 pub async fn resolve_anisette(_client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
+    #[cfg(test)]
+    if let Some(result) = test_remote(_client).await {
+        return result;
+    }
     super::modern_adi::generate().await
 }
 
@@ -94,6 +98,10 @@ pub async fn resolve_anisette(_client: &reqwest::Client) -> Result<AnisetteData,
 ///
 /// Returns an error when no usable Anisette provider is available.
 pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
+    #[cfg(test)]
+    if let Some(result) = test_remote(client).await {
+        return result;
+    }
     if let Ok(url) = std::env::var("IPAKEEP_ANISETTE_URL") {
         let url = url.trim();
         if !url.is_empty() {
@@ -113,6 +121,25 @@ pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, 
         let url = super::anisette_docker::ensure_local_server(client).await?;
         fetch_remote(client, &url).await
     }
+}
+
+#[cfg(test)]
+static TEST_REMOTE_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_test_remote_url(url: Option<String>) {
+    *TEST_REMOTE_URL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = url;
+}
+
+#[cfg(test)]
+async fn test_remote(client: &reqwest::Client) -> Option<Result<AnisetteData, AppStoreError>> {
+    let url = TEST_REMOTE_URL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()?;
+    Some(remote::fetch_remote(client, &url).await)
 }
 
 #[cfg(any(ipakeep_modern_adi, test))]
