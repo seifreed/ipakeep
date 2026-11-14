@@ -1033,6 +1033,32 @@ mod tests {
     }
 
     #[test]
+    fn arm_encryption_info_rejects_invalid_headers_commands_and_regions() {
+        let mut bad_cpu = thin_arm64_macho(1);
+        bad_cpu[4..8].copy_from_slice(&CPU_TYPE_ARM.to_le_bytes());
+        assert!(arm_encryption_info(&bad_cpu).is_err());
+
+        let mut bad_command = thin_arm64_macho(1);
+        bad_command[36..40].copy_from_slice(&4u32.to_le_bytes());
+        assert!(arm_encryption_info(&bad_command).is_err());
+
+        let unsupported_cryptid = thin_arm64_macho(2);
+        assert!(arm_encryption_info(&unsupported_cryptid).is_err());
+
+        let mut empty_region = thin_arm64_macho(1);
+        empty_region[44..48].copy_from_slice(&0u32.to_le_bytes());
+        assert!(arm_encryption_info(&empty_region).is_err());
+
+        let mut out_of_bounds = thin_arm64_macho(1);
+        out_of_bounds[40..44].copy_from_slice(&4097u32.to_le_bytes());
+        assert!(arm_encryption_info(&out_of_bounds).is_err());
+
+        let mut cryptid_before_region = thin_arm64_macho(1);
+        cryptid_before_region[40..44].copy_from_slice(&16u32.to_le_bytes());
+        assert!(arm_encryption_info(&cryptid_before_region).is_err());
+    }
+
+    #[test]
     fn derive_work16_rejects_wrong_credential_length() {
         let sinf = synthetic_sinf(&[4, 0, 0, 0]);
         // 15-byte credential is rejected before any AES work.
