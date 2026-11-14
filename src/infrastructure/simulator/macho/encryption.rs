@@ -86,3 +86,86 @@ fn slice_is_encrypted(file: &mut fs::File, base: u64) -> Result<bool, String> {
     }
     Ok(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const CPU_TYPE_ARM64: u32 = 0x0100_000c;
+
+    fn macho(command: Option<(u32, u32, u32)>) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let (cmd, cmdsize, cryptid) = command.unwrap_or((0, 0, 0));
+        for value in [
+            MH_MAGIC_64,
+            CPU_TYPE_ARM64,
+            0,
+            2,
+            u32::from(command.is_some()),
+            cmdsize,
+            0,
+            0,
+            cmd,
+            cmdsize,
+            0,
+            0,
+            cryptid,
+            0,
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn is_encrypted(bytes: &[u8]) -> Result<bool, String> {
+        let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = dir.path().join("binary");
+        fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        macho_is_encrypted(&path)
+    }
+
+    #[test]
+    fn detects_32_and_64_bit_encryption_commands_and_cryptid() {
+        for cmd in [LC_ENCRYPTION_INFO, LC_ENCRYPTION_INFO_64] {
+            assert!(is_encrypted(&macho(Some((cmd, 24, 1)))).unwrap());
+            assert!(!is_encrypted(&macho(Some((cmd, 24, 0)))).unwrap());
+        }
+    }
+
+    #[test]
+    fn skips_non_arm64_and_unencrypted_machos() {
+        assert!(!is_encrypted(b"data").unwrap());
+        let mut other_arch = macho(None);
+        other_arch[4..8].copy_from_slice(&0x0100_0007_u32.to_le_bytes());
+        assert!(!is_encrypted(&other_arch).unwrap());
+        assert!(!is_encrypted(&macho(None)).unwrap());
+        assert!(!is_encrypted(&macho(Some((0x99, 8, 0)))).unwrap());
+    }
+
+    #[test]
+    fn malformed_headers_and_commands_return_errors_or_false_at_eof() {
+        assert!(
+            is_encrypted(&macho(Some((0, 0, 1))))
+                .unwrap_err()
+                .contains("zero-size")
+        );
+        assert!(is_encrypted(&macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))[..34]).is_err());
+        assert!(!is_encrypted(&macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))[..8]).unwrap());
+    }
+
+    #[test]
+    fn recursively_finds_encrypted_binaries_and_ignores_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("Frameworks");
+        fs::create_dir(&nested).unwrap();
+        let encrypted = nested.join("encrypted");
+        fs::write(&encrypted, macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))).unwrap();
+        fs::write(dir.path().join("plain"), b"not a Mach-O").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&encrypted, dir.path().join("linked")).unwrap();
+
+        assert_eq!(encrypted_macho_files(dir.path()).unwrap(), [encrypted]);
+        assert!(encrypted_macho_files(&dir.path().join("missing")).is_err());
+    }
+}
