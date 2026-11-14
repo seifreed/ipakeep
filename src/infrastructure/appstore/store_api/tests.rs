@@ -1,4 +1,4 @@
-use super::parsing::external_version_ids;
+use super::parsing::{external_version_ids, parse_download_item};
 use super::*;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -92,6 +92,54 @@ fn external_version_ids_parses_csv_array_and_number() {
         vec!["10", "20"]
     );
     assert_eq!(external_version_ids(&serde_json::json!(99)), vec!["99"]);
+}
+
+#[test]
+fn parse_download_item_defaults_missing_optional_data_and_requires_url() {
+    assert!(
+        parse_download_item(&serde_json::json!({}))
+            .unwrap()
+            .is_none()
+    );
+
+    let item = parse_download_item(&serde_json::json!({ "URL": "https://example.test/app" }))
+        .unwrap()
+        .unwrap();
+    assert_eq!(item.url, "https://example.test/app");
+    assert!(item.md5.is_empty());
+    assert!(item.sinfs.is_empty());
+    assert!(item.metadata.is_empty());
+}
+
+#[test]
+fn parse_download_item_filters_invalid_sinfs_and_reports_bad_base64() {
+    let item = parse_download_item(&serde_json::json!({
+        "URL": "https://example.test/app",
+        "sinfs": [
+            { "id": "invalid", "sinf": "AQ==" },
+            { "id": 7, "sinf": "AQ==" },
+            { "id": 8, "sinf": "" },
+            { "id": 9, "sinf": 42 }
+        ],
+        "metadata": { "bundleId": "com.example.app" }
+    }))
+    .unwrap()
+    .unwrap();
+    assert_eq!(item.sinfs.len(), 3);
+    assert_eq!(item.sinfs[0].data, [1]);
+    assert!(item.sinfs[1].data.is_empty());
+    assert!(item.sinfs[2].data.is_empty());
+    assert_eq!(item.metadata["bundleId"], "com.example.app");
+
+    let error = parse_download_item(&serde_json::json!({
+        "URL": "https://example.test/app",
+        "sinfs": [{ "id": 7, "sinf": "%%%" }]
+    }))
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::domain::error::AppStoreError::Unexpected(_)
+    ));
 }
 
 #[test]
