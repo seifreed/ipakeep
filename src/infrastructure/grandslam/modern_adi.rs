@@ -537,6 +537,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_file_as_the_helper_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let file = directory.path().join("not-a-directory");
+        std::fs::write(&file, b"file").expect("regular file");
+
+        assert!(ensure_private_directory(&file).is_err());
+    }
+
+    #[test]
     fn rejects_line_breaks_in_header_values() {
         let headers = HashMap::from([("X-Apple-I-MD".into(), "token\nInjected: yes".into())]);
 
@@ -561,10 +570,25 @@ mod tests {
     fn installed_helper_must_match_expected_bytes() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("helper");
-        std::fs::write(&path, b"different").expect("helper file");
+        std::fs::write(&path, b"short").expect("short helper file");
+        assert!(matches!(
+            verify_helper(&path, b"expected"),
+            Err(AppStoreError::NetworkError(_))
+        ));
+        std::fs::write(&path, b"tampered").expect("tampered helper file");
 
         assert!(matches!(
             verify_helper(&path, b"expected"),
+            Err(AppStoreError::NetworkError(_))
+        ));
+    }
+
+    #[test]
+    fn temporary_helper_requires_an_existing_private_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+
+        assert!(matches!(
+            write_temporary_helper(&directory.path().join("missing"), b"helper"),
             Err(AppStoreError::NetworkError(_))
         ));
     }
