@@ -390,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn configured_authentication_calls_are_recorded() {
-        let (repo, account, _app, _item, _version, _phone) = configured_repo();
+        let (repo, _account, _app, _item, _version, _phone) = configured_repo();
 
         let _ = repo.authenticate("email", "pass", "guid").await;
         let _ = repo
