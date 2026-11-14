@@ -168,6 +168,16 @@ fn profile_application_id_requires_a_valid_string_pattern() {
     assert!(wrong_type.app_id("com.example.app").is_none());
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn profile_reader_rejects_invalid_cms_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("invalid.mobileprovision");
+    fs::write(&path, b"not a provisioning profile").unwrap();
+
+    assert!(Profile::read(&path).is_err());
+}
+
 #[test]
 fn non_bundle_signing_targets_do_not_get_bundle_entitlements() {
     assert_eq!(
