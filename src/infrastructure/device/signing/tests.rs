@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn security_command_output_is_parsed_as_a_provisioning_profile() {
+    let mut entitlements = Dictionary::new();
+    entitlements.insert(
+        "application-identifier".into(),
+        Value::String("PREFIX.*".into()),
+    );
+    let mut profile = Dictionary::new();
+    profile.insert("Entitlements".into(), Value::Dictionary(entitlements));
+    let mut stdout = Vec::new();
+    Value::Dictionary(profile)
+        .to_writer_xml(&mut stdout)
+        .expect("encode profile plist");
+    let mut output = Command::new("true").output().expect("successful command");
+    output.stdout = stdout;
+
+    let parsed = Profile::from_security_output(Path::new("profile.mobileprovision"), &output)
+        .expect("provisioning profile");
+
+    assert_eq!(
+        parsed.app_id("com.example.app").as_deref(),
+        Some("PREFIX.com.example.app")
+    );
+}
+
 fn profile(identifier: &str) -> Profile {
     Profile {
         path: PathBuf::from("test.mobileprovision"),

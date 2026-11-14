@@ -55,7 +55,18 @@ pub struct ProvisionResult {
 /// Returns an error if auth, any Developer Services call, or CSR generation
 /// fails.
 pub async fn provision(req: &ProvisionRequest<'_>) -> Result<ProvisionResult, String> {
-    let client = DeveloperClient::for_account(req.account).await?;
+    provision_with_factory(req, || DeveloperClient::for_account(req.account)).await
+}
+
+async fn provision_with_factory<F, Fut>(
+    req: &ProvisionRequest<'_>,
+    make_client: F,
+) -> Result<ProvisionResult, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<DeveloperClient, String>>,
+{
+    let client = make_client().await?;
     provision_with_client(req, &client).await
 }
 

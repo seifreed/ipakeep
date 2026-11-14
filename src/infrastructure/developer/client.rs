@@ -326,9 +326,11 @@ mod tests {
             app_id_id: "APP",
         };
 
-        let result = super::super::provision_with_client(&request, &client(&server))
-            .await
-            .expect("local provisioning flow");
+        let result = super::super::provision_with_factory(&request, || {
+            std::future::ready(Ok(client(&server)))
+        })
+        .await
+        .expect("local provisioning flow");
 
         assert_eq!(result.team_id, "TEAM");
         assert_eq!(result.certificate_der, [1, 2, 3]);

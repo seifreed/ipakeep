@@ -23,6 +23,10 @@ impl Profile {
         command.args(["cms", "-D", "-i"]).arg(path);
         let output = observed_output(&mut command)
             .map_err(|error| format!("decoding {}: {error}", path.display()))?;
+        Self::from_security_output(path, &output)
+    }
+
+    fn from_security_output(path: &Path, output: &std::process::Output) -> Result<Self, String> {
         if !output.status.success() {
             return Err(format!(
                 "{}: {}",
