@@ -284,21 +284,13 @@ impl AppleHttpClient {
         // HTML page. These carry no account data; surface them with a null body so
         // the caller can retry instead of failing on the undecodable HTML.
         if should_preserve_server_error(preserve_server_errors, status) {
-            return Ok(HttpResponse {
-                status,
-                headers: resp_headers,
-                body: serde_json::Value::Null,
-            });
+            return Ok(null_plist_response(status, resp_headers));
         }
 
         ensure_success_status("POST plist", status, &body_bytes)?;
 
         if status == reqwest::StatusCode::NO_CONTENT && body_bytes.is_empty() {
-            return Ok(HttpResponse {
-                status,
-                headers: resp_headers,
-                body: serde_json::Value::Null,
-            });
+            return Ok(null_plist_response(status, resp_headers));
         }
 
         let body = decode_plist_body(status, &resp_headers, &body_bytes)?;
@@ -355,6 +347,17 @@ fn should_preserve_server_error(preserve: bool, status: reqwest::StatusCode) -> 
         && (status.is_server_error()
             || status.is_redirection()
             || status == reqwest::StatusCode::NOT_FOUND)
+}
+
+fn null_plist_response(
+    status: reqwest::StatusCode,
+    headers: reqwest::header::HeaderMap,
+) -> HttpResponse<serde_json::Value> {
+    HttpResponse {
+        status,
+        headers,
+        body: serde_json::Value::Null,
+    }
 }
 
 fn decode_get_body<T: DeserializeOwned>(
