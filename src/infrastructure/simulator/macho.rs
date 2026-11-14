@@ -17,9 +17,9 @@ pub(super) use encryption::encrypted_macho_files;
 pub(super) use encryption::{LC_ENCRYPTION_INFO_64, macho_is_encrypted};
 pub(super) use fat::FAT_MAGIC;
 use fat::{FAT_MAGIC_64, arm64_fat_bases};
-use reader::read_le_u32;
 #[cfg(test)]
 pub(super) use reader::read_mach_header;
+use reader::{MachHeader, read_le_u32};
 pub(super) use reader::{read_load_command, read_mach_header_at, read_platform_at};
 
 pub(super) const MH_MAGIC_64: u32 = 0xfeed_facf;
@@ -101,21 +101,9 @@ pub(super) fn arm64_slice_bases(file: &mut fs::File) -> Result<Vec<u64>, String>
 ///
 /// Returns an error if a load command is malformed or a write fails.
 fn convert_slice_at(file: &mut fs::File, base: u64, path: &Path) -> Result<bool, String> {
-    file.seek(SeekFrom::Start(base))
-        .map_err(|e| e.to_string())?;
-    let mut header_bytes = [0_u8; MACH_HEADER_64_LEN];
-    match file.read_exact(&mut header_bytes) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(false),
-        Err(error) => return Err(error.to_string()),
-    }
-
-    let magic = read_le_u32(&header_bytes, 0)?;
-    let cpu_type = read_le_u32(&header_bytes, 4)?;
-    if magic != MH_MAGIC_64 || cpu_type != CPU_TYPE_ARM64 {
+    let Some(header_bytes) = read_arm64_header_at(file, base)? else {
         return Ok(false);
-    }
-
+    };
     let ncmds = read_le_u32(&header_bytes, 16)?;
 
     let mut offset = base + MACH_HEADER_64_SIZE;
@@ -140,6 +128,27 @@ fn convert_slice_at(file: &mut fs::File, base: u64, path: &Path) -> Result<bool,
     // sizeofcmds does not overrun section data.
     insert_build_version(file, base, offset, &header_bytes, path)?;
     Ok(true)
+}
+
+fn read_arm64_header_at(
+    file: &mut fs::File,
+    base: u64,
+) -> Result<Option<[u8; MACH_HEADER_64_LEN]>, String> {
+    file.seek(SeekFrom::Start(base))
+        .map_err(|e| e.to_string())?;
+    let mut header_bytes = [0_u8; MACH_HEADER_64_LEN];
+    match file.read_exact(&mut header_bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    }
+
+    let magic = read_le_u32(&header_bytes, 0)?;
+    let cpu_type = read_le_u32(&header_bytes, 4)?;
+    if magic != MH_MAGIC_64 || cpu_type != CPU_TYPE_ARM64 {
+        return Ok(None);
+    }
+    Ok(Some(header_bytes))
 }
 
 /// Patch `platform`/`minos`/`sdk` of an existing `LC_BUILD_VERSION` in place,
@@ -217,28 +226,19 @@ pub(super) fn is_arm64_simulator_binary(path: &Path) -> Result<bool, String> {
     let Some(header) = header else {
         return Ok(false);
     };
+    find_simulator_build_version(&mut file, base, &header, path)
+}
+
+fn find_simulator_build_version(
+    file: &mut fs::File,
+    base: u64,
+    header: &MachHeader,
+    path: &Path,
+) -> Result<bool, String> {
     let mut offset = base + MACH_HEADER_64_SIZE;
     let command_limit = offset + u64::from(header.sizeofcmds);
     for _ in 0..header.ncmds {
-        if offset + 8 > command_limit {
-            return Err(format!(
-                "{}: load command header extends beyond sizeofcmds",
-                path.display()
-            ));
-        }
-        let command = read_load_command(&mut file, offset)?;
-        if command.cmdsize == 0 {
-            return Err(format!(
-                "{}: invalid zero-size load command at {offset:#x}",
-                path.display()
-            ));
-        }
-        if offset + u64::from(command.cmdsize) > command_limit {
-            return Err(format!(
-                "{}: load command extends beyond sizeofcmds",
-                path.display()
-            ));
-        }
+        let command = read_bounded_load_command(file, offset, command_limit, path)?;
         if command.cmd == LC_BUILD_VERSION {
             if command.cmdsize < BUILD_VERSION_COMMAND_SIZE {
                 return Err(format!(
@@ -246,9 +246,37 @@ pub(super) fn is_arm64_simulator_binary(path: &Path) -> Result<bool, String> {
                     path.display()
                 ));
             }
-            return Ok(read_platform_at(&mut file, offset)? == PLATFORM_IOSSIMULATOR);
+            return Ok(read_platform_at(file, offset)? == PLATFORM_IOSSIMULATOR);
         }
         offset += u64::from(command.cmdsize);
     }
     Ok(false)
+}
+
+fn read_bounded_load_command(
+    file: &mut fs::File,
+    offset: u64,
+    command_limit: u64,
+    path: &Path,
+) -> Result<reader::LoadCommand, String> {
+    if offset + 8 > command_limit {
+        return Err(format!(
+            "{}: load command header extends beyond sizeofcmds",
+            path.display()
+        ));
+    }
+    let command = read_load_command(file, offset)?;
+    if command.cmdsize == 0 {
+        return Err(format!(
+            "{}: invalid zero-size load command at {offset:#x}",
+            path.display()
+        ));
+    }
+    if offset + u64::from(command.cmdsize) > command_limit {
+        return Err(format!(
+            "{}: load command extends beyond sizeofcmds",
+            path.display()
+        ));
+    }
+    Ok(command)
 }
