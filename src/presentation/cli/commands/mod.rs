@@ -111,8 +111,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_app_id;
+    use super::{resolve_app_id, save_artifact};
     use crate::domain::entity::test_support::app;
+    use crate::domain::error::AppStoreError;
     use crate::domain::repository::FakeAppStoreRepository;
     use crate::infrastructure::observability::log_capture::LogCapture;
 
@@ -134,5 +135,39 @@ mod tests {
         let logs = capture.contents();
         assert!(logs.contains("app.reference.resolved"));
         assert!(!logs.contains("secret-app-name"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resolve_app_id_formats_missing_and_repository_errors() {
+        let missing = FakeAppStoreRepository::new()
+            .with_lookup_result(Ok(None))
+            .with_search_result(Ok(Vec::new()));
+        assert_eq!(
+            resolve_app_id(&missing, "unknown-app", "us")
+                .await
+                .unwrap_err(),
+            "no app found matching 'unknown-app'"
+        );
+
+        let failed = FakeAppStoreRepository::new()
+            .with_lookup_result(Err(AppStoreError::NetworkError("offline".into())));
+        assert!(
+            resolve_app_id(&failed, "com.example.app", "us")
+                .await
+                .unwrap_err()
+                .contains("offline")
+        );
+    }
+
+    #[test]
+    fn save_artifact_reports_a_write_failure_and_logs_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+
+        let error = save_artifact(directory.path(), b"artifact").unwrap_err();
+
+        assert!(error.starts_with("failed to write file:"));
+        assert!(capture.contents().contains("download.artifact.save_failed"));
     }
 }
