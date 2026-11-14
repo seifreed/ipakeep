@@ -110,6 +110,101 @@ async fn get_json_with_headers_decodes_the_response_and_checks_conversion() {
 }
 
 #[tokio::test]
+async fn get_json_and_plist_report_success_body_decode_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/invalid-json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/invalid-plist"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not a plist or JSON"))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    assert!(
+        client
+            .get_json::<serde_json::Value>(&format!("{}/invalid-json", server.uri()))
+            .await
+            .err()
+            .expect("invalid JSON response")
+            .to_string()
+            .contains("response decode failed")
+    );
+    assert!(
+        client
+            .post_plist_bytes(&format!("{}/invalid-plist", server.uri()), b"request", None)
+            .await
+            .err()
+            .expect("invalid plist response")
+            .to_string()
+            .contains("plist decode failed")
+    );
+}
+
+#[tokio::test]
+async fn form_and_download_requests_forward_custom_headers() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/form"))
+        .and(header("x-form", "present"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/file"))
+        .and(header("x-download", "present"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ipa".to_vec()))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let form_headers = HashMap::from([("x-form".into(), "present".into())]);
+    let response = client
+        .post_form_with_headers(
+            &format!("{}/form", server.uri()),
+            &HashMap::from([("term".into(), "app".into())]),
+            Some(&form_headers),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.body["ok"], true);
+
+    let download_headers = HashMap::from([("x-download".into(), "present".into())]);
+    assert_eq!(
+        client
+            .download_file(&format!("{}/file", server.uri()), Some(&download_headers))
+            .await
+            .unwrap(),
+        b"ipa"
+    );
+}
+
+#[tokio::test]
+async fn seeded_cookies_are_sent_to_their_origin() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/cookie"))
+        .and(header("cookie", "session=value"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    client
+        .seed_cookies(&["session=value; Path=/".into()], &server.uri())
+        .unwrap();
+    assert!(
+        client
+            .get_json::<serde_json::Value>(&format!("{}/cookie", server.uri()))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn auth_plist_preserves_retryable_server_errors_and_empty_204() {
     let server = MockServer::start().await;
     for (route, status) in [("/auth-error", 500), ("/empty", 204)] {
