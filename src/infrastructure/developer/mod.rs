@@ -56,7 +56,13 @@ pub struct ProvisionResult {
 /// fails.
 pub async fn provision(req: &ProvisionRequest<'_>) -> Result<ProvisionResult, String> {
     let client = DeveloperClient::for_account(req.account).await?;
+    provision_with_client(req, &client).await
+}
 
+async fn provision_with_client(
+    req: &ProvisionRequest<'_>,
+    client: &DeveloperClient,
+) -> Result<ProvisionResult, String> {
     let team_id = match req.team_id {
         Some(id) => id.to_string(),
         None => client

@@ -253,4 +253,102 @@ mod tests {
             .await;
         assert!(client(&failed).list_teams().await.is_err());
     }
+
+    fn account() -> Account {
+        Account {
+            email: "test@example.com".into(),
+            name: "Test User".into(),
+            password_token: String::new(),
+            directory_services_id: "12345".into(),
+            store_front: String::new(),
+            pod: String::new(),
+            idms_token: None,
+            dsid: None,
+            adsid: None,
+            grandslam_session_key: None,
+            grandslam_continuation: None,
+            cookies: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn provision_rejects_missing_grandslam_state_before_network_access() {
+        let account = account();
+        let request = super::super::ProvisionRequest {
+            account: &account,
+            team_id: Some("TEAM"),
+            device_udid: "UDID",
+            device_name: "device",
+            app_id_id: "APP",
+        };
+
+        let error = super::super::provision(&request)
+            .await
+            .err()
+            .expect("incomplete account must fail before contacting Apple");
+
+        assert!(error.contains("GrandSlam"));
+    }
+
+    #[tokio::test]
+    async fn provision_with_client_runs_the_complete_local_flow() {
+        let server = MockServer::start().await;
+        mount_plist(
+            &server,
+            "ios/listDevices.action",
+            json!({"devices": [{"deviceId": "1", "deviceNumber": "UDID"}]}),
+        )
+        .await;
+        mount_plist(
+            &server,
+            "ios/submitDevelopmentCSR.action",
+            json!({"certRequest": {"serialNumber": "01", "certContent": "AQID"}}),
+        )
+        .await;
+        mount_plist(
+            &server,
+            "ios/downloadTeamProvisioningProfile.action",
+            json!({"provisioningProfile": {"encodedProfile": "UFJPRklMRQ=="}}),
+        )
+        .await;
+        let account = account();
+        let request = super::super::ProvisionRequest {
+            account: &account,
+            team_id: Some("TEAM"),
+            device_udid: "UDID",
+            device_name: "device",
+            app_id_id: "APP",
+        };
+
+        let result = super::super::provision_with_client(&request, &client(&server))
+            .await
+            .expect("local provisioning flow");
+
+        assert_eq!(result.team_id, "TEAM");
+        assert_eq!(result.certificate_der, [1, 2, 3]);
+        assert_eq!(result.certificate_serial, "01");
+        assert_eq!(result.mobileprovision, b"PROFILE");
+        assert!(!result.key_pem.is_empty());
+    }
+
+    #[tokio::test]
+    async fn provision_requires_a_team_when_account_has_none() {
+        let server = MockServer::start().await;
+        mount_plist(&server, "listTeams.action", json!({"teams": []})).await;
+        let account = account();
+        let request = super::super::ProvisionRequest {
+            account: &account,
+            team_id: None,
+            device_udid: "UDID",
+            device_name: "device",
+            app_id_id: "APP",
+        };
+
+        let error = super::super::provision_with_client(&request, &client(&server))
+            .await
+            .err()
+            .expect("empty team list must fail");
+
+        assert!(error.contains("no development teams"));
+    }
 }
