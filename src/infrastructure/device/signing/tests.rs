@@ -280,11 +280,14 @@ fn prepare_target_reads_real_codesign_entitlements_and_embeds_matching_profile()
 fn signs_nested_code_and_app_using_matching_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let (app, capabilities) = signed_test_app(dir.path());
-    let mut profile = profile("PREFIX.com.example.test");
-    profile.entitlements.extend(capabilities);
-    profile.path = dir.path().join("profile.mobileprovision");
-    fs::write(&profile.path, b"profile selected for test bundle").unwrap();
-    let profiles = [profile];
+    let framework = app.join("Frameworks");
+    fs::create_dir(&framework).unwrap();
+    fs::copy("/bin/echo", framework.join("Support.dylib")).unwrap();
+    let mut signing_profile = profile("PREFIX.com.example.test");
+    signing_profile.entitlements.extend(capabilities);
+    signing_profile.path = dir.path().join("profile.mobileprovision");
+    fs::write(&signing_profile.path, b"profile selected for test bundle").unwrap();
+    let profiles = [signing_profile];
     let request = crate::infrastructure::device::InstallRequest {
         ipa: Path::new("unused.ipa"),
         device: "device",
@@ -305,6 +308,25 @@ fn signs_nested_code_and_app_using_matching_profiles() {
         extract_entitlements(&app)
             .unwrap()
             .contains("com.apple.developer.healthkit")
+    );
+
+    let empty_app = signed_app_without_entitlements(dir.path());
+    let mut empty_profile = profile("PREFIX.com.example.empty");
+    empty_profile.path = dir.path().join("empty.mobileprovision");
+    fs::write(&empty_profile.path, b"empty app profile").unwrap();
+    let path = prepare_target(&empty_app, &[empty_profile], None, dir.path(), 1)
+        .unwrap()
+        .unwrap();
+    let entitlements = Value::from_file(path).unwrap();
+    assert_eq!(
+        entitlements.as_dictionary().unwrap()["application-identifier"],
+        Value::String("PREFIX.com.example.empty".into())
+    );
+    assert!(
+        !entitlements
+            .as_dictionary()
+            .unwrap()
+            .contains_key("com.apple.developer.healthkit")
     );
 }
 
@@ -341,4 +363,30 @@ fn signed_test_app(root: &Path) -> (PathBuf, Dictionary) {
         .unwrap();
     assert!(status.success());
     (app, capabilities)
+}
+
+#[cfg(target_os = "macos")]
+fn signed_app_without_entitlements(root: &Path) -> PathBuf {
+    let app = root.join("Empty.app");
+    fs::create_dir(&app).unwrap();
+    fs::copy("/bin/echo", app.join("Test")).unwrap();
+    Value::Dictionary(Dictionary::from_iter([
+        (
+            "CFBundleIdentifier".to_string(),
+            Value::String("com.example.empty".into()),
+        ),
+        (
+            "CFBundleExecutable".to_string(),
+            Value::String("Test".into()),
+        ),
+    ]))
+    .to_file_xml(app.join("Info.plist"))
+    .unwrap();
+    let status = Command::new("/usr/bin/codesign")
+        .args(["-f", "-s", "-"])
+        .arg(&app)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    app
 }
