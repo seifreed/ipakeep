@@ -18,6 +18,7 @@ const XCODE_TOKEN_APP: &str = "com.apple.gs.xcode.auth";
 /// Live client bound to a logged-in account.
 pub struct DeveloperClient {
     http: AppleHttpClient,
+    base_url: String,
     identity_id: String,
     gs_token: String,
     anisette: AnisetteData,
@@ -49,6 +50,7 @@ impl DeveloperClient {
 
         Ok(Self {
             http,
+            base_url: BASE_URL.into(),
             identity_id,
             gs_token,
             anisette,
@@ -60,7 +62,7 @@ impl DeveloperClient {
         action: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        let url = format!("{BASE_URL}{action}");
+        let url = format!("{}{action}", self.base_url);
         let headers: HashMap<String, String> =
             request::headers(&self.identity_id, &self.gs_token, &self.anisette);
         let response = self
@@ -146,5 +148,109 @@ impl DeveloperClient {
                 .post("ios/downloadTeamProvisioningProfile.action", &body)
                 .await?,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infrastructure::http::plist_codec::encode_plist;
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client(server: &MockServer) -> DeveloperClient {
+        DeveloperClient {
+            http: AppleHttpClient::new().expect("HTTP client"),
+            base_url: format!("{}/services/QH65B2/", server.uri()),
+            identity_id: "12345".into(),
+            gs_token: "token".into(),
+            anisette: AnisetteData {
+                headers: HashMap::new(),
+                cpd: json!({}),
+            },
+        }
+    }
+
+    async fn mount_plist(server: &MockServer, action: &str, body: serde_json::Value) {
+        let plist = encode_plist(&body).expect("plist response");
+        Mock::given(method("POST"))
+            .and(path(format!("/services/QH65B2/{action}")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(plist, "application/x-apple-plist"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn developer_operations_parse_local_plist_responses() {
+        let server = MockServer::start().await;
+        mount_plist(
+            &server,
+            "listTeams.action",
+            json!({"teams": [{"teamId": "TEAM", "name": "Example"}]}),
+        )
+        .await;
+        mount_plist(
+            &server,
+            "ios/listDevices.action",
+            json!({"devices": [{"deviceId": "1", "deviceNumber": "UDID"}]}),
+        )
+        .await;
+        mount_plist(
+            &server,
+            "ios/submitDevelopmentCSR.action",
+            json!({"certRequest": {"serialNumber": "01", "certContent": "AQID"}}),
+        )
+        .await;
+        mount_plist(
+            &server,
+            "ios/downloadTeamProvisioningProfile.action",
+            json!({"provisioningProfile": {"encodedProfile": "UFJPRklMRQ=="}}),
+        )
+        .await;
+
+        let client = client(&server);
+        assert_eq!(client.list_teams().await.expect("teams")[0].id, "TEAM");
+        assert_eq!(
+            client.list_devices("TEAM").await.expect("devices")[0].udid,
+            "UDID"
+        );
+        client
+            .register_device("TEAM", "UDID", "device")
+            .await
+            .expect("existing device is a no-op");
+        let certificate = client
+            .submit_csr("TEAM", "csr", "machine")
+            .await
+            .expect("certificate");
+        assert_eq!(certificate.der, [1, 2, 3]);
+        assert_eq!(
+            client
+                .download_profile("TEAM", "APP")
+                .await
+                .expect("profile"),
+            b"PROFILE"
+        );
+    }
+
+    #[tokio::test]
+    async fn register_device_adds_missing_device_and_surfaces_http_errors() {
+        let server = MockServer::start().await;
+        mount_plist(&server, "ios/listDevices.action", json!({"devices": []})).await;
+        mount_plist(&server, "ios/addDevice.action", json!({"resultCode": 0})).await;
+        client(&server)
+            .register_device("TEAM", "NEW-UDID", "device")
+            .await
+            .expect("register device");
+
+        let failed = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/services/QH65B2/listTeams.action"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&failed)
+            .await;
+        assert!(client(&failed).list_teams().await.is_err());
     }
 }
