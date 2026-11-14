@@ -551,7 +551,12 @@ mod tests {
     #[test]
     fn parses_known_dumpers_and_rejects_unknown() {
         assert_eq!(Dumper::parse("builtin").unwrap(), Dumper::Builtin);
+        assert_eq!(
+            Dumper::parse("frida-ios-dump").unwrap(),
+            Dumper::FridaIosDump
+        );
         assert_eq!(Dumper::parse("bagbak").unwrap(), Dumper::Bagbak);
+        assert_eq!(Dumper::parse("r2flutch").unwrap(), Dumper::R2flutch);
         assert_eq!(Dumper::parse("fouldecrypt").unwrap(), Dumper::FoulDecrypt);
         assert!(Dumper::parse("nope").is_err());
     }
@@ -693,6 +698,11 @@ mod tests {
         assert_eq!(p, "frida-ios-dump");
         assert!(a.iter().any(|s| s.ends_with("frida-ios-dump.ipa")));
 
+        let (p, a) = external_argv(Dumper::R2flutch, "com.x.App", dir).unwrap();
+        assert_eq!(p, "r2flutch");
+        assert_eq!(a, ["-o", "/tmp/d", "com.x.App"]);
+
         assert!(external_argv(Dumper::Builtin, "com.x.App", dir).is_err());
+        assert!(external_argv(Dumper::FoulDecrypt, "com.x.App", dir).is_err());
     }
 }
