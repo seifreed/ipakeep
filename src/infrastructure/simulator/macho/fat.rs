@@ -116,6 +116,7 @@ mod tests {
     #[test]
     fn truncated_headers_and_offsets_are_errors() {
         assert!(arm64_fat_bases(&mut file(&FAT_MAGIC.to_be_bytes()), FAT_MAGIC).is_err());
+        assert!(arm64_fat_bases(&mut file(&fat_header(FAT_MAGIC, 1)), FAT_MAGIC).is_err());
         let mut bytes = fat_header(FAT_MAGIC, 1);
         bytes.extend_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
         assert!(arm64_fat_bases(&mut file(&bytes), FAT_MAGIC).is_err());

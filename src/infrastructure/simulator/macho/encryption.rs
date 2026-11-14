@@ -152,6 +152,8 @@ mod tests {
         );
         assert!(is_encrypted(&macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))[..34]).is_err());
         assert!(!is_encrypted(&macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))[..8]).unwrap());
+        assert!(is_encrypted(&MH_MAGIC_64.to_le_bytes()).is_err());
+        assert!(is_encrypted(&macho(Some((LC_ENCRYPTION_INFO_64, 24, 1)))[..48]).is_err());
     }
 
     #[test]
@@ -167,5 +169,6 @@ mod tests {
 
         assert_eq!(encrypted_macho_files(dir.path()).unwrap(), [encrypted]);
         assert!(encrypted_macho_files(&dir.path().join("missing")).is_err());
+        assert!(macho_is_encrypted(&dir.path().join("missing")).is_err());
     }
 }
