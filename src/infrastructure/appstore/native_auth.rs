@@ -12,6 +12,17 @@ use std::sync::Mutex;
 
 static SIGNING_LOCK: Mutex<()> = Mutex::new(());
 
+type NativeHeaders = unsafe extern "C" fn(
+    *const c_char,
+    *const c_uchar,
+    usize,
+    *mut *mut c_uchar,
+    *mut usize,
+    *mut *mut c_char,
+    *mut *mut c_char,
+    *mut *mut c_char,
+) -> i32;
+
 unsafe extern "C" {
     fn ipakeep_native_auth_headers(
         endpoint: *const c_char,
@@ -33,15 +44,27 @@ pub(super) async fn request_headers(
     let endpoint = endpoint.to_owned();
     let body = body.to_vec();
 
-    tokio::task::spawn_blocking(move || native_headers(&endpoint, &body))
-        .await
-        .map_err(|error| {
-            AppStoreError::NetworkError(format!("native Store authentication task failed: {error}"))
-        })?
+    let task = tokio::task::spawn_blocking(move || {
+        native_headers(&endpoint, &body, ipakeep_native_auth_headers, &SIGNING_LOCK)
+    });
+    await_native_task(task).await
 }
 
-fn native_headers(endpoint: &str, body: &[u8]) -> Result<HashMap<String, String>, AppStoreError> {
-    let _guard = SIGNING_LOCK.lock().map_err(|_| {
+async fn await_native_task(
+    task: tokio::task::JoinHandle<Result<HashMap<String, String>, AppStoreError>>,
+) -> Result<HashMap<String, String>, AppStoreError> {
+    task.await.map_err(|error| {
+        AppStoreError::NetworkError(format!("native Store authentication task failed: {error}"))
+    })?
+}
+
+fn native_headers(
+    endpoint: &str,
+    body: &[u8],
+    native_headers: NativeHeaders,
+    signing_lock: &Mutex<()>,
+) -> Result<HashMap<String, String>, AppStoreError> {
+    let _guard = signing_lock.lock().map_err(|_| {
         AppStoreError::NetworkError("native Store authentication lock was poisoned".into())
     })?;
     let endpoint = CString::new(endpoint).map_err(|_| {
@@ -54,7 +77,7 @@ fn native_headers(endpoint: &str, body: &[u8]) -> Result<HashMap<String, String>
     let mut error = ptr::null_mut();
 
     let status = unsafe {
-        ipakeep_native_auth_headers(
+        native_headers(
             endpoint.as_ptr(),
             body.as_ptr(),
             body.len(),
@@ -145,6 +168,7 @@ fn free_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn allocate(bytes: &[u8], null_terminate: bool) -> *mut c_void {
         let length = bytes.len() + usize::from(null_terminate);
@@ -157,6 +181,39 @@ mod tests {
             }
         }
         output.cast()
+    }
+
+    unsafe extern "C" fn successful_signer(
+        _endpoint: *const c_char,
+        _body: *const c_uchar,
+        _body_length: usize,
+        signature: *mut *mut c_uchar,
+        signature_length: *mut usize,
+        amd: *mut *mut c_char,
+        amd_machine: *mut *mut c_char,
+        _error: *mut *mut c_char,
+    ) -> i32 {
+        unsafe {
+            ptr::write(signature, allocate(&[1, 2, 3], false).cast());
+            ptr::write(signature_length, 3);
+            ptr::write(amd, allocate(b"amd-proof", true).cast());
+            ptr::write(amd_machine, allocate(b"machine-proof", true).cast());
+        }
+        0
+    }
+
+    unsafe extern "C" fn failed_signer(
+        _endpoint: *const c_char,
+        _body: *const c_uchar,
+        _body_length: usize,
+        _signature: *mut *mut c_uchar,
+        _signature_length: *mut usize,
+        _amd: *mut *mut c_char,
+        _amd_machine: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i32 {
+        unsafe { ptr::write(error, allocate(b"denied", true).cast()) };
+        1
     }
 
     fn read_response(
@@ -250,6 +307,50 @@ mod tests {
         assert_eq!(headers["X-Apple-ActionSignature"], "AQID");
         assert_eq!(headers["X-Apple-AMD"], "amd-proof");
         assert_eq!(headers["X-Apple-AMD-M"], "machine-proof");
+    }
+
+    #[test]
+    fn native_header_bridge_handles_signer_success_and_failure() {
+        let lock = Mutex::new(());
+        let headers = native_headers("https://example.test", b"request", successful_signer, &lock)
+            .expect("native signer response");
+        assert_eq!(headers["X-Apple-ActionSignature"], "AQID");
+        assert_eq!(headers["X-Apple-AMD"], "amd-proof");
+        assert_eq!(headers["X-Apple-AMD-M"], "machine-proof");
+
+        assert!(matches!(
+            native_headers("https://example.test", b"request", failed_signer, &lock),
+            Err(AppStoreError::NetworkError(message)) if message == "denied"
+        ));
+    }
+
+    #[test]
+    fn native_header_bridge_reports_a_poisoned_lock() {
+        let lock = Arc::new(Mutex::new(()));
+        let worker_lock = Arc::clone(&lock);
+        let _ = std::thread::spawn(move || {
+            let _guard = worker_lock.lock().unwrap();
+            panic!("poison test lock");
+        })
+        .join();
+
+        assert!(matches!(
+            native_headers("https://example.test", b"request", successful_signer, &lock),
+            Err(AppStoreError::NetworkError(message)) if message.contains("lock was poisoned")
+        ));
+    }
+
+    #[tokio::test]
+    async fn native_header_bridge_maps_cancelled_worker_tasks() {
+        let task = tokio::spawn(async {
+            std::future::pending::<Result<HashMap<String, String>, AppStoreError>>().await
+        });
+        task.abort();
+
+        assert!(matches!(
+            await_native_task(task).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("task failed")
+        ));
     }
 
     #[tokio::test]
