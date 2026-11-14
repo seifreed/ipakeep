@@ -194,6 +194,7 @@ mod tests {
                 .as_str(),
             "invalid RUST_LOG filter"
         );
+        assert!(LoggingConfig::from_values(Some("  "), None, false).is_err());
         assert!(LoggingConfig::from_values(None, Some("xml"), false).is_err());
     }
 
@@ -207,6 +208,7 @@ mod tests {
     fn panic_payload_classification_never_returns_payload_content() {
         let payload = String::from("credential-secret");
         assert_eq!(panic_payload_type(&payload), "string");
+        assert_eq!(panic_payload_type(&42_u8), "non_string");
     }
 
     #[test]
