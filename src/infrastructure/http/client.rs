@@ -237,6 +237,16 @@ impl AppleHttpClient {
         headers: Option<&HashMap<String, String>>,
         preserve_server_errors: bool,
     ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
+        let response = self.send_plist_request(url, plist_xml, headers).await?;
+        Self::parse_plist_response(response, preserve_server_errors).await
+    }
+
+    async fn send_plist_request(
+        &self,
+        url: &str,
+        plist_xml: &[u8],
+        headers: Option<&HashMap<String, String>>,
+    ) -> Result<reqwest::Response, crate::domain::error::AppStoreError> {
         let content_type = headers
             .and_then(|extra| {
                 extra
@@ -264,7 +274,13 @@ impl AppleHttpClient {
         let response = send_with_observability(&self.client, request)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
+        Ok(response)
+    }
 
+    async fn parse_plist_response(
+        response: reqwest::Response,
+        preserve_server_errors: bool,
+    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
         let status = response.status();
         let resp_headers = response.headers().clone();
         let body_bytes = read_response_bytes(response)
@@ -276,11 +292,7 @@ impl AppleHttpClient {
         // no usable `Location`, which reqwest leaves for us), or a generic 404
         // HTML page. These carry no account data; surface them with a null body so
         // the caller can retry instead of failing on the undecodable HTML.
-        if preserve_server_errors
-            && (status.is_server_error()
-                || status.is_redirection()
-                || status == reqwest::StatusCode::NOT_FOUND)
-        {
+        if should_preserve_server_error(preserve_server_errors, status) {
             return Ok(HttpResponse {
                 status,
                 headers: resp_headers,
@@ -298,21 +310,7 @@ impl AppleHttpClient {
             });
         }
 
-        let content_type = resp_headers
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-
-        let body = super::plist_codec::decode_plist(&body_bytes)
-            .or_else(|plist_error| {
-                let text = String::from_utf8_lossy(&body_bytes);
-                decode_json_or_plist(&text).map_err(|e| format!("{plist_error}; {e}"))
-            })
-            .map_err(|e| {
-                crate::domain::error::AppStoreError::NetworkError(format!(
-                    "plist decode failed for HTTP {status} ({content_type}): {e}"
-                ))
-            })?;
+        let body = decode_plist_body(status, &resp_headers, &body_bytes)?;
 
         Ok(HttpResponse {
             status,
@@ -359,4 +357,32 @@ impl AppleHttpClient {
     pub fn client(&self) -> &Client {
         &self.client
     }
+}
+
+fn should_preserve_server_error(preserve: bool, status: reqwest::StatusCode) -> bool {
+    preserve
+        && (status.is_server_error()
+            || status.is_redirection()
+            || status == reqwest::StatusCode::NOT_FOUND)
+}
+
+fn decode_plist_body(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body_bytes: &[u8],
+) -> Result<serde_json::Value, crate::domain::error::AppStoreError> {
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    super::plist_codec::decode_plist(body_bytes)
+        .or_else(|plist_error| {
+            let text = String::from_utf8_lossy(body_bytes);
+            decode_json_or_plist(&text).map_err(|error| format!("{plist_error}; {error}"))
+        })
+        .map_err(|error| {
+            crate::domain::error::AppStoreError::NetworkError(format!(
+                "plist decode failed for HTTP {status} ({content_type}): {error}"
+            ))
+        })
 }

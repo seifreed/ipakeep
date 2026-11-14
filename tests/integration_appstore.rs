@@ -79,6 +79,30 @@ fn plist_body(value: &serde_json::Value) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn authentication_plist_preserves_server_errors_for_retry() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("temporarily unavailable"))
+        .mount(&server)
+        .await;
+
+    let client = AppleHttpClient::new().unwrap();
+    let url = format!("{}/auth", server.uri());
+    let response = client
+        .post_auth_plist_bytes(&url, b"<plist/>", None)
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.body, serde_json::Value::Null);
+    assert!(matches!(
+        client.post_plist_bytes(&url, b"<plist/>", None).await,
+        Err(AppStoreError::NetworkError(_))
+    ));
+}
+
+#[tokio::test]
 async fn search_parses_apps() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
