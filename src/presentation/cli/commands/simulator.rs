@@ -74,6 +74,19 @@ mod tests {
     }
 
     #[test]
+    fn prepare_handles_a_binary_that_needs_conversion() {
+        let directory = tempfile::tempdir().expect("bundle directory");
+        let binary = directory.path().join("AppBinary");
+        let mut bytes = Vec::new();
+        for value in [0xfeed_facf_u32, 0x0100_000c, 0, 0, 0, 0, 0, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        std::fs::write(&binary, bytes).unwrap();
+
+        assert!(handle_prepare(directory.path()).is_ok());
+    }
+
+    #[test]
     fn run_rejects_an_empty_explicit_simulator_id() {
         let target = SimulatorTarget {
             udid: Some(" ".into()),
