@@ -212,5 +212,9 @@ mod tests {
             plist_to_json(&plist::Value::Real(f64::NAN)),
             JsonValue::Null
         );
+        assert_eq!(
+            plist_to_json(&plist::Value::Uid(plist::Uid::new(5))),
+            JsonValue::Null
+        );
     }
 }
