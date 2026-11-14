@@ -56,3 +56,77 @@ fn read_be_word_at(file: &mut fs::File, offset: u64, len: usize) -> Result<u64, 
         _ => Err("unsupported fat word size".into()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    const X86_64: u32 = 0x0100_0007;
+
+    fn file(bytes: &[u8]) -> fs::File {
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        file
+    }
+
+    fn fat_header(magic: u32, count: u32) -> Vec<u8> {
+        [magic.to_be_bytes(), count.to_be_bytes()].concat()
+    }
+
+    #[test]
+    fn reads_arm64_offsets_from_fat32_and_fat64_entries() {
+        let mut fat32 = fat_header(FAT_MAGIC, 2);
+        for (cpu, offset) in [(CPU_TYPE_ARM64, 0x100_u32), (X86_64, 0x200)] {
+            for word in [cpu, 0, offset, 0x40, 0] {
+                fat32.extend_from_slice(&word.to_be_bytes());
+            }
+        }
+        assert_eq!(
+            arm64_fat_bases(&mut file(&fat32), FAT_MAGIC).unwrap(),
+            [0x100]
+        );
+
+        let mut fat64 = fat_header(FAT_MAGIC_64, 1);
+        fat64.extend_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
+        fat64.extend_from_slice(&0_u32.to_be_bytes());
+        fat64.extend_from_slice(&0x1_0000_0000_u64.to_be_bytes());
+        fat64.extend_from_slice(&0x40_u64.to_be_bytes());
+        fat64.extend_from_slice(&[0; 8]);
+        assert_eq!(
+            arm64_fat_bases(&mut file(&fat64), FAT_MAGIC_64).unwrap(),
+            [0x1_0000_0000]
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_magic_and_non_arm64_architectures() {
+        assert!(arm64_fat_bases(&mut file(b"data"), 0).unwrap().is_empty());
+        let mut bytes = fat_header(FAT_MAGIC, 1);
+        for word in [X86_64, 0, 0x100, 0x40, 0] {
+            bytes.extend_from_slice(&word.to_be_bytes());
+        }
+        assert!(
+            arm64_fat_bases(&mut file(&bytes), FAT_MAGIC)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn truncated_headers_and_offsets_are_errors() {
+        assert!(arm64_fat_bases(&mut file(&FAT_MAGIC.to_be_bytes()), FAT_MAGIC).is_err());
+        let mut bytes = fat_header(FAT_MAGIC, 1);
+        bytes.extend_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
+        assert!(arm64_fat_bases(&mut file(&bytes), FAT_MAGIC).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_big_endian_word_sizes() {
+        assert!(
+            read_be_word_at(&mut file(&[0; 8]), 0, 3)
+                .unwrap_err()
+                .contains("unsupported fat word size")
+        );
+    }
+}
