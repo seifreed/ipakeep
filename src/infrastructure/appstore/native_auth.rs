@@ -141,3 +141,122 @@ fn free_outputs(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allocate(bytes: &[u8], null_terminate: bool) -> *mut c_void {
+        let length = bytes.len() + usize::from(null_terminate);
+        let output = unsafe { libc::malloc(length) }.cast::<u8>();
+        assert!(!output.is_null());
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len());
+            if null_terminate {
+                output.add(bytes.len()).write(0);
+            }
+        }
+        output.cast()
+    }
+
+    fn read_response(
+        status: i32,
+        signature: Option<&[u8]>,
+        signature_length: usize,
+        amd: Option<&[u8]>,
+        amd_machine: Option<&[u8]>,
+        error: Option<&[u8]>,
+    ) -> Result<HashMap<String, String>, AppStoreError> {
+        let signature = signature.map(|bytes| allocate(bytes, false));
+        let amd = amd.map(|bytes| allocate(bytes, true));
+        let amd_machine = amd_machine.map(|bytes| allocate(bytes, true));
+        let error = error.map(|bytes| allocate(bytes, true));
+        let result = read_headers(
+            status,
+            signature.unwrap_or(ptr::null_mut()).cast(),
+            signature_length,
+            amd.unwrap_or(ptr::null_mut()).cast(),
+            amd_machine.unwrap_or(ptr::null_mut()).cast(),
+            error.unwrap_or(ptr::null_mut()).cast(),
+        );
+        free_outputs(
+            signature.unwrap_or(ptr::null_mut()),
+            amd.unwrap_or(ptr::null_mut()),
+            amd_machine.unwrap_or(ptr::null_mut()),
+            error.unwrap_or(ptr::null_mut()),
+        );
+        result
+    }
+
+    #[test]
+    fn native_status_and_signature_failures_are_reported() {
+        assert!(matches!(
+            read_response(1, None, 0, None, None, None),
+            Err(AppStoreError::NetworkError(_))
+        ));
+        assert!(
+            read_response(1, None, 0, None, None, Some(b"denied"))
+                .unwrap_err()
+                .to_string()
+                .contains("denied")
+        );
+        assert!(read_response(0, None, 1, None, None, None).is_err());
+        assert!(read_response(0, Some(&[1]), 0, None, None, None).is_err());
+        assert!(read_response(0, Some(&[1]), 16 * 1024 + 1, None, None, None).is_err());
+    }
+
+    #[test]
+    fn native_device_proofs_reject_missing_invalid_and_unsafe_headers() {
+        assert!(read_response(0, Some(&[1]), 1, None, Some(b"machine"), None).is_err());
+        assert!(read_response(0, Some(&[1]), 1, Some(&[0xff]), Some(b"machine"), None).is_err());
+        assert!(read_response(0, Some(&[1]), 1, Some(b""), Some(b"machine"), None).is_err());
+        assert!(
+            read_response(
+                0,
+                Some(&[1]),
+                1,
+                Some(b"line\nbreak"),
+                Some(b"machine"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            read_response(
+                0,
+                Some(&[1]),
+                1,
+                Some(&vec![b'a'; 8193]),
+                Some(b"machine"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(read_response(0, Some(&[1]), 1, Some(b"amd"), None, None).is_err());
+    }
+
+    #[test]
+    fn native_headers_encode_signature_and_preserve_valid_proofs() {
+        let headers = read_response(
+            0,
+            Some(&[1, 2, 3]),
+            3,
+            Some(b"amd-proof"),
+            Some(b"machine-proof"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(headers["X-Apple-ActionSignature"], "AQID");
+        assert_eq!(headers["X-Apple-AMD"], "amd-proof");
+        assert_eq!(headers["X-Apple-AMD-M"], "machine-proof");
+    }
+
+    #[tokio::test]
+    async fn native_request_rejects_nul_endpoint_before_calling_ffi() {
+        assert!(matches!(
+            request_headers("invalid\0endpoint", b"").await,
+            Err(AppStoreError::NetworkError(_))
+        ));
+    }
+}
