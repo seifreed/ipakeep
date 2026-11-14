@@ -58,12 +58,23 @@ where
 }
 
 async fn generate_fresh() -> Result<AnisetteData, AppStoreError> {
+    generate_fresh_with_helper(None).await
+}
+
+async fn generate_fresh_with_helper(
+    helper: Option<PathBuf>,
+) -> Result<AnisetteData, AppStoreError> {
     let span = tracing::Span::current();
-    let output = tokio::task::spawn_blocking(move || span.in_scope(run_helper))
-        .await
-        .map_err(|error| {
-            AppStoreError::NetworkError(format!("modern Anisette task failed: {error}"))
-        })??;
+    let output = tokio::task::spawn_blocking(move || {
+        span.in_scope(|| match helper {
+            Some(helper) => run_helper_at(&helper),
+            None => run_helper(),
+        })
+    })
+    .await
+    .map_err(|error| {
+        AppStoreError::NetworkError(format!("modern Anisette task failed: {error}"))
+    })??;
     let value: HelperResponse = serde_json::from_slice(&output).map_err(|error| {
         AppStoreError::NetworkError(format!(
             "modern Anisette helper returned invalid JSON: {error}"
@@ -658,6 +669,33 @@ mod tests {
         assert!(matches!(
             run_helper_at(&oversized),
             Err(AppStoreError::NetworkError(message)) if message.contains("size limit")
+        ));
+    }
+
+    #[tokio::test]
+    async fn fresh_generation_parses_local_helper_headers_and_errors() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let headers = r#"{"headers":{"X-Apple-I-MD":"otp","X-Apple-I-MD-M":"machine","X-Mme-Client-Info":"<Mac>"}}"#;
+        let helper = write_helper(directory.path(), &format!("printf '%s' '{headers}'"));
+        let data = generate_fresh_with_helper(Some(helper))
+            .await
+            .expect("Anisette data");
+        assert_eq!(data.headers["X-Apple-I-MD"], "otp");
+        assert_eq!(data.cpd["dt"], DEVICE_MODEL);
+
+        let invalid_json = write_helper(directory.path(), "printf not-json");
+        assert!(matches!(
+            generate_fresh_with_helper(Some(invalid_json)).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("invalid JSON")
+        ));
+
+        let invalid_headers = write_helper(
+            directory.path(),
+            "printf '%s' '{\"headers\":{\"X-Apple-I-Md\":\"\"}}'",
+        );
+        assert!(matches!(
+            generate_fresh_with_helper(Some(invalid_headers)).await,
+            Err(AppStoreError::AuthenticationFailed(_))
         ));
     }
 
