@@ -276,6 +276,39 @@ fn prepare_target_reads_real_codesign_entitlements_and_embeds_matching_profile()
 }
 
 #[cfg(target_os = "macos")]
+#[test]
+fn signs_nested_code_and_app_using_matching_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, capabilities) = signed_test_app(dir.path());
+    let mut profile = profile("PREFIX.com.example.test");
+    profile.entitlements.extend(capabilities);
+    profile.path = dir.path().join("profile.mobileprovision");
+    fs::write(&profile.path, b"profile selected for test bundle").unwrap();
+    let profiles = [profile];
+    let request = crate::infrastructure::device::InstallRequest {
+        ipa: Path::new("unused.ipa"),
+        device: "device",
+        identity: "-",
+        provisioning_profiles: &[],
+        entitlements: None,
+        launch: false,
+        legacy_device: false,
+    };
+
+    sign_bundle_with_profiles(&app, &request, &profiles, dir.path()).unwrap();
+
+    assert_eq!(
+        fs::read(app.join("embedded.mobileprovision")).unwrap(),
+        b"profile selected for test bundle"
+    );
+    assert!(
+        extract_entitlements(&app)
+            .unwrap()
+            .contains("com.apple.developer.healthkit")
+    );
+}
+
+#[cfg(target_os = "macos")]
 fn signed_test_app(root: &Path) -> (PathBuf, Dictionary) {
     let app = root.join("Test.app");
     fs::create_dir(&app).unwrap();

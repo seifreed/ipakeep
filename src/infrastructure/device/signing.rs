@@ -65,6 +65,15 @@ pub(super) fn sign_bundle(
         .iter()
         .map(|path| Profile::read(path))
         .collect::<Result<Vec<_>, _>>()?;
+    sign_bundle_with_profiles(app, request, &profiles, workdir)
+}
+
+fn sign_bundle_with_profiles(
+    app: &Path,
+    request: &InstallRequest<'_>,
+    profiles: &[Profile],
+    workdir: &Path,
+) -> Result<(), String> {
     let mut targets = Vec::new();
     collect_sign_targets(app, &mut targets, &|_| Ok(true))?;
     targets.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
@@ -72,7 +81,7 @@ pub(super) fn sign_bundle(
     let mut prepared = Vec::new();
     for (index, target) in targets.iter().enumerate() {
         let override_path = (target == app).then_some(request.entitlements).flatten();
-        let entitlements = prepare_target(target, &profiles, override_path, workdir, index)?;
+        let entitlements = prepare_target(target, profiles, override_path, workdir, index)?;
         prepared.push((target, entitlements));
     }
     for (target, entitlements) in prepared {
