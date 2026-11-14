@@ -77,3 +77,17 @@ pub(crate) fn read_array<const N: usize>(bytes: &[u8]) -> Result<[u8; N], String
         .try_into()
         .map_err(|_| format!("expected {N} bytes, got {}", bytes.len()))
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::read_mach_header_at;
+    use std::fs::File;
+
+    #[test]
+    fn rejects_directory_as_mach_header_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut file = File::open(directory.path()).unwrap();
+
+        assert!(read_mach_header_at(&mut file, 0).is_err());
+    }
+}
