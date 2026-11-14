@@ -83,6 +83,28 @@ fn non_interactive_login_requires_two_factor_code() {
     );
 }
 
+#[tokio::test]
+async fn auth_info_reports_missing_credentials_and_revoke_succeeds() {
+    let credentials = InMemoryCredentialRepository::new();
+    assert_eq!(
+        handle_info(credentials.clone(), &OutputFormat::Text)
+            .await
+            .unwrap_err(),
+        "not logged in"
+    );
+
+    let credentials = credentials.with_account(sensitive_account());
+    handle_revoke(credentials.clone())
+        .await
+        .expect("revoke stored credentials");
+    assert_eq!(
+        handle_info(credentials, &OutputFormat::Text)
+            .await
+            .unwrap_err(),
+        "not logged in"
+    );
+}
+
 #[cfg(not(ipakeep_modern_adi))]
 #[tokio::test]
 async fn login_defaults_to_configurator_flow() {
