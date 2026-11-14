@@ -676,6 +676,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_operations_report_helper_start_failures() {
+        let missing = PathBuf::from("/ipakeep-test/missing-helper");
+
+        assert!(matches!(
+            store_login_with_helper(Some(missing.clone()), "a@b.c", "secret", None).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("could not start")
+        ));
+        assert!(matches!(
+            store_request_with_helper(Some(missing), "purchase", &Value::Null).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("could not start")
+        ));
+    }
+
+    #[tokio::test]
     async fn store_operations_reject_helper_output_over_their_limits() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let helper = write_helper(
@@ -695,6 +709,11 @@ mod tests {
     #[test]
     fn anisette_helper_output_is_checked() {
         let directory = tempfile::tempdir().expect("temporary directory");
+        assert!(matches!(
+            run_helper_at(Path::new("/ipakeep-test/missing-anisette-helper")),
+            Err(AppStoreError::NetworkError(message)) if message.contains("could not start")
+        ));
+
         let valid = write_helper(directory.path(), "printf '{\"headers\":{}}'");
         assert_eq!(
             run_helper_at(&valid).expect("helper output"),
