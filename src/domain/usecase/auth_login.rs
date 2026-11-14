@@ -2,7 +2,7 @@
 
 use crate::domain::entity::Account;
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::{AppStoreRepository, CredentialRepository};
+use crate::domain::repository::{AuthenticationRepository, CredentialRepository};
 
 /// `GrandSlam` login credentials reused across the SRP login and 2FA flows.
 pub struct GrandslamCredentials<'a> {
@@ -19,7 +19,7 @@ pub struct GrandslamCredentials<'a> {
 /// Use case for authenticating with the Apple App Store.
 pub struct AuthLogin<R, C>
 where
-    R: AppStoreRepository,
+    R: AuthenticationRepository,
     C: CredentialRepository,
 {
     app_store: R,
@@ -28,7 +28,7 @@ where
 
 impl<R, C> AuthLogin<R, C>
 where
-    R: AppStoreRepository,
+    R: AuthenticationRepository,
     C: CredentialRepository,
 {
     /// Create a new login use case with the given repositories.

@@ -224,7 +224,10 @@ impl FakeAppStoreRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::repository::AppStoreRepository;
+    use crate::domain::repository::{
+        AuthenticationRepository, CatalogRepository, DownloadRepository, PurchaseRepository,
+        VersionRepository,
+    };
 
     fn account() -> Account {
         Account {

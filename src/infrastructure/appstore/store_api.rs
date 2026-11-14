@@ -10,7 +10,10 @@ mod transport;
 
 use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::AppStoreRepository;
+use crate::domain::repository::{
+    AuthenticationRepository, CatalogRepository, DownloadRepository, PurchaseRepository,
+    VersionRepository,
+};
 use crate::infrastructure::appstore::config::AppleApiConfig;
 use crate::infrastructure::http::AppleHttpClient;
 use crate::infrastructure::http::client::HttpResponse;
@@ -89,7 +92,7 @@ impl AppleAppStoreRepository {
 }
 
 #[async_trait]
-impl AppStoreRepository for AppleAppStoreRepository {
+impl AuthenticationRepository for AppleAppStoreRepository {
     async fn authenticate(
         &self,
         email: &str,
@@ -161,7 +164,10 @@ impl AppStoreRepository for AppleAppStoreRepository {
     ) -> Result<(), AppStoreError> {
         grandslam_auth::validate_sms_code(&self.client, dsid, idms_token, phone_id, code).await
     }
+}
 
+#[async_trait]
+impl CatalogRepository for AppleAppStoreRepository {
     async fn search(
         &self,
         term: &str,
@@ -222,7 +228,10 @@ impl AppStoreRepository for AppleAppStoreRepository {
             None => Ok(None),
         }
     }
+}
 
+#[async_trait]
+impl PurchaseRepository for AppleAppStoreRepository {
     async fn purchase(
         &self,
         account: &Account,
@@ -235,7 +244,24 @@ impl AppStoreRepository for AppleAppStoreRepository {
         }
         commerce::purchase(self, account, app_id, guid).await
     }
+    async fn list_purchases(
+        &self,
+        account: &Account,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        #[cfg(ipakeep_modern_adi)]
+        if self.config.signed_store_login {
+            return signed_commerce::owned_apps(account, limit).await;
+        }
+        let _ = (account, limit);
+        Err(AppStoreError::Unexpected(
+            "listing purchases requires the signed App Store login available on modern macOS builds; this build cannot query owned apps".into(),
+        ))
+    }
+}
 
+#[async_trait]
+impl DownloadRepository for AppleAppStoreRepository {
     async fn download(
         &self,
         account: &Account,
@@ -262,7 +288,10 @@ impl AppStoreRepository for AppleAppStoreRepository {
             .await
             .map_err(|e| AppStoreError::NetworkError(e.to_string()))
     }
+}
 
+#[async_trait]
+impl VersionRepository for AppleAppStoreRepository {
     async fn list_versions(
         &self,
         account: &Account,
@@ -274,21 +303,6 @@ impl AppStoreRepository for AppleAppStoreRepository {
             return signed_commerce::list_versions(account, app_id).await;
         }
         commerce::list_versions(self, account, app_id, guid).await
-    }
-
-    async fn list_purchases(
-        &self,
-        account: &Account,
-        limit: u32,
-    ) -> Result<Vec<OwnedApp>, AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login {
-            return signed_commerce::owned_apps(account, limit).await;
-        }
-        let _ = (account, limit);
-        Err(AppStoreError::Unexpected(
-            "listing purchases requires the signed App Store login available on modern macOS builds; this build cannot query owned apps".into(),
-        ))
     }
 }
 

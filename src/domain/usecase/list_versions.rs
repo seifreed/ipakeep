@@ -2,12 +2,12 @@
 
 use crate::domain::entity::AppVersion;
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::{AppStoreRepository, CredentialRepository};
+use crate::domain::repository::{CredentialRepository, VersionRepository};
 
 /// Use case for listing available versions of an app on the App Store.
 pub struct ListVersions<R, C>
 where
-    R: AppStoreRepository,
+    R: VersionRepository,
     C: CredentialRepository,
 {
     app_store: R,
@@ -16,7 +16,7 @@ where
 
 impl<R, C> ListVersions<R, C>
 where
-    R: AppStoreRepository,
+    R: VersionRepository,
     C: CredentialRepository,
 {
     /// Create a new list versions use case.

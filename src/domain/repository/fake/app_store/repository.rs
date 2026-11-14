@@ -3,11 +3,14 @@
 use super::FakeAppStoreRepository;
 use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::AppStoreRepository;
+use crate::domain::repository::{
+    AuthenticationRepository, CatalogRepository, DownloadRepository, PurchaseRepository,
+    VersionRepository,
+};
 use async_trait::async_trait;
 
 #[async_trait]
-impl AppStoreRepository for FakeAppStoreRepository {
+impl AuthenticationRepository for FakeAppStoreRepository {
     async fn authenticate(
         &self,
         email: &str,
@@ -145,7 +148,10 @@ impl AppStoreRepository for FakeAppStoreRepository {
         ));
         inner.validate_sms_code_result.clone().unwrap_or(Ok(()))
     }
+}
 
+#[async_trait]
+impl CatalogRepository for FakeAppStoreRepository {
     async fn search(
         &self,
         term: &str,
@@ -172,7 +178,10 @@ impl AppStoreRepository for FakeAppStoreRepository {
             .clone()
             .unwrap_or_else(|| Err(AppStoreError::Unexpected("lookup not configured".into())))
     }
+}
 
+#[async_trait]
+impl PurchaseRepository for FakeAppStoreRepository {
     async fn purchase(
         &self,
         account: &Account,
@@ -188,7 +197,23 @@ impl AppStoreRepository for FakeAppStoreRepository {
             .clone()
             .unwrap_or_else(|| Err(AppStoreError::Unexpected("purchase not configured".into())))
     }
+    async fn list_purchases(
+        &self,
+        account: &Account,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        let mut inner = self.lock_inner();
+        inner.list_purchases_calls.push((account.clone(), limit));
+        inner.list_purchases_result.clone().unwrap_or_else(|| {
+            Err(AppStoreError::Unexpected(
+                "list_purchases not configured".into(),
+            ))
+        })
+    }
+}
 
+#[async_trait]
+impl DownloadRepository for FakeAppStoreRepository {
     async fn download(
         &self,
         account: &Account,
@@ -215,7 +240,10 @@ impl AppStoreRepository for FakeAppStoreRepository {
             ))
         })
     }
+}
 
+#[async_trait]
+impl VersionRepository for FakeAppStoreRepository {
     async fn list_versions(
         &self,
         account: &Account,
@@ -229,20 +257,6 @@ impl AppStoreRepository for FakeAppStoreRepository {
         inner.list_versions_result.clone().unwrap_or_else(|| {
             Err(AppStoreError::Unexpected(
                 "list_versions not configured".into(),
-            ))
-        })
-    }
-
-    async fn list_purchases(
-        &self,
-        account: &Account,
-        limit: u32,
-    ) -> Result<Vec<OwnedApp>, AppStoreError> {
-        let mut inner = self.lock_inner();
-        inner.list_purchases_calls.push((account.clone(), limit));
-        inner.list_purchases_result.clone().unwrap_or_else(|| {
-            Err(AppStoreError::Unexpected(
-                "list_purchases not configured".into(),
             ))
         })
     }

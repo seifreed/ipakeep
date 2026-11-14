@@ -1,12 +1,12 @@
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::AppStoreRepository;
+use crate::domain::repository::CatalogRepository;
 
 /// Resolve an App Store id, bundle identifier, or app name to a numeric id.
-pub struct ResolveApp<'a, R: AppStoreRepository + ?Sized> {
+pub struct ResolveApp<'a, R: CatalogRepository + ?Sized> {
     app_store: &'a R,
 }
 
-impl<'a, R: AppStoreRepository + ?Sized> ResolveApp<'a, R> {
+impl<'a, R: CatalogRepository + ?Sized> ResolveApp<'a, R> {
     /// Create a use case for resolving app references.
     pub fn new(app_store: &'a R) -> Self {
         Self { app_store }

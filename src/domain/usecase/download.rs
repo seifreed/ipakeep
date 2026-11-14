@@ -2,12 +2,12 @@
 
 use crate::domain::entity::DownloadItem;
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::{AppStoreRepository, CredentialRepository};
+use crate::domain::repository::{CredentialRepository, DownloadRepository, PurchaseRepository};
 
 /// Use case for downloading an IPA file from the App Store.
 pub struct Download<R, C>
 where
-    R: AppStoreRepository,
+    R: DownloadRepository + PurchaseRepository,
     C: CredentialRepository,
 {
     app_store: R,
@@ -16,7 +16,7 @@ where
 
 impl<R, C> Download<R, C>
 where
-    R: AppStoreRepository,
+    R: DownloadRepository + PurchaseRepository,
     C: CredentialRepository,
 {
     /// Create a new download use case.

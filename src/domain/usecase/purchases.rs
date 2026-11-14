@@ -2,14 +2,14 @@
 
 use crate::domain::entity::OwnedApp;
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::{AppStoreRepository, CredentialRepository};
+use crate::domain::repository::{CredentialRepository, PurchaseRepository};
 
 const MAX_FILTERED_PURCHASE_CANDIDATES: u32 = 100;
 
 /// Use case for listing the authenticated account's owned (purchased) apps.
 pub struct Purchases<R, C>
 where
-    R: AppStoreRepository,
+    R: PurchaseRepository,
     C: CredentialRepository,
 {
     app_store: R,
@@ -18,7 +18,7 @@ where
 
 impl<R, C> Purchases<R, C>
 where
-    R: AppStoreRepository,
+    R: PurchaseRepository,
     C: CredentialRepository,
 {
     /// Create a new purchases use case.

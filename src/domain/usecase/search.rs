@@ -2,19 +2,19 @@
 
 use crate::domain::entity::App;
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::AppStoreRepository;
+use crate::domain::repository::CatalogRepository;
 
 /// Use case for searching the Apple App Store.
 pub struct Search<R>
 where
-    R: AppStoreRepository,
+    R: CatalogRepository,
 {
     app_store: R,
 }
 
 impl<R> Search<R>
 where
-    R: AppStoreRepository,
+    R: CatalogRepository,
 {
     /// Create a new search use case.
     pub fn new(app_store: R) -> Self {

@@ -1,12 +1,12 @@
 //! Purchase use case — acquires a license for an app on the App Store.
 
 use crate::domain::error::AppStoreError;
-use crate::domain::repository::{AppStoreRepository, CredentialRepository};
+use crate::domain::repository::{CredentialRepository, PurchaseRepository};
 
 /// Use case for acquiring an app license on the Apple App Store.
 pub struct Purchase<R, C>
 where
-    R: AppStoreRepository,
+    R: PurchaseRepository,
     C: CredentialRepository,
 {
     app_store: R,
@@ -15,7 +15,7 @@ where
 
 impl<R, C> Purchase<R, C>
 where
-    R: AppStoreRepository,
+    R: PurchaseRepository,
     C: CredentialRepository,
 {
     /// Create a new purchase use case.

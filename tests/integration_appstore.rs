@@ -2,7 +2,10 @@
 
 use ipakeep::domain::entity::Account;
 use ipakeep::domain::error::AppStoreError;
-use ipakeep::domain::repository::AppStoreRepository;
+use ipakeep::domain::repository::{
+    AuthenticationRepository, CatalogRepository, DownloadRepository, PurchaseRepository,
+    VersionRepository,
+};
 use ipakeep::infrastructure::appstore::bag::resolve_auth_endpoint;
 use ipakeep::infrastructure::appstore::{AppleApiConfig, AppleAppStoreRepository};
 use ipakeep::infrastructure::http::AppleHttpClient;
