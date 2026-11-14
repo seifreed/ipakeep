@@ -734,6 +734,33 @@ mod tests {
             std::fs::read(work.path().join("Demo-decrypted.ipa")).unwrap(),
             b"decrypted"
         );
+
+        let bundle_id = work.path().join("com.example.noipa").display().to_string();
+        let args = DumpArgs {
+            bundle_id: &bundle_id,
+            dumper: "bagbak",
+            ipa: None,
+            device: "usb",
+            agent: None,
+            spawn: false,
+            settle: 0.0,
+            output: None,
+            drop_undumped_extensions: false,
+            ssh_host: "127.0.0.1",
+            ssh_port: 2222,
+            ssh_user: "mobile",
+        };
+        handle_dump_with(&args, |request| {
+            assert!(matches!(request.device, DumpDevice::Usb));
+            assert!(matches!(request.dumper, Dumper::Bagbak));
+            assert!(request.ipa.is_none());
+            Ok(b"external dump".to_vec())
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read(format!("{bundle_id}-decrypted.ipa")).unwrap(),
+            b"external dump"
+        );
     }
 
     #[test]
