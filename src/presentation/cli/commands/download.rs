@@ -48,59 +48,104 @@ where
     let guid = get_guid();
 
     let resolved_app_id = resolve_app_id(&app_store, request.app, request.country).await?;
+    let output = request.output;
+    let simulator_run = request.simulator_run;
+    let simulator_launch = request.simulator_launch;
+    let items =
+        fetch_download_items(&app_store, credentials, request, resolved_app_id, &guid).await?;
+    validate_download_items(&items, simulator_run)?;
 
-    let use_case = Download::new(app_store.clone(), credentials);
-    let items = use_case
+    let output_destination = OutputDestination::resolve(output, items.len())?;
+    prepare_output_destination(&output_destination)?;
+    let results = download_items(
+        &app_store,
+        &items,
+        resolved_app_id,
+        &output_destination,
+        format,
+    )
+    .await?;
+    install_downloaded_ipa(&results, simulator_run, simulator_launch)?;
+    print_download_results(&results, format)?;
+
+    Ok(())
+}
+
+async fn fetch_download_items<R, C>(
+    app_store: &R,
+    credentials: C,
+    request: DownloadRequest<'_>,
+    app_id: i64,
+    guid: &str,
+) -> Result<Vec<DownloadItem>, String>
+where
+    R: AppStoreRepository + Clone,
+    C: CredentialRepository,
+{
+    Download::new(app_store.clone(), credentials)
         .execute(
-            resolved_app_id,
-            &guid,
+            app_id,
+            guid,
             request.external_version_id,
             request.auto_purchase,
         )
         .await
-        .map_err(|e| format!("download failed: {e}"))?;
+        .map_err(|error| format!("download failed: {error}"))
+}
 
+fn validate_download_items(items: &[DownloadItem], simulator_run: bool) -> Result<(), String> {
     if items.is_empty() {
         return Err("no download items returned".into());
     }
-    if request.simulator_run && items.len() > 1 {
+    if simulator_run && items.len() > 1 {
         return Err("simulator install only supports single-item downloads".into());
     }
+    Ok(())
+}
 
-    let output_destination = OutputDestination::resolve(request.output, items.len())?;
-    prepare_output_destination(&output_destination)?;
-
+async fn download_items<R>(
+    app_store: &R,
+    items: &[DownloadItem],
+    app_id: i64,
+    destination: &OutputDestination,
+    format: &OutputFormat,
+) -> Result<Vec<DownloadResult>, String>
+where
+    R: AppStoreRepository,
+{
     let mut results = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
-        let result = download_and_save_item(
-            &app_store,
-            item,
-            index,
-            resolved_app_id,
-            &output_destination,
-            format,
-        )
-        .await?;
-        results.push(result);
+        results.push(
+            download_and_save_item(app_store, item, index, app_id, destination, format).await?,
+        );
     }
+    Ok(results)
+}
 
-    if request.simulator_run {
-        let path = Path::new(&results[0].path);
+fn install_downloaded_ipa(
+    results: &[DownloadResult],
+    simulator_run: bool,
+    simulator_launch: bool,
+) -> Result<(), String> {
+    if simulator_run {
         install_ipa(
-            path,
-            request.simulator_launch,
+            Path::new(&results[0].path),
+            simulator_launch,
             false,
             &SimulatorTarget::default(),
             None,
         )
-        .map_err(|e| format!("simulator install failed: {e}"))?;
+        .map_err(|error| format!("simulator install failed: {error}"))?;
     }
+    Ok(())
+}
 
+fn print_download_results(results: &[DownloadResult], format: &OutputFormat) -> Result<(), String> {
     match format {
         OutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&results)
+                serde_json::to_string_pretty(results)
                     .map_err(|e| format!("failed to serialize output: {e}"))?
             );
         }
@@ -108,7 +153,6 @@ where
             // Progress already printed above.
         }
     }
-
     Ok(())
 }
 
