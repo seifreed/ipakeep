@@ -47,6 +47,35 @@ pub(crate) fn collect_sign_targets(
 mod tests {
     use super::collect_sign_targets;
 
+    #[test]
+    fn collects_bundles_and_signable_dylibs_and_propagates_detection_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let bundle = dir.path().join("Demo.app");
+        let dylib = dir.path().join("libDemo.dylib");
+        let text = dir.path().join("readme.txt");
+        std::fs::create_dir(&bundle).unwrap();
+        std::fs::write(&dylib, b"library").unwrap();
+        std::fs::write(&text, b"text").unwrap();
+
+        let mut targets = Vec::new();
+        collect_sign_targets(dir.path(), &mut targets, &|path| {
+            Ok(path
+                .extension()
+                .is_some_and(|extension| extension == "dylib"))
+        })
+        .unwrap();
+
+        assert!(targets.contains(&bundle));
+        assert!(targets.contains(&dylib));
+        assert!(!targets.contains(&text));
+
+        let error = collect_sign_targets(&dylib, &mut Vec::new(), &|_| {
+            Err("dylib inspection failed".into())
+        })
+        .unwrap_err();
+        assert_eq!(error, "dylib inspection failed");
+    }
+
     #[cfg(unix)]
     #[test]
     fn skips_symlinked_bundles() {
