@@ -169,6 +169,17 @@ mod tests {
     use crate::infrastructure::mcp::protocol::{JSONRPC_VERSION, ToolContent};
     use std::sync::Mutex;
 
+    struct FailingSerialize;
+
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("serialization failed"))
+        }
+    }
+
     #[derive(Default)]
     struct FakeInvoker {
         calls: Mutex<Vec<(String, Value)>>,
@@ -407,5 +418,12 @@ mod tests {
     fn call_tool_result_text_content_is_a_text_block() {
         let result = CallToolResult::error("x");
         assert_eq!(result.content[0], ToolContent::Text { text: "x".into() });
+    }
+
+    #[test]
+    fn success_response_maps_payload_serialization_failures() {
+        let response = to_success(Value::from(5), &FailingSerialize);
+
+        assert_eq!(response.error.expect("error").code, INTERNAL_ERROR);
     }
 }
