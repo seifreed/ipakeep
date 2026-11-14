@@ -304,27 +304,52 @@ fn run_fouldecrypt(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     let password = std::env::var(SSH_PASSWORD_ENV)
         .ok()
         .filter(|value| !value.is_empty());
-    let use_password = password.is_some();
-    require_program("ssh")?;
-    require_program("scp")?;
+    run_fouldecrypt_with(
+        req,
+        work,
+        password.as_deref(),
+        require_program,
+        run_remote,
+        std::thread::sleep,
+    )
+}
+
+fn run_fouldecrypt_with(
+    req: &DumpRequest,
+    work: &Path,
+    password: Option<&str>,
+    mut require: impl FnMut(&str) -> Result<(), String>,
+    mut remote: impl FnMut((String, Vec<String>), Option<&str>) -> Result<(), String>,
+    pause: impl Fn(Duration),
+) -> Result<Vec<u8>, String> {
+    let use_password = password.is_some_and(|value| !value.is_empty());
+    require("ssh")?;
+    require("scp")?;
     if use_password {
-        require_program("sshpass").map_err(|error| {
+        require("sshpass").map_err(|error| {
             format!("{error}; or unset {SSH_PASSWORD_ENV} to use key auth / prompting")
         })?;
     }
 
     let local_script = write_fouldecrypt_script(work)?;
-    deploy_and_run_fouldecrypt(req, &local_script, password.as_deref(), use_password)?;
+    deploy_and_run_fouldecrypt_with(
+        req,
+        &local_script,
+        password,
+        use_password,
+        &mut remote,
+        pause,
+    )?;
 
     let local_ipa = work.join("fouldecrypt.ipa");
-    run_remote(
+    remote(
         scp_argv(
             req.ssh,
             use_password,
             &remote_spec(req.ssh, REMOTE_OUT_IPA),
             &local_ipa.to_string_lossy(),
         ),
-        password.as_deref(),
+        password,
     )?;
     let bytes = std::fs::read(&local_ipa).map_err(|error| {
         format!(
@@ -342,13 +367,15 @@ fn write_fouldecrypt_script(work: &Path) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn deploy_and_run_fouldecrypt(
+fn deploy_and_run_fouldecrypt_with(
     req: &DumpRequest,
     local_script: &str,
     password: Option<&str>,
     use_password: bool,
+    remote: &mut impl FnMut((String, Vec<String>), Option<&str>) -> Result<(), String>,
+    pause: impl Fn(Duration),
 ) -> Result<(), String> {
-    run_remote(
+    remote(
         scp_argv(
             req.ssh,
             use_password,
@@ -357,8 +384,8 @@ fn deploy_and_run_fouldecrypt(
         ),
         password,
     )?;
-    std::thread::sleep(SSH_PAUSE);
-    run_remote(
+    pause(SSH_PAUSE);
+    remote(
         ssh_argv(
             req.ssh,
             use_password,
@@ -366,7 +393,7 @@ fn deploy_and_run_fouldecrypt(
         ),
         password,
     )?;
-    std::thread::sleep(SSH_PAUSE);
+    pause(SSH_PAUSE);
     Ok(())
 }
 
@@ -608,6 +635,101 @@ mod tests {
                 .unwrap()
                 .contains("FoulDecrypt")
         );
+    }
+
+    #[test]
+    fn fouldecrypt_flow_uses_injected_remote_commands_and_checks_download() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let request = DumpRequest {
+            dumper: Dumper::FoulDecrypt,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: None,
+            device: DumpDevice::Usb,
+            agent: None,
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        };
+        let mut calls = 0;
+        let result = run_fouldecrypt_with(
+            &request,
+            work.path(),
+            Some("secret"),
+            |_| Ok(()),
+            |(_, args), password| {
+                calls += 1;
+                assert_eq!(password, Some("secret"));
+                if calls == 3 {
+                    std::fs::write(args.last().expect("local IPA destination"), b"bad IPA")
+                        .expect("write fake download");
+                }
+                Ok(())
+            },
+            |_| {},
+        );
+
+        assert_eq!(calls, 3);
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("Zip"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn fouldecrypt_flow_propagates_missing_tools_and_remote_failures() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let request = DumpRequest {
+            dumper: Dumper::FoulDecrypt,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: None,
+            device: DumpDevice::Usb,
+            agent: None,
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        };
+        for (password, failed_tool) in [(None, "ssh"), (None, "scp"), (Some("pw"), "sshpass")] {
+            let error = run_fouldecrypt_with(
+                &request,
+                work.path(),
+                password,
+                |tool| {
+                    (tool != failed_tool)
+                        .then_some(())
+                        .ok_or_else(|| tool.to_string())
+                },
+                |_, _| panic!("remote command should not run when {failed_tool} is missing"),
+                |_| {},
+            )
+            .unwrap_err();
+            assert!(error.contains(failed_tool));
+        }
+
+        for failed_call in 1..=3 {
+            let mut calls = 0;
+            assert!(
+                run_fouldecrypt_with(
+                    &request,
+                    work.path(),
+                    None,
+                    |_| Ok(()),
+                    |_, _| {
+                        calls += 1;
+                        if calls == failed_call {
+                            Err("remote failed".into())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    |_| {},
+                )
+                .unwrap_err()
+                .contains("remote failed")
+            );
+        }
     }
 
     #[test]
