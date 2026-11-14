@@ -31,6 +31,30 @@ where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
+    handle_2fa_with_prompt(
+        use_case,
+        login,
+        challenge,
+        options,
+        format,
+        &DialoguerPrompt,
+    )
+    .await
+}
+
+async fn handle_2fa_with_prompt<R, C, P>(
+    use_case: &AuthLogin<R, C>,
+    login: GrandSlamLoginContext<'_>,
+    challenge: GrandSlamChallenge<'_>,
+    options: &LoginOptions<'_>,
+    format: &OutputFormat,
+    prompt: &P,
+) -> Result<(), String>
+where
+    R: AppStoreRepository,
+    C: CredentialRepository,
+    P: TwoFactorPrompt,
+{
     if options.non_interactive {
         return Err("GrandSlam 2FA required. Use interactive mode to complete.".into());
     }
@@ -41,11 +65,11 @@ where
         guid: login.guid,
         store_front: login.store_front,
     };
-    let choice = select_2fa_method(challenge.method)?;
+    let choice = prompt.select_method(challenge.method)?;
     let account = if choice == 0 {
-        complete_trusted_device(use_case, &credentials, challenge).await
+        complete_trusted_device(use_case, &credentials, challenge, prompt).await
     } else {
-        complete_sms(use_case, &credentials, challenge).await
+        complete_sms(use_case, &credentials, challenge, prompt).await
     }?;
 
     let output = format_login_account(&account, format);
@@ -53,20 +77,64 @@ where
     Ok(())
 }
 
-fn select_2fa_method(method: TwoFactorMethod) -> Result<usize, String> {
-    let default = usize::from(method == TwoFactorMethod::Sms);
-    dialoguer::Select::new()
-        .with_prompt("Choose 2FA method")
-        .items(["Trusted device", "SMS"])
-        .default(default)
-        .interact()
-        .map_err(|e| format!("failed to select 2FA method: {e}"))
+trait TwoFactorPrompt {
+    fn select_method(&self, method: TwoFactorMethod) -> Result<usize, String>;
+    fn trusted_device_code(&self) -> Result<String, String>;
+    fn select_phone(&self, phones: &[TrustedPhoneNumber]) -> Result<i64, String>;
+    fn sms_code(&self) -> Result<String, String>;
+}
+
+struct DialoguerPrompt;
+
+impl TwoFactorPrompt for DialoguerPrompt {
+    fn select_method(&self, method: TwoFactorMethod) -> Result<usize, String> {
+        let default = usize::from(method == TwoFactorMethod::Sms);
+        dialoguer::Select::new()
+            .with_prompt("Choose 2FA method")
+            .items(["Trusted device", "SMS"])
+            .default(default)
+            .interact()
+            .map_err(|e| format!("failed to select 2FA method: {e}"))
+    }
+
+    fn trusted_device_code(&self) -> Result<String, String> {
+        dialoguer::Input::<String>::new()
+            .with_prompt("Enter 6-digit code from trusted device")
+            .validate_with(|input: &String| {
+                if is_trusted_device_code(input) {
+                    Ok(())
+                } else {
+                    Err("Enter the 6-digit code shown on a trusted device.".to_string())
+                }
+            })
+            .interact_text()
+            .map_err(|e| format!("failed to read 2FA code: {e}"))
+    }
+
+    fn select_phone(&self, phones: &[TrustedPhoneNumber]) -> Result<i64, String> {
+        let items: Vec<&str> = phones.iter().map(|phone| phone.number.as_str()).collect();
+        let selected = dialoguer::Select::new()
+            .with_prompt("Choose trusted phone number")
+            .items(&items)
+            .default(0)
+            .interact()
+            .map_err(|e| format!("failed to select phone number: {e}"))?;
+        Ok(phones[selected].id)
+    }
+
+    fn sms_code(&self) -> Result<String, String> {
+        dialoguer::Input::<String>::new()
+            .with_prompt("Enter SMS code")
+            .interact_text()
+            .map_err(|e| format!("failed to read SMS code: {e}"))
+    }
 }
 
 async fn complete_trusted_device<R, C>(
     use_case: &AuthLogin<R, C>,
     credentials: &GrandslamCredentials<'_>,
     challenge: GrandSlamChallenge<'_>,
+    prompt: &impl TwoFactorPrompt,
 ) -> Result<crate::domain::entity::Account, String>
 where
     R: AppStoreRepository,
@@ -74,17 +142,7 @@ where
 {
     request_trusted_device_code(use_case, challenge.dsid, challenge.idms_token).await?;
 
-    let code = dialoguer::Input::<String>::new()
-        .with_prompt("Enter 6-digit code from trusted device")
-        .validate_with(|input: &String| {
-            if is_trusted_device_code(input) {
-                Ok(())
-            } else {
-                Err("Enter the 6-digit code shown on a trusted device.".to_string())
-            }
-        })
-        .interact_text()
-        .map_err(|e| format!("failed to read 2FA code: {e}"))?;
+    let code = prompt.trusted_device_code()?;
 
     use_case
         .complete_trusted_device_grandslam_2fa(
@@ -122,21 +180,20 @@ async fn complete_sms<R, C>(
     use_case: &AuthLogin<R, C>,
     credentials: &GrandslamCredentials<'_>,
     challenge: GrandSlamChallenge<'_>,
+    prompt: &impl TwoFactorPrompt,
 ) -> Result<crate::domain::entity::Account, String>
 where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
-    let phone_id = select_sms_phone_id(use_case, challenge.dsid, challenge.idms_token).await?;
+    let phone_id =
+        select_sms_phone_id(use_case, challenge.dsid, challenge.idms_token, prompt).await?;
     use_case
         .request_sms(challenge.dsid, challenge.idms_token, phone_id)
         .await
         .map_err(|e| format!("failed to request SMS: {e}"))?;
 
-    let code = dialoguer::Input::<String>::new()
-        .with_prompt("Enter SMS code")
-        .interact_text()
-        .map_err(|e| format!("failed to read SMS code: {e}"))?;
+    let code = prompt.sms_code()?;
 
     use_case
         .complete_sms_grandslam_2fa(
@@ -156,6 +213,7 @@ async fn select_sms_phone_id<R, C>(
     use_case: &AuthLogin<R, C>,
     dsid: &str,
     idms_token: &str,
+    prompt: &impl TwoFactorPrompt,
 ) -> Result<i64, String>
 where
     R: AppStoreRepository,
@@ -164,7 +222,7 @@ where
     let Some(phones) = list_trusted_phones_or_default(use_case, dsid, idms_token).await else {
         return Ok(DEFAULT_PHONE_ID);
     };
-    choose_sms_phone_id(&phones)
+    choose_sms_phone_id(&phones, prompt)
 }
 
 async fn list_trusted_phones_or_default<R, C>(
@@ -203,21 +261,16 @@ where
     }
 }
 
-fn choose_sms_phone_id(phones: &[TrustedPhoneNumber]) -> Result<i64, String> {
+fn choose_sms_phone_id(
+    phones: &[TrustedPhoneNumber],
+    prompt: &impl TwoFactorPrompt,
+) -> Result<i64, String> {
     if let [only] = phones {
         println!("Sending SMS to {}", only.number);
         return Ok(only.id);
     }
 
-    let items: Vec<&str> = phones.iter().map(|p| p.number.as_str()).collect();
-    let selected = dialoguer::Select::new()
-        .with_prompt("Choose trusted phone number")
-        .items(&items)
-        .default(0)
-        .interact()
-        .map_err(|e| format!("failed to select phone number: {e}"))?;
-
-    Ok(phones[selected].id)
+    prompt.select_phone(phones)
 }
 
 fn app_store_error_type(error: &crate::domain::error::AppStoreError) -> &'static str {
@@ -243,16 +296,46 @@ fn app_store_error_type(error: &crate::domain::error::AppStoreError) -> &'static
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GrandSlamChallenge, GrandSlamLoginContext, app_store_error_type,
-        request_trusted_device_code, select_sms_phone_id,
-    };
+    use super::*;
     use crate::domain::entity::TrustedPhoneNumber;
     use crate::domain::error::{AppStoreError, TwoFactorMethod};
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use crate::domain::usecase::AuthLogin;
     use crate::presentation::cli::commands::auth::LoginOptions;
     use crate::presentation::cli::output::OutputFormat;
+
+    struct FixedPrompt {
+        method: usize,
+    }
+
+    impl TwoFactorPrompt for FixedPrompt {
+        fn select_method(&self, _: TwoFactorMethod) -> Result<usize, String> {
+            Ok(self.method)
+        }
+
+        fn trusted_device_code(&self) -> Result<String, String> {
+            Ok("123456".into())
+        }
+
+        fn select_phone(&self, phones: &[TrustedPhoneNumber]) -> Result<i64, String> {
+            Ok(phones.last().expect("phone list").id)
+        }
+
+        fn sms_code(&self) -> Result<String, String> {
+            Ok("654321".into())
+        }
+    }
+
+    fn login_options() -> LoginOptions<'static> {
+        LoginOptions {
+            email: None,
+            password: None,
+            code: None,
+            country: None,
+            non_interactive: false,
+            grandslam: true,
+        }
+    }
 
     #[test]
     fn error_classification_does_not_include_error_content() {
@@ -355,20 +438,107 @@ mod tests {
             FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Ok(vec![phone]));
         let use_case = AuthLogin::new(app_store, InMemoryCredentialRepository::new());
         assert_eq!(
-            select_sms_phone_id(&use_case, "dsid", "token").await,
+            select_sms_phone_id(&use_case, "dsid", "token", &DialoguerPrompt).await,
             Ok(42)
         );
 
         let empty =
             FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Ok(Vec::new()));
         let use_case = AuthLogin::new(empty, InMemoryCredentialRepository::new());
-        assert_eq!(select_sms_phone_id(&use_case, "dsid", "token").await, Ok(1));
+        assert_eq!(
+            select_sms_phone_id(&use_case, "dsid", "token", &DialoguerPrompt).await,
+            Ok(1)
+        );
 
         let failed = FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Err(
             AppStoreError::NetworkError("offline".into()),
         ));
         let use_case = AuthLogin::new(failed, InMemoryCredentialRepository::new());
-        assert_eq!(select_sms_phone_id(&use_case, "dsid", "token").await, Ok(1));
+        assert_eq!(
+            select_sms_phone_id(&use_case, "dsid", "token", &DialoguerPrompt).await,
+            Ok(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_trusted_device_flow_validates_and_saves_account() {
+        let app_store = FakeAppStoreRepository::new()
+            .with_validate_trusted_device_code_result(Ok(()))
+            .with_authenticate_grandslam_result(Ok(
+                crate::domain::entity::test_support::test_account(),
+            ));
+        let use_case = AuthLogin::new(app_store.clone(), InMemoryCredentialRepository::new());
+
+        handle_2fa_with_prompt(
+            &use_case,
+            GrandSlamLoginContext {
+                email: "user@example.com",
+                password: "password",
+                guid: "guid",
+                store_front: None,
+            },
+            GrandSlamChallenge {
+                dsid: "dsid",
+                idms_token: "token",
+                method: TwoFactorMethod::TrustedDevice,
+            },
+            &login_options(),
+            &OutputFormat::Text,
+            &FixedPrompt { method: 0 },
+        )
+        .await
+        .expect("trusted-device login");
+
+        assert_eq!(
+            app_store.validate_trusted_device_code_calls()[0].2,
+            "123456"
+        );
+        assert_eq!(app_store.authenticate_grandslam_calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn interactive_sms_flow_selects_phone_and_saves_account() {
+        let phones = vec![
+            TrustedPhoneNumber {
+                id: 10,
+                number: "+1 *** 10".into(),
+            },
+            TrustedPhoneNumber {
+                id: 20,
+                number: "+1 *** 20".into(),
+            },
+        ];
+        let app_store = FakeAppStoreRepository::new()
+            .with_list_trusted_phone_numbers_result(Ok(phones))
+            .with_validate_sms_code_result(Ok(()))
+            .with_authenticate_grandslam_result(Ok(
+                crate::domain::entity::test_support::test_account(),
+            ));
+        let use_case = AuthLogin::new(app_store.clone(), InMemoryCredentialRepository::new());
+
+        handle_2fa_with_prompt(
+            &use_case,
+            GrandSlamLoginContext {
+                email: "user@example.com",
+                password: "password",
+                guid: "guid",
+                store_front: None,
+            },
+            GrandSlamChallenge {
+                dsid: "dsid",
+                idms_token: "token",
+                method: TwoFactorMethod::Sms,
+            },
+            &login_options(),
+            &OutputFormat::Text,
+            &FixedPrompt { method: 1 },
+        )
+        .await
+        .expect("SMS login");
+
+        assert_eq!(app_store.validate_sms_code_calls()[0].2, 20);
+        assert_eq!(app_store.validate_sms_code_calls()[0].3, "654321");
+        assert_eq!(app_store.authenticate_grandslam_calls().len(), 1);
     }
 
     #[test]
