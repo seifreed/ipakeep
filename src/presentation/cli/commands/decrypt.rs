@@ -433,3 +433,196 @@ fn append_macho_text(out: &mut String, macho: &MachoReport) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infrastructure::decrypt::{MachoVerify, SliceVerify};
+
+    #[test]
+    fn renderers_cover_empty_and_populated_reports() {
+        let empty = VerifyReport {
+            ok: false,
+            machos: vec![MachoVerify {
+                entry: "Bad".into(),
+                slices: vec![],
+            }],
+            still_encrypted: vec!["App[arm64]".into()],
+        };
+        let text = render_verify(&empty);
+        assert!(text.contains("FAILED"));
+        assert!(text.contains("[invalid Mach-O]"));
+        assert!(text.contains("App[arm64]"));
+
+        let report = VerifyReport {
+            ok: true,
+            machos: vec![MachoVerify {
+                entry: "App".into(),
+                slices: vec![
+                    SliceVerify {
+                        arch: "arm64".into(),
+                        cryptid_zero: true,
+                        valid: true,
+                        looks_decrypted: Some(true),
+                    },
+                    SliceVerify {
+                        arch: "arm64e".into(),
+                        cryptid_zero: false,
+                        valid: false,
+                        looks_decrypted: Some(false),
+                    },
+                    SliceVerify {
+                        arch: "x86_64".into(),
+                        cryptid_zero: true,
+                        valid: true,
+                        looks_decrypted: None,
+                    },
+                ],
+            }],
+            still_encrypted: vec![],
+        };
+        let text = render_verify(&report);
+        assert!(text.contains("Verified: OK"));
+        assert!(text.contains("looks-decrypted"));
+        assert!(text.contains("WARNING:looks-filler"));
+        assert!(text.contains("cryptid_zero=true"));
+    }
+
+    #[test]
+    fn entitlement_renderer_covers_each_risk() {
+        assert_eq!(
+            render_entitlements(&[]),
+            "No entitlements (or none readable).\n"
+        );
+        let rendered = render_entitlements(&[
+            EntitlementVerdict {
+                key: "safe".into(),
+                risk: EntitlementRisk::Ok,
+                note: "safe note".into(),
+            },
+            EntitlementVerdict {
+                key: "profile".into(),
+                risk: EntitlementRisk::NeedsProvisioning,
+                note: "profile note".into(),
+            },
+            EntitlementVerdict {
+                key: "blocked".into(),
+                risk: EntitlementRisk::CannotRegrant,
+                note: "blocked note".into(),
+            },
+        ]);
+        assert!(rendered.contains("[OK  ] safe — safe note"));
+        assert!(rendered.contains("[PROV] profile — profile note"));
+        assert!(rendered.contains("[FAIL] blocked — blocked note"));
+    }
+
+    #[test]
+    fn inspect_renderer_formats_metadata_and_slice_details() {
+        let report = InspectReport {
+            bundle_executable: Some("App".into()),
+            minimum_os_version: Some("17.0".into()),
+            encrypted: true,
+            machos: vec![MachoReport {
+                entry: "Payload/App.app/App".into(),
+                slices: vec![
+                    crate::infrastructure::decrypt::SliceReport {
+                        arch: "arm64".into(),
+                        encrypted: true,
+                        cryptid: Some(1),
+                        cryptoff: Some(4096),
+                        cryptsize: Some(2048),
+                        minimum_os: Some("17.0".into()),
+                        dump_filename: Some("App.arm64.dump".into()),
+                        dumpable_on: vec![
+                            crate::infrastructure::decrypt::DumpTarget {
+                                ios_major: 17,
+                                dumpable: true,
+                            },
+                            crate::infrastructure::decrypt::DumpTarget {
+                                ios_major: 18,
+                                dumpable: false,
+                            },
+                        ],
+                    },
+                    crate::infrastructure::decrypt::SliceReport {
+                        arch: "x86_64".into(),
+                        encrypted: false,
+                        cryptid: None,
+                        cryptoff: None,
+                        cryptsize: None,
+                        minimum_os: None,
+                        dump_filename: None,
+                        dumpable_on: vec![],
+                    },
+                ],
+            }],
+        };
+        let rendered = render_text(&report);
+        assert!(rendered.contains("Executable: App"));
+        assert!(rendered.contains("MinimumOSVersion: 17.0"));
+        assert!(rendered.contains("Encrypted: yes"));
+        assert!(rendered.contains("cryptid=1 cryptoff=4096 cryptsize=2048"));
+        assert!(rendered.contains("iOS17=y iOS18=n"));
+        assert!(rendered.contains("not encrypted"));
+    }
+
+    #[test]
+    fn output_helpers_handle_extensions_and_missing_stems() {
+        assert_eq!(
+            default_output(Path::new("App.ipa")),
+            PathBuf::from("App-decrypted.ipa")
+        );
+        assert_eq!(
+            default_output(Path::new("/")),
+            PathBuf::from("/app-decrypted.ipa")
+        );
+        assert_eq!(
+            min_os_output(Path::new("App.ipa")),
+            PathBuf::from("App-minos.ipa")
+        );
+        assert_eq!(
+            dump_output(None, "com.example.app"),
+            PathBuf::from("com.example.app-decrypted.ipa")
+        );
+        assert_eq!(
+            dump_output(Some(Path::new("App.ipa")), "ignored"),
+            PathBuf::from("App-decrypted.ipa")
+        );
+    }
+
+    #[test]
+    fn dump_rejects_invalid_device_and_backend_before_running_tools() {
+        let args = DumpArgs {
+            bundle_id: "com.example.app",
+            dumper: "invalid",
+            ipa: None,
+            device: "wifi",
+            agent: None,
+            spawn: false,
+            settle: 0.0,
+            output: None,
+            drop_undumped_extensions: false,
+            ssh_host: "localhost",
+            ssh_port: 22,
+            ssh_user: "root",
+        };
+        assert!(handle_dump(&args).unwrap_err().contains("unknown device"));
+        let args = DumpArgs {
+            device: "usb",
+            ..args
+        };
+        assert!(handle_dump(&args).unwrap_err().contains("unknown dumper"));
+    }
+
+    #[test]
+    fn file_handlers_report_missing_inputs() {
+        let path = Path::new("/missing/ipakeep-test.ipa");
+        assert!(handle_inspect(path, &OutputFormat::Text).is_err());
+        assert!(handle_patch(path, Path::new("/missing/dumps"), None).is_err());
+        assert!(handle_verify(path, &OutputFormat::Json).is_err());
+        assert!(handle_entitlements(Path::new("/missing/App.app"), &OutputFormat::Text).is_err());
+        assert!(handle_set_min_os(path, "17.0", None).is_err());
+        assert!(handle_offline(path, None, false).is_err());
+        assert!(handle_resign(Path::new("/missing/App.app"), None, None).is_err());
+    }
+}
