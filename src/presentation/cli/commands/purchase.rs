@@ -43,11 +43,17 @@ where
         .await
         .map_err(|e| format!("purchase failed: {e}"))?;
 
+    print_purchase_success(format, &app.name)?;
+
+    Ok(())
+}
+
+fn print_purchase_success(format: &OutputFormat, app_name: &str) -> Result<(), String> {
     match format {
         OutputFormat::Json => {
             let result = PurchaseResult {
                 success: true,
-                app: app.name,
+                app: app_name.to_string(),
             };
             println!(
                 "{}",
@@ -56,7 +62,7 @@ where
             );
         }
         OutputFormat::Text => {
-            println!("Successfully purchased '{}'.", app.name);
+            println!("Successfully purchased '{app_name}'.");
         }
     }
 
