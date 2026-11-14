@@ -125,6 +125,26 @@ pub fn run_dump(req: &DumpRequest) -> Result<Vec<u8>, String> {
 }
 
 fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
+    run_builtin_with(
+        req,
+        work,
+        || {
+            python_with_frida(
+                std::env::var(PYTHON_OVERRIDE_ENV).ok(),
+                std::env::var_os("PATH").as_deref(),
+                python_imports_frida,
+            )
+        },
+        run_inherit,
+    )
+}
+
+fn run_builtin_with(
+    req: &DumpRequest,
+    work: &Path,
+    mut python_with_frida: impl FnMut() -> Result<String, String>,
+    run: impl FnOnce(Command) -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
     let (python, ipa) = match (req.ipa, req.device) {
         (Some(ipa), _) => (python_with_frida()?, ipa.to_path_buf()),
         (None, DumpDevice::Usb) => {
@@ -149,7 +169,7 @@ fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
     });
     let mut command = Command::new(program);
     command.args(&args);
-    run_inherit(command)?;
+    run(command)?;
 
     let ipa_bytes = std::fs::read(&ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
     ensure_decrypted(patch_ipa_decrypted_with(
@@ -191,16 +211,16 @@ fn pull_installed_bundle(python: &str, bundle_id: &str, work: &Path) -> Result<P
 const PYTHON_OVERRIDE_ENV: &str = "IPAKEEP_PYTHON";
 const FRIDA_LAUNCHERS: [&str; 2] = ["frida-ps", "frida"];
 
-fn python_with_frida() -> Result<String, String> {
-    let override_python = std::env::var(PYTHON_OVERRIDE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let launchers = launcher_interpreters(std::env::var_os("PATH").as_deref());
+fn python_with_frida(
+    override_python: Option<String>,
+    path: Option<&std::ffi::OsStr>,
+    mut imports_frida: impl FnMut(&str) -> bool,
+) -> Result<String, String> {
+    let override_python = override_python.filter(|value| !value.trim().is_empty());
+    let launchers = launcher_interpreters(path);
     let candidates = python_candidates(override_python, &launchers);
     for candidate in &candidates {
-        let mut command = Command::new(candidate);
-        command.args(["-c", "import frida"]);
-        if observed_output(&mut command).is_ok_and(|output| output.status.success()) {
+        if imports_frida(candidate) {
             tracing::info!(
                 service = "ipakeep",
                 component = "decrypt",
@@ -214,6 +234,12 @@ fn python_with_frida() -> Result<String, String> {
     Err(format!(
         "cannot import Frida from any of {candidates:?}; set {PYTHON_OVERRIDE_ENV} or install `frida` and `frida-tools` in the same Python environment"
     ))
+}
+
+fn python_imports_frida(candidate: &str) -> bool {
+    let mut command = Command::new(candidate);
+    command.args(["-c", "import frida"]);
+    observed_output(&mut command).is_ok_and(|output| output.status.success())
 }
 
 fn python_candidates(override_python: Option<String>, launchers: &[String]) -> Vec<String> {
@@ -622,6 +648,79 @@ mod tests {
             run_builtin(&request, work.path()).unwrap_err(),
             "dumping on this Mac needs --ipa <encrypted.ipa> to patch"
         );
+    }
+
+    #[test]
+    fn python_selection_uses_launcher_and_reports_unavailable_frida() {
+        let first = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(
+            first.path().join("frida-ps"),
+            "#!/usr/bin/env launcher-python\n",
+        )
+        .expect("write Frida launcher");
+        let path = std::env::join_paths([first.path()]).expect("PATH value");
+
+        let selected = python_with_frida(Some("  ".into()), Some(&path), |candidate| {
+            candidate == "launcher-python"
+        })
+        .expect("launcher interpreter");
+        assert_eq!(selected, "launcher-python");
+        assert!(
+            python_with_frida(None, None, |_| false)
+                .unwrap_err()
+                .contains("cannot import Frida")
+        );
+        assert!(!python_imports_frida("/bin/false"));
+    }
+
+    #[test]
+    fn builtin_dump_pulls_usb_bundle_and_reports_invalid_ipa() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let python = write_executable(work.path(), "python", "#!/bin/sh\nprintf pulled > \"$3\"\n");
+        let request = DumpRequest {
+            dumper: Dumper::Builtin,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: None,
+            device: DumpDevice::Usb,
+            agent: None,
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        };
+
+        let result = run_builtin_with(
+            &request,
+            work.path(),
+            || Ok(python.to_string_lossy().into_owned()),
+            |command| {
+                assert_eq!(command.get_program(), python.as_os_str());
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(result.contains("Zip"));
+    }
+
+    #[test]
+    fn builtin_dump_reports_missing_ipa_after_successful_runner() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let ipa = work.path().join("missing.ipa");
+        let request = DumpRequest {
+            dumper: Dumper::Builtin,
+            bundle_id: "com.example.app",
+            ssh: SSH,
+            ipa: Some(&ipa),
+            device: DumpDevice::Local,
+            agent: Some(Path::new("/custom/agent.py")),
+            settle: 0.0,
+            spawn: false,
+            drop_undumped_extensions: false,
+        };
+
+        let error = run_builtin_with(&request, work.path(), || Ok("python".into()), |_| Ok(()))
+            .unwrap_err();
+        assert!(error.contains("missing.ipa"));
     }
 
     #[test]
