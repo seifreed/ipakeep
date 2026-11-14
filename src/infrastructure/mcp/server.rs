@@ -143,11 +143,12 @@ where
 }
 
 fn to_success<T: Serialize>(id: Value, value: &T) -> JsonRpcResponse {
+    let error_code = INTERNAL_ERROR;
     match serde_json::to_value(value) {
         Ok(value) => JsonRpcResponse::success(id, value),
         Err(error) => JsonRpcResponse::error(
             id,
-            INTERNAL_ERROR,
+            error_code,
             format!("failed to serialize result: {error}"),
         ),
     }

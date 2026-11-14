@@ -11,6 +11,8 @@ use crate::domain::entity::Account;
 use crate::infrastructure::grandslam::{AnisetteData, GrandSlamClient, resolve_anisette};
 use crate::infrastructure::http::client::AppleHttpClient;
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::future::Future;
 
 const BASE_URL: &str = "https://developerservices2.apple.com/services/QH65B2/";
 const XCODE_TOKEN_APP: &str = "com.apple.gs.xcode.auth";
@@ -37,9 +39,26 @@ impl DeveloperClient {
             .request_app_token(account, XCODE_TOKEN_APP)
             .await
             .map_err(|e| e.to_string())?;
-        let anisette = resolve_anisette(http.client())
+        Self::finish_authentication(account, http, gs_token, |client| async move {
+            resolve_anisette(&client).await
+        })
+        .await
+    }
+
+    async fn finish_authentication<F, Fut, E>(
+        account: &Account,
+        http: AppleHttpClient,
+        gs_token: String,
+        resolve: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce(reqwest::Client) -> Fut,
+        Fut: Future<Output = Result<AnisetteData, E>>,
+        E: Display,
+    {
+        let anisette = resolve(http.client().clone())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|error| error.to_string())?;
         Ok(Self::from_credentials(account, http, gs_token, anisette))
     }
 
@@ -314,6 +333,26 @@ mod tests {
         account.dsid = None;
         let fallback = make_client(&account);
         assert_eq!(fallback.identity_id, "12345");
+    }
+
+    #[tokio::test]
+    async fn authenticated_client_finishes_with_resolved_anisette() {
+        let anisette = AnisetteData {
+            headers: HashMap::from([("X-Apple-I-MD".into(), "otp".into())]),
+            cpd: json!({"dt":"Mac"}),
+        };
+        let client = DeveloperClient::finish_authentication(
+            &account(),
+            AppleHttpClient::new().expect("HTTP client"),
+            "gs-token".into(),
+            move |_| async { Ok::<_, String>(anisette) },
+        )
+        .await
+        .expect("authenticated client");
+
+        assert_eq!(client.identity_id, "12345");
+        assert_eq!(client.gs_token, "gs-token");
+        assert_eq!(client.anisette.headers["X-Apple-I-MD"], "otp");
     }
 
     #[tokio::test]

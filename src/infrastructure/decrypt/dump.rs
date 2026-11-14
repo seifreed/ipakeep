@@ -275,13 +275,8 @@ fn python_with_frida(
     let candidates = python_candidates(override_python, &launchers);
     for candidate in &candidates {
         if imports_frida(candidate) {
-            tracing::info!(
-                service = "ipakeep",
-                component = "decrypt",
-                event_name = "frida.interpreter.selected",
-                interpreter = candidate.as_str(),
-                "selected Python interpreter for the Frida runner"
-            );
+            #[rustfmt::skip]
+            tracing::info!(service = "ipakeep", component = "decrypt", event_name = "frida.interpreter.selected", interpreter = candidate.as_str(), "selected Python interpreter for the Frida runner");
             return Ok(candidate.clone());
         }
     }

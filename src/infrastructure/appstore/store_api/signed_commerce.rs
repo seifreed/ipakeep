@@ -83,21 +83,27 @@ fn take_staged_package_at(
     staging: &Path,
     package: &Path,
 ) -> Option<Result<Vec<u8>, AppStoreError>> {
+    take_staged_package_at_with(staging, package, |directory| {
+        std::fs::remove_dir_all(directory)
+    })
+}
+
+fn take_staged_package_at_with(
+    staging: &Path,
+    package: &Path,
+    remove_directory: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Option<Result<Vec<u8>, AppStoreError>> {
     let directory = staged_package_directory(staging, package)?;
     let bytes = std::fs::read(package)
         .map_err(|error| AppStoreError::NetworkError(format!("read staged package: {error}")));
-    if let Err(error) = std::fs::remove_dir_all(&directory) {
-        tracing::warn!(
-            service = "ipakeep",
-            component = "appstore",
-            operation = "download",
-            event_name = "appstore.download.staging_cleanup_failed",
-            outcome = "failure",
-            error_type = ?error.kind(),
-            "failed to remove staged package"
-        );
+    if let Err(error) = remove_directory(&directory) {
+        warn_staging_cleanup(&error);
     }
     Some(bytes)
+}
+
+fn warn_staging_cleanup(error: &std::io::Error) {
+    tracing::warn!(service = "ipakeep", component = "appstore", operation = "download", event_name = "appstore.download.staging_cleanup_failed", outcome = "failure", error_type = ?error.kind(), "failed to remove staged package");
 }
 
 /// The per-download directory holding `package`, when it lies directly inside
@@ -526,5 +532,27 @@ mod tests {
         );
         assert!(!download.exists());
         assert!(take_staged_package("https://example.test/package.ipa").is_none());
+    }
+
+    #[test]
+    fn staged_package_is_returned_when_cleanup_fails() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let staging = root.path().join(STAGING_DIRECTORY);
+        let download = staging.join("download-3");
+        std::fs::create_dir_all(&download).expect("download directory");
+        let package = download.join("package.ipa");
+        std::fs::write(&package, b"staged IPA").expect("package");
+
+        let result = take_staged_package_at_with(&staging, &package, |_| {
+            Err(std::io::Error::other("cleanup failed"))
+        });
+
+        assert_eq!(
+            result
+                .expect("package is staged")
+                .expect("package can be read"),
+            b"staged IPA"
+        );
+        assert!(download.exists());
     }
 }
