@@ -243,15 +243,56 @@ fn app_store_error_type(error: &crate::domain::error::AppStoreError) -> &'static
 
 #[cfg(test)]
 mod tests {
-    use super::{app_store_error_type, request_trusted_device_code};
-    use crate::domain::error::AppStoreError;
+    use super::{
+        GrandSlamChallenge, GrandSlamLoginContext, app_store_error_type,
+        request_trusted_device_code, select_sms_phone_id,
+    };
+    use crate::domain::entity::TrustedPhoneNumber;
+    use crate::domain::error::{AppStoreError, TwoFactorMethod};
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use crate::domain::usecase::AuthLogin;
+    use crate::presentation::cli::commands::auth::LoginOptions;
+    use crate::presentation::cli::output::OutputFormat;
 
     #[test]
     fn error_classification_does_not_include_error_content() {
-        let error = AppStoreError::NetworkError("secret-token-in-url".into());
-        assert_eq!(app_store_error_type(&error), "network");
+        let cases = [
+            (
+                AppStoreError::AuthenticationFailed("secret".into()),
+                "authentication",
+            ),
+            (AppStoreError::InvalidCredentials, "authentication"),
+            (
+                AppStoreError::AuthCodeRequired {
+                    dsid: "dsid".into(),
+                    idms_token: "token".into(),
+                    method: TwoFactorMethod::Sms,
+                },
+                "two_factor_required",
+            ),
+            (AppStoreError::AccountDisabled, "account_disabled"),
+            (AppStoreError::AppNotFound("app".into()), "app_not_found"),
+            (AppStoreError::AppNotFree(1.0), "app_not_free"),
+            (AppStoreError::NoLicense(1), "no_license"),
+            (
+                AppStoreError::VersionNotAvailable("v".into()),
+                "version_unavailable",
+            ),
+            (AppStoreError::PurchaseFailed("purchase".into()), "purchase"),
+            (AppStoreError::DownloadFailed("download".into()), "download"),
+            (
+                AppStoreError::IpaPatchingFailed("patch".into()),
+                "ipa_patching",
+            ),
+            (
+                AppStoreError::NetworkError("secret-token-in-url".into()),
+                "network",
+            ),
+            (AppStoreError::Unexpected("unexpected".into()), "unexpected"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(app_store_error_type(&error), expected);
+        }
     }
 
     #[tokio::test]
@@ -267,6 +308,67 @@ mod tests {
             app_store.request_trusted_device_notification_calls(),
             vec![("dsid".into(), "idms".into())]
         );
+    }
+
+    #[tokio::test]
+    async fn non_interactive_two_factor_fails_before_prompting() {
+        let use_case = AuthLogin::new(
+            FakeAppStoreRepository::new(),
+            InMemoryCredentialRepository::new(),
+        );
+        let error = super::super::grandslam::handle_2fa(
+            &use_case,
+            GrandSlamLoginContext {
+                email: "user@example.com",
+                password: "password",
+                guid: "guid",
+                store_front: None,
+            },
+            GrandSlamChallenge {
+                dsid: "dsid",
+                idms_token: "token",
+                method: TwoFactorMethod::TrustedDevice,
+            },
+            &LoginOptions {
+                email: None,
+                password: None,
+                code: None,
+                country: None,
+                non_interactive: true,
+                grandslam: true,
+            },
+            &OutputFormat::Text,
+        )
+        .await
+        .expect_err("non-interactive 2FA must not prompt");
+
+        assert!(error.contains("interactive mode"));
+    }
+
+    #[tokio::test]
+    async fn sms_phone_selection_uses_single_number_or_documented_fallback() {
+        let phone = TrustedPhoneNumber {
+            id: 42,
+            number: "+1 *** *** 1234".into(),
+        };
+        let app_store =
+            FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Ok(vec![phone]));
+        let use_case = AuthLogin::new(app_store, InMemoryCredentialRepository::new());
+        assert_eq!(
+            select_sms_phone_id(&use_case, "dsid", "token").await,
+            Ok(42)
+        );
+
+        let empty =
+            FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Ok(Vec::new()));
+        let use_case = AuthLogin::new(empty, InMemoryCredentialRepository::new());
+        assert_eq!(select_sms_phone_id(&use_case, "dsid", "token").await, Ok(1));
+
+        let failed = FakeAppStoreRepository::new().with_list_trusted_phone_numbers_result(Err(
+            AppStoreError::NetworkError("offline".into()),
+        ));
+        let use_case = AuthLogin::new(failed, InMemoryCredentialRepository::new());
+        assert_eq!(select_sms_phone_id(&use_case, "dsid", "token").await, Ok(1));
     }
 
     #[test]
