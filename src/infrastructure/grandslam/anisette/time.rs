@@ -31,7 +31,11 @@ fn unix_to_utc(seconds: u64) -> (u32, u32, u32, u32, u32, u32) {
     let hour = (rem / 3600) as u32;
     let min = ((rem % 3600) / 60) as u32;
     let sec = (rem % 60) as u32;
+    let (year, month, day) = unix_days_to_date(days);
+    (year, month, day, hour, min, sec)
+}
 
+fn unix_days_to_date(days: u64) -> (u32, u32, u32) {
     let mut year = 1970u32;
     let mut days_left = i64::try_from(days).unwrap_or(i64::MAX);
 
@@ -43,7 +47,6 @@ fn unix_to_utc(seconds: u64) -> (u32, u32, u32, u32, u32, u32) {
         days_left -= year_days;
         year += 1;
     }
-
     let month_days = [
         31,
         if is_leap_year(year) { 29 } else { 28 },
@@ -69,9 +72,21 @@ fn unix_to_utc(seconds: u64) -> (u32, u32, u32, u32, u32, u32) {
     }
 
     let day = u32::try_from(days_left + 1).unwrap_or(1);
-    (year, month, day, hour, min, sec)
+    (year, month, day)
 }
 
 fn is_leap_year(year: u32) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unix_to_utc;
+
+    #[test]
+    fn converts_epoch_and_leap_day() {
+        assert_eq!(unix_to_utc(0), (1970, 1, 1, 0, 0, 0));
+        assert_eq!(unix_to_utc(951_782_400), (2000, 2, 29, 0, 0, 0));
+        assert_eq!(unix_to_utc(86_399), (1970, 1, 1, 23, 59, 59));
+    }
 }
