@@ -505,6 +505,73 @@ mod tests {
         assert_eq!(command_name(&command.command), "search");
     }
 
+    #[test]
+    fn command_names_cover_every_public_command_family() {
+        assert_eq!(command_name(&Commands::Mcp), "mcp");
+        assert_eq!(
+            auth_command_name(&AuthCommands::Login {
+                email: None,
+                password: None,
+                code: None,
+                country: None,
+            }),
+            "auth.login"
+        );
+        assert_eq!(auth_command_name(&AuthCommands::Info), "auth.info");
+        assert_eq!(auth_command_name(&AuthCommands::Revoke), "auth.revoke");
+        assert_eq!(
+            simulator_command_name(&SimulatorCommands::InstallIpa {
+                ipa: PathBuf::new(),
+                run: false,
+                console: false,
+                udid: None,
+                device: None,
+                entitlements: None,
+            }),
+            "simulator.install_ipa"
+        );
+        assert_eq!(
+            simulator_command_name(&SimulatorCommands::UnlockRuntime { path: None }),
+            "simulator.unlock_runtime"
+        );
+        assert_eq!(
+            decrypt_command_name(&DecryptCommands::Resign {
+                app: PathBuf::new(),
+                identity: None,
+                entitlements: None,
+            }),
+            "decrypt.resign"
+        );
+        assert_eq!(
+            decrypt_command_name(&DecryptCommands::SetMinOs {
+                ipa: PathBuf::new(),
+                version: "16.0".into(),
+                output: None,
+            }),
+            "decrypt.set_min_os"
+        );
+        assert_eq!(
+            decrypt_command_name(&DecryptCommands::DumpMac {
+                bundle_id: "com.example.app".into(),
+                ipa: PathBuf::new(),
+                agent: None,
+                settle: 0.0,
+                output: None,
+            }),
+            "decrypt.dump_mac"
+        );
+        assert_eq!(
+            decrypt_command_name(&DecryptCommands::Provision {
+                app: PathBuf::new(),
+                device_udid: "device".into(),
+                team: None,
+                app_id_id: "app-id".into(),
+                output: None,
+            }),
+            "decrypt.provision"
+        );
+    }
+
     #[tokio::test]
     async fn dispatch_routes_search_purchase_versions_and_purchases() {
         let app = app(7);
@@ -672,6 +739,37 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_resign_min_os_and_provision_failures() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let credentials = InMemoryCredentialRepository::new();
+        for action in [
+            DecryptCommands::Resign {
+                app: directory.path().join("missing.app"),
+                identity: None,
+                entitlements: None,
+            },
+            DecryptCommands::SetMinOs {
+                ipa: directory.path().join("missing.ipa"),
+                version: "16.0".into(),
+                output: None,
+            },
+            DecryptCommands::Provision {
+                app: directory.path().join("missing.app"),
+                device_udid: "device".into(),
+                team: None,
+                app_id_id: "app-id".into(),
+                output: None,
+            },
+        ] {
+            assert!(
+                dispatch_decrypt(action, &OutputFormat::Text, credentials.clone())
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]
