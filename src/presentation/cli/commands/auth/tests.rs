@@ -37,6 +37,52 @@ fn json_login_output_is_sanitized() {
     assert_eq!(value["has_grandslam_state"], true);
 }
 
+#[test]
+fn non_interactive_login_requires_email_and_password() {
+    let options = LoginOptions {
+        email: None,
+        password: Some("password"),
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+    assert_eq!(
+        login_credentials(&options).unwrap_err(),
+        "email is required in non-interactive mode"
+    );
+
+    let options = LoginOptions {
+        email: Some("test@example.com"),
+        password: None,
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+    assert_eq!(
+        login_credentials(&options).unwrap_err(),
+        "password is required in non-interactive mode"
+    );
+}
+
+#[test]
+fn non_interactive_login_requires_two_factor_code() {
+    let options = LoginOptions {
+        email: None,
+        password: None,
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+
+    assert_eq!(
+        login_code(&options).unwrap_err(),
+        "2FA code required. Use --code flag to provide the code."
+    );
+}
+
 #[cfg(not(ipakeep_modern_adi))]
 #[tokio::test]
 async fn login_defaults_to_configurator_flow() {
