@@ -271,6 +271,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ping_returns_an_empty_success_result() {
+        let response = handle_request(
+            &FakeInvoker::default(),
+            request("ping", Some(Value::from(3)), None),
+        )
+        .await
+        .expect("response");
+
+        assert_eq!(response.result, Some(Value::Object(serde_json::Map::new())));
+    }
+
+    #[tokio::test]
     async fn tools_call_routes_name_and_arguments_to_invoker() {
         let invoker = FakeInvoker::default();
         let response = handle_request(
