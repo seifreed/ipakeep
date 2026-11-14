@@ -37,14 +37,7 @@ pub struct InstallRequest<'a> {
 /// Returns an error when the IPA is encrypted, signing fails, or the device
 /// tools reject the installation.
 pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
-    require_program(if request.legacy_device {
-        "ideviceinstaller"
-    } else {
-        "xcrun"
-    })?;
-    if request.legacy_device && request.launch {
-        require_program("idevicedebug")?;
-    }
+    require_install_tools(request, require_program)?;
     let ipa_bytes =
         fs::read(request.ipa).map_err(|error| format!("{}: {error}", request.ipa.display()))?;
     ensure_decrypted(ipa_bytes)?;
@@ -55,13 +48,37 @@ pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
     result
 }
 
+fn require_install_tools(
+    request: &InstallRequest<'_>,
+    mut require: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    require(if request.legacy_device {
+        "ideviceinstaller"
+    } else {
+        "xcrun"
+    })?;
+    if request.legacy_device && request.launch {
+        require("idevicedebug")?;
+    }
+    Ok(())
+}
+
 fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<(), String> {
+    install_in_workdir_with(request, workdir, signing::sign_bundle, run_inherit)
+}
+
+fn install_in_workdir_with(
+    request: &InstallRequest<'_>,
+    workdir: &Path,
+    sign: impl FnOnce(&Path, &InstallRequest<'_>, &Path) -> Result<(), String>,
+    mut run: impl FnMut(Command) -> Result<(), String>,
+) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
     let app = find_app_bundle(workdir)?;
-    signing::sign_bundle(&app, request, workdir)?;
-    run_inherit(install_command(&app, request.device, request.legacy_device))?;
+    sign(&app, request, workdir)?;
+    run(install_command(&app, request.device, request.legacy_device))?;
     if request.launch {
-        run_inherit(launch_command(
+        run(launch_command(
             &bundle_identifier(&app)?,
             request.device,
             request.legacy_device,
@@ -109,6 +126,88 @@ fn launch_command(bundle_id: &str, device: &str, legacy: bool) -> Command {
 mod tests {
     use super::*;
     use crate::infrastructure::signing::collect_sign_targets;
+
+    fn install_request(ipa: &Path, launch: bool) -> InstallRequest<'_> {
+        InstallRequest {
+            ipa,
+            device: "device-id",
+            identity: "identity",
+            provisioning_profiles: &[],
+            entitlements: None,
+            launch,
+            legacy_device: false,
+        }
+    }
+
+    fn app_ipa() -> Vec<u8> {
+        let info = br#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.app</string></dict></plist>"#;
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in [
+            ("Payload/Test.app/Info.plist", &info[..]),
+            ("Payload/Test.app/TestExec", &b"binary"[..]),
+        ] {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .expect("start IPA entry");
+            std::io::Write::write_all(&mut writer, bytes).expect("write IPA entry");
+        }
+        writer.finish().expect("finish IPA").into_inner()
+    }
+
+    #[test]
+    fn install_tool_requirements_include_legacy_launch_tool() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let ipa = dir.path().join("app.ipa");
+        let request = InstallRequest {
+            legacy_device: true,
+            launch: true,
+            ..install_request(&ipa, false)
+        };
+        let mut tools = Vec::new();
+
+        require_install_tools(&request, |tool| {
+            tools.push(tool.to_string());
+            Ok(())
+        })
+        .expect("tools present");
+
+        assert_eq!(tools, ["ideviceinstaller", "idevicedebug"]);
+    }
+
+    #[test]
+    fn workdir_install_runs_sign_install_and_launch_steps() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let ipa = dir.path().join("app.ipa");
+        fs::write(&ipa, app_ipa()).expect("write IPA");
+        let workdir = dir.path().join("work");
+        fs::create_dir(&workdir).expect("work directory");
+        let request = install_request(&ipa, true);
+        let mut commands = Vec::new();
+
+        install_in_workdir_with(
+            &request,
+            &workdir,
+            |app, _, _| {
+                assert!(app.join("Info.plist").is_file());
+                Ok(())
+            },
+            |command| {
+                commands.push((
+                    command.get_program().to_string_lossy().into_owned(),
+                    command
+                        .get_args()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>(),
+                ));
+                Ok(())
+            },
+        )
+        .expect("install flow");
+
+        assert_eq!(commands.len(), 2);
+        assert!(commands[0].1.contains(&"device-id".into()));
+        assert!(commands[1].1.contains(&"com.example.app".into()));
+    }
 
     #[test]
     fn rejects_invalid_profile_before_embedding_it() {
