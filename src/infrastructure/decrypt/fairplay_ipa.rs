@@ -130,43 +130,44 @@ pub fn enclosing_app_sinf(names: &BTreeSet<String>, bundle: &str) -> Option<Stri
 
     for i in (1..=parts.len()).rev() {
         let prefix = parts[..i].join("/");
-        if !prefix.ends_with(APP_SUFFIX) {
-            continue;
+        if prefix.ends_with(APP_SUFFIX)
+            && let Some(sinf) = find_app_sinf(names, &prefix)
+        {
+            return Some(sinf);
         }
-
-        let sc_info = format!("{prefix}/SC_Info/");
-        let depth = sc_info.matches('/').count();
-        let sinfs: Vec<&String> = names
-            .iter()
-            .filter(|name| {
-                name.starts_with(&sc_info)
-                    && name.ends_with(SINF_SUFFIX)
-                    && name.matches('/').count() == depth
-            })
-            .collect();
-
-        if sinfs.is_empty() {
-            continue;
-        }
-
-        let base = prefix.rsplit('/').next().unwrap_or(&prefix);
-        let stem = base.rfind('.').map_or(base, |dot| &base[..dot]);
-
-        for suffix in [".sinf", ".v4.sinf"] {
-            let preferred = format!("{sc_info}{stem}{suffix}");
-            if sinfs.iter().any(|name| **name == preferred) {
-                return Some(preferred);
-            }
-        }
-
-        if let Some(name) = sinfs.iter().find(|name| !name.ends_with(".v4.sinf")) {
-            return Some((*name).clone());
-        }
-
-        return Some(sinfs[0].clone());
     }
 
     None
+}
+
+fn find_app_sinf(names: &BTreeSet<String>, prefix: &str) -> Option<String> {
+    let sc_info = format!("{prefix}/SC_Info/");
+    let depth = sc_info.matches('/').count();
+    let sinfs: Vec<&String> = names
+        .iter()
+        .filter(|name| {
+            name.starts_with(&sc_info)
+                && name.ends_with(SINF_SUFFIX)
+                && name.matches('/').count() == depth
+        })
+        .collect();
+    if sinfs.is_empty() {
+        return None;
+    }
+
+    let base = prefix.rsplit('/').next().unwrap_or(prefix);
+    let stem = base.rfind('.').map_or(base, |dot| &base[..dot]);
+    for suffix in [".sinf", ".v4.sinf"] {
+        let preferred = format!("{sc_info}{stem}{suffix}");
+        if sinfs.iter().any(|name| **name == preferred) {
+            return Some(preferred);
+        }
+    }
+    sinfs
+        .iter()
+        .find(|name| !name.ends_with(".v4.sinf"))
+        .or_else(|| sinfs.first())
+        .map(|name| (*name).clone())
 }
 
 /// Read all members of the zip at `ipa_path` into a map `name -> bytes`.
