@@ -19,7 +19,15 @@ pub(super) async fn purchase(
     guid: &str,
 ) -> Result<(), AppStoreError> {
     let headers = auth_headers(&store.client, account)?;
-    let plist_body = build_plist_dict(&[
+    let plist_body = purchase_body(app_id, guid);
+    let response = store
+        .post_store_plist(account, BUY_PRODUCT_PATH, "", &plist_body, &headers)
+        .await?;
+    purchase_response_result(&response.body, &response.headers, &headers)
+}
+
+fn purchase_body(app_id: i64, guid: &str) -> serde_json::Value {
+    build_plist_dict(&[
         ("appExtVrsId", "0"),
         ("hasAskedToFulfillPreorder", "true"),
         ("buyWithoutAuthorization", "true"),
@@ -32,40 +40,60 @@ pub(super) async fn purchase(
         ("pricingParameters", "STDQ"),
         ("productType", "C"),
         ("salableAdamId", &app_id.to_string()),
-    ]);
+    ])
+}
 
-    let response = store
-        .post_store_plist(account, BUY_PRODUCT_PATH, "", &plist_body, &headers)
-        .await?;
-
-    let jingle_type = response
-        .body
+fn purchase_succeeded(body: &serde_json::Value) -> bool {
+    let jingle_type = body
         .get("jingleDocType")
-        .and_then(|v| v.as_str())
+        .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let failure_type = response
-        .body
+    let failure_type = body
         .get("failureType")
-        .and_then(|v| v.as_str())
+        .and_then(serde_json::Value::as_str)
         .unwrap_or("");
+    jingle_type == PURCHASE_SUCCESS_DOC_TYPE || failure_type == ALREADY_OWNED_FAILURE_TYPE
+}
 
-    if jingle_type == PURCHASE_SUCCESS_DOC_TYPE || failure_type == ALREADY_OWNED_FAILURE_TYPE {
+fn purchase_response_result(
+    body: &serde_json::Value,
+    response_headers: &reqwest::header::HeaderMap,
+    request_headers: &std::collections::HashMap<String, String>,
+) -> Result<(), AppStoreError> {
+    if purchase_succeeded(body) {
         return Ok(());
     }
-
-    let message = response
-        .body
+    let message = body
         .get("customerMessage")
-        .and_then(|v| v.as_str())
+        .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown purchase error");
-    let server_store_front = response
-        .headers
-        .get("x-set-apple-store-front")
-        .and_then(|v| v.to_str().ok())
+    let failure_type = body
+        .get("failureType")
+        .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let sent_store_front = headers
+    let server_store_front = response_headers
+        .get("x-set-apple-store-front")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let sent_store_front = request_headers
         .get("X-Apple-Store-Front")
         .map_or("", String::as_str);
+    Err(purchase_failure(
+        message,
+        failure_type,
+        server_store_front,
+        sent_store_front,
+        request_headers.get("X-Dsid").map_or(0, String::len),
+    ))
+}
+
+fn purchase_failure(
+    message: &str,
+    failure_type: &str,
+    server_store_front: &str,
+    sent_store_front: &str,
+    dsid_len: usize,
+) -> AppStoreError {
     tracing::warn!(
         service = "ipakeep",
         component = "appstore",
@@ -75,18 +103,18 @@ pub(super) async fn purchase(
         failure_type,
         request_store_front = sent_store_front,
         response_store_front = server_store_front,
-        dsid_len = headers.get("X-Dsid").map_or(0, String::len),
+        dsid_len,
         auth_scheme = "password-token",
         "purchase rejected by store"
     );
 
     let detail = purchase_error_detail(message, failure_type);
     if server_store_front.is_empty() {
-        return Err(AppStoreError::PurchaseFailed(detail));
+        return AppStoreError::PurchaseFailed(detail);
     }
-    Err(AppStoreError::PurchaseFailed(format!(
+    AppStoreError::PurchaseFailed(format!(
         "{detail} [store front sent: {sent_store_front}; Apple expects: {server_store_front}]"
-    )))
+    ))
 }
 
 pub(super) async fn download(
