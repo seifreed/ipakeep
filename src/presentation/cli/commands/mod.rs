@@ -19,6 +19,7 @@ use crate::domain::entity::DownloadItem;
 use crate::domain::repository::AppStoreRepository;
 use crate::domain::usecase::ResolveApp;
 use crate::infrastructure::ipa::prepare_download;
+use crate::infrastructure::observability::elapsed_ms;
 use std::path::Path;
 use std::time::Instant;
 
@@ -56,10 +57,6 @@ fn save_artifact(path: &Path, bytes: &[u8]) -> Result<(), String> {
         "downloaded IPA saved"
     );
     Ok(())
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 async fn download_item_to_path<R: AppStoreRepository>(

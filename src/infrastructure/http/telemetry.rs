@@ -1,5 +1,6 @@
 //! Safe metadata logging for outbound HTTP requests.
 
+use crate::infrastructure::observability::elapsed_ms;
 use reqwest::{Client, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use std::time::Instant;
@@ -175,10 +176,6 @@ fn record_body_read_success(status: u16, duration_ms: u64, body_bytes: Option<us
             "HTTP response body read"
         );
     }
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn request_error_type(error: &reqwest::Error) -> &'static str {

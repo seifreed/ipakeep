@@ -3,10 +3,11 @@
 //! Uses the native macOS Security framework via `security_framework`
 //! to store credentials as a generic password item.
 
-use super::common::{deserialize_account, elapsed_ms, serialize_account};
+use super::common::{deserialize_account, serialize_account};
 use crate::domain::entity::Account;
 use crate::domain::error::CredentialError;
 use crate::domain::repository::CredentialRepository;
+use crate::infrastructure::observability::elapsed_ms;
 use async_trait::async_trait;
 use std::time::Duration;
 use std::time::Instant;

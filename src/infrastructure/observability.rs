@@ -3,9 +3,15 @@
 use std::any::Any;
 use std::io;
 use std::path::Path;
+use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ENVIRONMENT: &str = "unspecified";
+
+/// Convert elapsed time to whole milliseconds, saturating if it exceeds `u64`.
+pub(crate) fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 #[cfg(test)]
 pub(crate) mod log_capture;
