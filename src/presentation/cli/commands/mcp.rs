@@ -34,10 +34,14 @@ mod tests {
     use super::super::mcp_models::{DownloadArgs, SearchArgs, ipa_filename, parse_args};
     use super::super::mcp_tools::tool_definitions;
     use super::*;
-    use crate::domain::entity::{Account, App, DownloadMetadata, OwnedApp};
+    use crate::domain::entity::{
+        Account, App, AppVersion, DownloadItem, DownloadMetadata, OwnedApp,
+    };
+    use crate::domain::error::AppStoreError;
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use crate::infrastructure::mcp::{ToolContent, ToolInvoker};
     use serde_json::Value;
+    use std::io::Cursor;
 
     fn handler() -> McpToolHandler<FakeAppStoreRepository, InMemoryCredentialRepository> {
         McpToolHandler::new(
@@ -146,6 +150,19 @@ mod tests {
         let parsed: Value = serde_json::from_str(text).expect("json content");
         assert_eq!(parsed["count"], 1);
         assert_eq!(parsed["apps"][0]["id"], 42);
+    }
+
+    #[tokio::test]
+    async fn search_maps_repository_failures_to_tool_errors() {
+        let app_store = FakeAppStoreRepository::new()
+            .with_search_result(Err(AppStoreError::NetworkError("offline".into())));
+        let result = McpToolHandler::new(app_store, InMemoryCredentialRepository::new())
+            .call_tool("search", serde_json::json!({"term": "example"}))
+            .await;
+
+        assert!(result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        assert!(text.contains("search failed"));
     }
 
     #[tokio::test]
@@ -268,6 +285,101 @@ mod tests {
         assert!(result.is_error);
         let ToolContent::Text { text } = &result.content[0];
         assert!(text.contains("page 1"));
+    }
+
+    #[tokio::test]
+    async fn purchases_tool_rejects_invalid_limits() {
+        for arguments in [
+            serde_json::json!({"page": 0}),
+            serde_json::json!({"max_results": 0}),
+            serde_json::json!({"max_results": 101}),
+        ] {
+            assert!(handler().call_tool("purchases", arguments).await.is_error);
+        }
+    }
+
+    #[tokio::test]
+    async fn list_versions_returns_local_repository_versions() {
+        let app_store =
+            FakeAppStoreRepository::new().with_list_versions_result(Ok(vec![AppVersion {
+                external_version_id: "100".into(),
+                version_string: "1.0".into(),
+            }]));
+        let credentials = InMemoryCredentialRepository::new().with_account(account());
+        let result = McpToolHandler::new(app_store, credentials)
+            .call_tool("list_versions", serde_json::json!({"app": "42"}))
+            .await;
+
+        assert!(!result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        let parsed: Value = serde_json::from_str(text).expect("JSON response");
+        assert_eq!(parsed["app_id"], 42);
+        assert_eq!(parsed["versions"][0]["version_string"], "1.0");
+    }
+
+    #[tokio::test]
+    async fn download_tool_saves_a_valid_archive_and_reports_saved_file() {
+        let ipa = empty_archive();
+        let item = DownloadItem {
+            url: "https://example.invalid/app.ipa".into(),
+            md5: String::new(),
+            sinfs: Vec::new(),
+            metadata: DownloadMetadata::new(),
+        };
+        let app_store = FakeAppStoreRepository::new()
+            .with_download_result(Ok(vec![item]))
+            .with_download_bytes_result(Ok(ipa));
+        let credentials = InMemoryCredentialRepository::new().with_account(account());
+        let directory = tempfile::tempdir().expect("output directory");
+        let result = McpToolHandler::new(app_store, credentials)
+            .call_tool(
+                "download",
+                serde_json::json!({
+                    "app": "42",
+                    "no_purchase": true,
+                    "output": directory.path(),
+                }),
+            )
+            .await;
+
+        assert!(!result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        let parsed: Value = serde_json::from_str(text).expect("JSON response");
+        assert_eq!(parsed["count"], 1);
+        let saved = directory.path().join("app_42_0.ipa");
+        assert!(saved.is_file());
+        assert_eq!(
+            parsed["files"][0]["size"],
+            std::fs::metadata(saved).unwrap().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn download_tool_reports_authentication_and_repository_failures() {
+        let arguments = serde_json::json!({"app": "42", "no_purchase": true});
+        assert!(
+            handler()
+                .call_tool("download", arguments.clone())
+                .await
+                .is_error
+        );
+
+        let app_store = FakeAppStoreRepository::new()
+            .with_download_result(Err(AppStoreError::NetworkError("offline".into())));
+        let credentials = InMemoryCredentialRepository::new().with_account(account());
+        let result = McpToolHandler::new(app_store, credentials)
+            .call_tool("download", arguments)
+            .await;
+        assert!(result.is_error);
+        let ToolContent::Text { text } = &result.content[0];
+        assert!(text.contains("download failed"));
+    }
+
+    fn empty_archive() -> Vec<u8> {
+        zip::ZipWriter::new(Cursor::new(Vec::new()))
+            .finish()
+            .expect("empty ZIP")
+            .into_inner()
     }
 
     #[test]
