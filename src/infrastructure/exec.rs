@@ -235,6 +235,11 @@ mod tests {
         let mut failed = Command::new("sh");
         failed.args(["-c", "exit 7"]);
         assert!(run_inherit(failed).unwrap_err().contains("exit status: 7"));
+        assert!(
+            run_inherit(Command::new("ipakeep-command-that-does-not-exist"))
+                .unwrap_err()
+                .starts_with("failed to run")
+        );
 
         let mut quiet = Command::new("sh");
         quiet.args(["-c", "printf '  failure  ' >&2; exit 7"]);
@@ -242,6 +247,11 @@ mod tests {
         let mut quiet = Command::new("sh");
         quiet.args(["-c", "exit 0"]);
         assert!(run_quiet(quiet).is_ok());
+        assert!(
+            run_quiet(Command::new("ipakeep-command-that-does-not-exist"))
+                .unwrap_err()
+                .starts_with("failed to run")
+        );
     }
 
     #[test]
