@@ -47,9 +47,9 @@ pub fn compute_a_pub(a: &[u8]) -> Vec<u8> {
 ///
 /// # Arguments
 ///
-/// * `a` - the private ephemeral bytes.
-/// * `a_pub` - the client public ephemeral `A`.
-/// * `b_pub` - the server public ephemeral `B`.
+/// * `private_ephemeral` - the private ephemeral bytes.
+/// * `client_public_ephemeral` - the client public ephemeral `A`.
+/// * `server_public_ephemeral` - the server public ephemeral `B`.
 /// * `identity` - the user's Apple ID email.
 /// * `salt` - the server-provided salt bytes.
 /// * `derived_password` - the PBKDF2-derived password.
@@ -61,36 +61,44 @@ pub fn compute_a_pub(a: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Returns an error if `b_pub` is invalid or an SRP value is wider than the
+/// Returns an error if the server public ephemeral is invalid or an SRP value is wider than the
 /// configured group modulus.
-// justification: the single-letter bindings (a, u, k, s) are the canonical SRP-6a /
-// RFC 5054 variable names. Renaming them would obscure the mapping to the published
-// protocol that this function implements verbatim.
-#[allow(clippy::many_single_char_names)]
 pub fn compute_client_proof(
-    a: &[u8],
-    a_pub: &[u8],
-    b_pub: &[u8],
+    private_ephemeral: &[u8],
+    client_public_ephemeral: &[u8],
+    server_public_ephemeral: &[u8],
     identity: &str,
     salt: &[u8],
     derived_password: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let client = SrpClient::<Sha256>::new(&G_2048);
 
-    let a_big = BigUint::from_bytes_be(a);
-    let b_big = BigUint::from_bytes_be(b_pub);
-    let x_big = compute_apple_x(salt, derived_password);
+    let private_ephemeral = BigUint::from_bytes_be(private_ephemeral);
+    let server_public = BigUint::from_bytes_be(server_public_ephemeral);
+    let password_exponent = compute_apple_x(salt, derived_password);
 
-    if &b_big % &G_2048.n == BigUint::default() {
+    if &server_public % &G_2048.n == BigUint::default() {
         return Err("invalid server public ephemeral (B % N == 0)".into());
     }
 
-    let u = compute_u_padded(a_pub, b_pub)?;
-    let k = compute_k::<Sha256>(&G_2048);
+    let scrambling_parameter = compute_u_padded(client_public_ephemeral, server_public_ephemeral)?;
+    let multiplier = compute_k::<Sha256>(&G_2048);
 
-    let s = client.compute_premaster_secret(&b_big, &k, &x_big, &a_big, &u);
-    let session_key = Sha256::digest(s.to_bytes_be()).to_vec();
-    let m1 = compute_apple_m1(identity, salt, a_pub, b_pub, &session_key);
+    let premaster_secret = client.compute_premaster_secret(
+        &server_public,
+        &multiplier,
+        &password_exponent,
+        &private_ephemeral,
+        &scrambling_parameter,
+    );
+    let session_key = Sha256::digest(premaster_secret.to_bytes_be()).to_vec();
+    let m1 = compute_apple_m1(
+        identity,
+        salt,
+        client_public_ephemeral,
+        server_public_ephemeral,
+        &session_key,
+    );
 
     Ok((m1, session_key))
 }
