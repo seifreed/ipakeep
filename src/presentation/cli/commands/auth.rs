@@ -3,6 +3,7 @@
 mod grandslam;
 mod output;
 
+use crate::domain::entity::Account;
 use crate::domain::error::{AppStoreError, CredentialError};
 use crate::domain::repository::{AppStoreRepository, CredentialRepository};
 use crate::domain::usecase::{AuthInfo, AuthLogin, AuthRevoke};
@@ -48,6 +49,30 @@ where
     R: AppStoreRepository,
     C: CredentialRepository,
 {
+    let (email, password) = login_credentials(options)?;
+    let guid = get_guid();
+    let use_case = AuthLogin::new(app_store, credentials);
+
+    if options.grandslam {
+        let store_front = resolve_store_front(options.country);
+        handle_grandslam_login(
+            &use_case,
+            GrandSlamLoginContext {
+                email: &email,
+                password: &password,
+                guid: &guid,
+                store_front: store_front.as_deref(),
+            },
+            options,
+            format,
+        )
+        .await
+    } else {
+        handle_legacy_login(&use_case, &email, &password, &guid, options, format).await
+    }
+}
+
+fn login_credentials(options: &LoginOptions<'_>) -> Result<(String, String), String> {
     let email = if let Some(e) = options.email {
         e.to_string()
     } else {
@@ -71,25 +96,7 @@ where
             .interact()
             .map_err(|e| format!("failed to read password: {e}"))?
     };
-
-    let guid = get_guid();
-    let use_case = AuthLogin::new(app_store, credentials);
-
-    if options.grandslam {
-        let store_front = resolve_store_front(options.country);
-        handle_grandslam_login(
-            &use_case,
-            &email,
-            &password,
-            &guid,
-            store_front.as_deref(),
-            options,
-            format,
-        )
-        .await
-    } else {
-        handle_legacy_login(&use_case, &email, &password, &guid, options, format).await
-    }
+    Ok((email, password))
 }
 
 /// Resolve the account's Store Front from the explicit `--country` flag, then the
@@ -104,10 +111,7 @@ fn resolve_store_front(country: Option<&str>) -> Option<String> {
 
 async fn handle_grandslam_login<R, C>(
     use_case: &AuthLogin<R, C>,
-    email: &str,
-    password: &str,
-    guid: &str,
-    store_front: Option<&str>,
+    context: GrandSlamLoginContext<'_>,
     options: &LoginOptions<'_>,
     format: &OutputFormat,
 ) -> Result<(), String>
@@ -116,27 +120,42 @@ where
     C: CredentialRepository,
 {
     match use_case
-        .execute_grandslam(email, password, guid, store_front)
+        .execute_grandslam(
+            context.email,
+            context.password,
+            context.guid,
+            context.store_front,
+        )
         .await
     {
         Ok(account) => {
-            let output = format_login_account(&account, format);
-            println!("{output}");
+            print_login_account(&account, format);
             Ok(())
         }
-        Err(AppStoreError::AuthCodeRequired {
+        Err(error) => handle_grandslam_error(error, use_case, context, options, format).await,
+    }
+}
+
+async fn handle_grandslam_error<R, C>(
+    error: AppStoreError,
+    use_case: &AuthLogin<R, C>,
+    context: GrandSlamLoginContext<'_>,
+    options: &LoginOptions<'_>,
+    format: &OutputFormat,
+) -> Result<(), String>
+where
+    R: AppStoreRepository,
+    C: CredentialRepository,
+{
+    match error {
+        AppStoreError::AuthCodeRequired {
             dsid,
             idms_token,
             method,
-        }) => {
+        } => {
             grandslam::handle_2fa(
                 use_case,
-                GrandSlamLoginContext {
-                    email,
-                    password,
-                    guid,
-                    store_front,
-                },
+                context,
                 GrandSlamChallenge {
                     dsid: &dsid,
                     idms_token: &idms_token,
@@ -147,7 +166,7 @@ where
             )
             .await
         }
-        Err(e) => Err(format!("login failed: {e}")),
+        error => Err(format!("login failed: {error}")),
     }
 }
 
@@ -165,34 +184,39 @@ where
 {
     match use_case.execute(email, password, guid).await {
         Ok(account) => {
-            let output = format_login_account(&account, format);
-            println!("{output}");
+            print_login_account(&account, format);
             Ok(())
         }
         Err(AppStoreError::AuthCodeRequired { .. }) => {
-            let code = if let Some(c) = options.code {
-                c.to_string()
-            } else {
-                if options.non_interactive {
-                    return Err("2FA code required. Use --code flag to provide the code.".into());
-                }
-                dialoguer::Input::<String>::new()
-                    .with_prompt("2FA code")
-                    .interact_text()
-                    .map_err(|e| format!("failed to read 2FA code: {e}"))?
-            };
+            let code = login_code(options)?;
 
             let account = use_case
                 .login_with_2fa(email, password, &code, guid)
                 .await
                 .map_err(|e| format!("login failed: {e}"))?;
 
-            let output = format_login_account(&account, format);
-            println!("{output}");
+            print_login_account(&account, format);
             Ok(())
         }
         Err(e) => Err(format!("login failed: {e}")),
     }
+}
+
+fn login_code(options: &LoginOptions<'_>) -> Result<String, String> {
+    if let Some(code) = options.code {
+        return Ok(code.to_string());
+    }
+    if options.non_interactive {
+        return Err("2FA code required. Use --code flag to provide the code.".into());
+    }
+    dialoguer::Input::<String>::new()
+        .with_prompt("2FA code")
+        .interact_text()
+        .map_err(|error| format!("failed to read 2FA code: {error}"))
+}
+
+fn print_login_account(account: &Account, format: &OutputFormat) {
+    println!("{}", format_login_account(account, format));
 }
 
 /// Handle the auth info command.
@@ -208,8 +232,7 @@ where
 
     match use_case.execute().await {
         Ok(Some(account)) => {
-            let output = format_login_account(&account, format);
-            println!("{output}");
+            print_login_account(&account, format);
             Ok(())
         }
         Ok(None) | Err(CredentialError::NotFound) => Err("not logged in".into()),
