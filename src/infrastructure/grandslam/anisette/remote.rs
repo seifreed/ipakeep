@@ -82,6 +82,15 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_remote_maps_server_headers() {
+        let server = provisioned_server().await;
+        let client = reqwest::Client::new();
+        let data = fetch_remote(&client, &server.uri())
+            .await
+            .expect("remote anisette");
+        assert_remote_headers(&data);
+    }
+
+    async fn provisioned_server() -> wiremock::MockServer {
         let server = wiremock::MockServer::start().await;
         wiremock::Mock::given(method("GET"))
             .and(path("/"))
@@ -111,12 +120,10 @@ mod tests {
             )
             .mount(&server)
             .await;
+        server
+    }
 
-        let client = reqwest::Client::new();
-        let data = fetch_remote(&client, &server.uri())
-            .await
-            .expect("remote anisette");
-
+    fn assert_remote_headers(data: &AnisetteData) {
         assert_eq!(data.headers.get("X-Apple-I-MD").unwrap(), "remote-md");
         assert_eq!(data.headers.get("X-Apple-I-MD-M").unwrap(), "remote-md-m");
         assert_eq!(
