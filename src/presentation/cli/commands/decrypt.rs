@@ -6,7 +6,7 @@ use crate::infrastructure::decrypt::{
     VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
     run_offline, set_min_os, verify_ipa,
 };
-use crate::infrastructure::developer::{self, ProvisionRequest};
+use crate::infrastructure::developer::{self, ProvisionRequest, ProvisionResult};
 use crate::presentation::cli::output::OutputFormat;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -260,6 +260,28 @@ pub async fn handle_provision<C: CredentialRepository>(
     })
     .await?;
 
+    let dir = write_provisioning_files(app, output, &result)?;
+    println!(
+        "Provisioned team {} (cert {}). Artifacts in {}.",
+        result.team_id,
+        result.certificate_serial,
+        dir.display()
+    );
+    warn_unregrantable_entitlements(app);
+    println!(
+        "Next: import {}/key.pem + certificate.der into your keychain, then \
+         `ipakeep decrypt resign {} --identity \"<cert name>\"`.",
+        dir.display(),
+        app.display()
+    );
+    Ok(())
+}
+
+fn write_provisioning_files(
+    app: &Path,
+    output: Option<&Path>,
+    result: &ProvisionResult,
+) -> Result<PathBuf, String> {
     let dir = output.map_or_else(|| PathBuf::from("ipakeep-provision"), Path::to_path_buf);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for (name, bytes) in [
@@ -276,13 +298,10 @@ pub async fn handle_provision<C: CredentialRepository>(
         &result.mobileprovision,
     )
     .map_err(|e| format!("embedding profile: {e}"))?;
+    Ok(dir)
+}
 
-    println!(
-        "Provisioned team {} (cert {}). Artifacts in {}.",
-        result.team_id,
-        result.certificate_serial,
-        dir.display()
-    );
+fn warn_unregrantable_entitlements(app: &Path) {
     if let Ok(verdicts) = entitlements_report(app) {
         let blocked: Vec<&str> = verdicts
             .iter()
@@ -296,13 +315,6 @@ pub async fn handle_provision<C: CredentialRepository>(
             );
         }
     }
-    println!(
-        "Next: import {}/key.pem + certificate.der into your keychain, then \
-         `ipakeep decrypt resign {} --identity \"<cert name>\"`.",
-        dir.display(),
-        app.display()
-    );
-    Ok(())
 }
 
 fn dump_output(ipa: Option<&Path>, bundle_id: &str) -> PathBuf {
