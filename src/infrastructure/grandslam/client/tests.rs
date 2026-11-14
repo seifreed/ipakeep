@@ -209,3 +209,29 @@ async fn post_plist_returns_status_error_before_decoding_body() {
     assert!(message.contains("HTTP 500"));
     assert!(!message.contains("private-response-value"));
 }
+
+#[tokio::test]
+async fn success_status_reports_response_body_read_failures() {
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nx")
+            .unwrap();
+    });
+    let response = reqwest::Client::new()
+        .get(format!("http://{address}/"))
+        .send()
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        http::ensure_success_status(response, "fixture").await,
+        Err(AppStoreError::NetworkError(message)) if message.contains("response read failed")
+    ));
+    server.join().unwrap();
+}
