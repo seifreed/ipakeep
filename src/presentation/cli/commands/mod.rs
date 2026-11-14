@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod decrypt;
 pub mod device;
+pub mod dispatch;
 pub mod download;
 pub mod list_versions;
 pub mod mcp;
