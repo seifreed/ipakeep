@@ -478,12 +478,351 @@ fn decrypt_command_name(action: &DecryptCommands) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::entity::{
+        OwnedApp,
+        test_support::{app, test_account},
+    };
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use clap::Parser;
+    use std::path::PathBuf;
+
+    fn cli(command: Commands) -> Cli {
+        Cli {
+            format: "text".into(),
+            verbose: false,
+            non_interactive: true,
+            file_keychain: true,
+            legacy: false,
+            grandslam: false,
+            command,
+        }
+    }
 
     #[test]
     fn command_names_are_stable_and_do_not_include_user_arguments() {
         let command =
             Cli::try_parse_from(["ipakeep", "search", "secret query"]).expect("CLI options");
         assert_eq!(command_name(&command.command), "search");
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_search_purchase_versions_and_purchases() {
+        let app = app(7);
+        let versions = vec![crate::domain::entity::AppVersion {
+            external_version_id: "42".into(),
+            version_string: "1.0".into(),
+        }];
+        let owned = OwnedApp {
+            id: app.id,
+            bundle_id: app.bundle_id.clone(),
+            name: app.name.clone(),
+            version: app.version.clone(),
+            platforms: vec!["iphone".into()],
+            purchase_date: None,
+        };
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+
+        let search = FakeAppStoreRepository::new().with_search_result(Ok(vec![app.clone()]));
+        assert!(
+            dispatch_command(
+                cli(Commands::Search {
+                    term: "example".into(),
+                    limit: 5,
+                    country: "us".into(),
+                }),
+                search,
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+
+        let purchase = FakeAppStoreRepository::new()
+            .with_lookup_result(Ok(Some(app.clone())))
+            .with_purchase_result(Ok(()));
+        assert!(
+            dispatch_command(
+                cli(Commands::Purchase {
+                    bundle_identifier: app.bundle_id.clone(),
+                    country: "us".into(),
+                }),
+                purchase,
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+
+        let versions_repo = FakeAppStoreRepository::new().with_list_versions_result(Ok(versions));
+        assert!(
+            dispatch_command(
+                cli(Commands::ListVersions {
+                    app: app.id.to_string(),
+                    country: "us".into(),
+                }),
+                versions_repo,
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+
+        let purchases = FakeAppStoreRepository::new().with_list_purchases_result(Ok(vec![owned]));
+        assert!(
+            dispatch_command(
+                cli(Commands::Purchases { limit: 10 }),
+                purchases,
+                credentials,
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_auth_info_revoke_and_login() {
+        let account = test_account();
+        let credentials = InMemoryCredentialRepository::new().with_account(account.clone());
+        let info = cli(Commands::Auth {
+            action: AuthCommands::Info,
+        });
+        assert!(
+            dispatch_command(
+                info,
+                FakeAppStoreRepository::new(),
+                credentials.clone(),
+                &OutputFormat::Json,
+            )
+            .await
+            .is_ok()
+        );
+
+        let revoke = cli(Commands::Auth {
+            action: AuthCommands::Revoke,
+        });
+        assert!(
+            dispatch_command(
+                revoke,
+                FakeAppStoreRepository::new(),
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+
+        let login_repo = FakeAppStoreRepository::new().with_authenticate_result(Ok(account));
+        let login = cli(Commands::Auth {
+            action: AuthCommands::Login {
+                email: Some("user@example.com".into()),
+                password: Some("password".into()),
+                code: None,
+                country: Some("us".into()),
+            },
+        });
+        assert!(
+            dispatch_command(
+                login,
+                login_repo,
+                InMemoryCredentialRepository::new(),
+                &OutputFormat::Json,
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_handles_simulator_prepare_and_offline_decrypt_errors() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let prepare = cli(Commands::Simulator {
+            action: SimulatorCommands::Prepare {
+                path: directory.path().to_path_buf(),
+            },
+        });
+        assert!(
+            dispatch_command(
+                prepare,
+                FakeAppStoreRepository::new(),
+                InMemoryCredentialRepository::new(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_ok()
+        );
+
+        let offline = cli(Commands::Decrypt {
+            action: DecryptCommands::Offline {
+                ipa: PathBuf::from("invalid.txt"),
+                output: None,
+                no_on_device: true,
+            },
+        });
+        assert!(
+            dispatch_command(
+                offline,
+                FakeAppStoreRepository::new(),
+                InMemoryCredentialRepository::new(),
+                &OutputFormat::Json,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_download_device_and_simulator_errors() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let download = cli(Commands::Download {
+            app: "7".into(),
+            country: "us".into(),
+            external_version_id: None,
+            output: None,
+            no_purchase: true,
+            simulator_install: false,
+            simulator_run: false,
+        });
+        assert!(
+            dispatch_command(
+                download,
+                FakeAppStoreRepository::new(),
+                InMemoryCredentialRepository::new(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_err()
+        );
+
+        let device = cli(Commands::Device {
+            action: DeviceCommands::InstallIpa {
+                ipa: directory.path().join("missing.ipa"),
+                device: "USB-UDID".into(),
+                identity: "test-identity".into(),
+                provisioning_profile: vec![PathBuf::from("profile.mobileprovision")],
+                entitlements: None,
+                run: false,
+                legacy_device: true,
+            },
+        });
+        assert!(
+            dispatch_command(
+                device,
+                FakeAppStoreRepository::new(),
+                InMemoryCredentialRepository::new(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_err()
+        );
+
+        assert!(
+            dispatch_simulator(SimulatorCommands::Run {
+                bundle_id: "com.example.app".into(),
+                inject_dylib: Vec::new(),
+                udid: Some(" ".into()),
+                device: None,
+                entitlements: None,
+                console: false,
+            })
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_file_based_decrypt_commands() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing_ipa = directory.path().join("missing.ipa");
+        let credentials = InMemoryCredentialRepository::new();
+        for action in [
+            DecryptCommands::Inspect {
+                ipa: missing_ipa.clone(),
+            },
+            DecryptCommands::Verify {
+                ipa: missing_ipa.clone(),
+            },
+            DecryptCommands::Patch {
+                ipa: missing_ipa.clone(),
+                from: directory.path().to_path_buf(),
+                output: None,
+            },
+            DecryptCommands::Entitlements {
+                path: directory.path().join("missing.app"),
+            },
+        ] {
+            assert!(
+                dispatch_decrypt(action, &OutputFormat::Json, credentials.clone())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_dispatch_helpers_return_expected_command_errors() {
+        let repository = FakeAppStoreRepository::new();
+        let credentials = InMemoryCredentialRepository::new();
+        assert!(
+            dispatch_search_command(Commands::Mcp, repository.clone(), &OutputFormat::Text)
+                .await
+                .is_err()
+        );
+        assert!(
+            dispatch_purchase_command(
+                Commands::Mcp,
+                repository.clone(),
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            dispatch_download_command(
+                Commands::Mcp,
+                repository,
+                credentials.clone(),
+                &OutputFormat::Text,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            dispatch_resign(DecryptCommands::Inspect {
+                ipa: PathBuf::new(),
+            })
+            .is_err()
+        );
+        assert!(
+            dispatch_set_min_os(DecryptCommands::Inspect {
+                ipa: PathBuf::new(),
+            })
+            .is_err()
+        );
+        assert!(
+            dispatch_dump(DecryptCommands::Inspect {
+                ipa: PathBuf::new(),
+            })
+            .is_err()
+        );
+        assert!(
+            dispatch_dump_mac(DecryptCommands::Inspect {
+                ipa: PathBuf::new(),
+            })
+            .is_err()
+        );
+        assert!(
+            dispatch_provision(
+                DecryptCommands::Inspect {
+                    ipa: PathBuf::new(),
+                },
+                credentials,
+            )
+            .await
+            .is_err()
+        );
     }
 }
