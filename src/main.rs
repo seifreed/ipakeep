@@ -169,4 +169,16 @@ mod tests {
         assert!(!default.grandslam);
         assert!(grandslam.grandslam);
     }
+
+    #[tokio::test]
+    async fn invalid_format_stops_before_creating_the_http_client() {
+        let cli = Cli::try_parse_from(["ipakeep", "--format", "yaml", "auth", "info"])
+            .expect("CLI syntax");
+        assert!(
+            run_command(cli)
+                .await
+                .unwrap_err()
+                .contains("unknown output format: yaml")
+        );
+    }
 }
