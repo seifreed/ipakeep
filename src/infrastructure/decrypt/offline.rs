@@ -429,4 +429,26 @@ mod tests {
                 .contains("no encrypted binaries")
         );
     }
+
+    #[test]
+    fn decrypt_plan_includes_watch_binaries_when_requested() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = write_ipa(
+            work.path(),
+            &[
+                ("Payload/App.app/Watch/Watch.app/SC_Info/Watch.supf", b"key"),
+                ("Payload/App.app/Watch/Watch.app/Watch", b"binary"),
+            ],
+        );
+        let creds = Credentials {
+            standard: vec![0; CREDENTIAL_SIZE],
+            arcade: None,
+        };
+
+        assert!(
+            decrypt_ipa(&ipa, &creds, false, true)
+                .unwrap_err()
+                .contains("SUPF/SUPP lacks binary/SINF")
+        );
+    }
 }
