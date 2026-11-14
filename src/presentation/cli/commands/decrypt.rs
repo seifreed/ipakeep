@@ -438,6 +438,14 @@ fn append_macho_text(out: &mut String, macho: &MachoReport) {
 mod tests {
     use super::*;
     use crate::infrastructure::decrypt::{MachoVerify, SliceVerify};
+    use std::io::Cursor;
+
+    fn empty_ipa() -> Vec<u8> {
+        zip::ZipWriter::new(Cursor::new(Vec::new()))
+            .finish()
+            .unwrap()
+            .into_inner()
+    }
 
     #[test]
     fn renderers_cover_empty_and_populated_reports() {
@@ -624,5 +632,17 @@ mod tests {
         assert!(handle_set_min_os(path, "17.0", None).is_err());
         assert!(handle_offline(path, None, false).is_err());
         assert!(handle_resign(Path::new("/missing/App.app"), None, None).is_err());
+    }
+
+    #[test]
+    fn inspect_and_verify_handle_an_empty_valid_archive() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = work.path().join("empty.ipa");
+        std::fs::write(&ipa, empty_ipa()).unwrap();
+
+        assert!(handle_inspect(&ipa, &OutputFormat::Json).is_ok());
+        assert!(handle_inspect(&ipa, &OutputFormat::Text).is_ok());
+        assert!(handle_verify(&ipa, &OutputFormat::Json).is_err());
+        assert!(handle_verify(&ipa, &OutputFormat::Text).is_err());
     }
 }
