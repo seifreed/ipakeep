@@ -269,6 +269,7 @@ mod tests {
         let ok = work.path().join("ok.bin");
         std::fs::write(&ok, [7u8; 16]).unwrap();
         assert_eq!(read_credential(&ok).unwrap(), vec![7u8; 16]);
+        assert!(read_credential(&work.path().join("missing.bin")).is_err());
     }
 
     #[test]
@@ -311,6 +312,7 @@ mod tests {
             [4, 5, 6]
         );
         assert!(read_entry_sinf(&BTreeMap::new(), &BTreeSet::new(), &entry).is_err());
+        assert!(read_entry_sinf(&BTreeMap::new(), &own_names, &entry).is_err());
     }
 
     #[test]
@@ -358,5 +360,18 @@ mod tests {
                 .contains("not an .ipa")
         );
         assert!(run_offline(path, true).unwrap_err().contains("not an .ipa"));
+    }
+
+    #[test]
+    fn malformed_ipa_fails_before_decryption() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = work.path().join("broken.ipa");
+        std::fs::write(&ipa, b"not a zip archive").unwrap();
+        let creds = Credentials {
+            standard: vec![0; CREDENTIAL_SIZE],
+            arcade: None,
+        };
+
+        assert!(decrypt_ipa(&ipa, &creds, false, false).is_err());
     }
 }
