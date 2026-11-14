@@ -361,4 +361,28 @@ mod tests {
         );
         server.join().expect("server thread");
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_timeout_is_classified_and_logged() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
+        let address = listener.local_addr().expect("local address");
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("HTTP connection");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        });
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_millis(10))
+            .build()
+            .expect("HTTP client");
+
+        let error = send_with_observability(&client, client.get(format!("http://{address}/")))
+            .await
+            .expect_err("request should time out");
+
+        assert!(error.is_timeout());
+        assert!(capture.contents().contains("timeout"));
+        server.join().expect("server thread");
+    }
 }
