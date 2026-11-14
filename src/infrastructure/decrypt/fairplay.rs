@@ -27,6 +27,11 @@ const LC_ENCRYPTION_INFO: u32 = 0x21;
 const LC_ENCRYPTION_INFO_64: u32 = 0x2C;
 const MACHO_MAGIC_LE: u32 = 0xFEED_FACE;
 const MACHO_MAGIC_64_LE: u32 = 0xFEED_FACF;
+const MAX_FAT_SLICES: u32 = 16;
+const FAT_HEADER_SIZE: usize = 8;
+const FAT32_ARCH_ENTRY_SIZE: usize = 20;
+const FAT64_ARCH_ENTRY_SIZE: usize = 32;
+const MACHO_HEADER_SIZE: usize = 28;
 
 const ROUND_SELECTORS: [[[usize; 2]; 4]; 4] = [
     [[0, 1], [2, 3], [4, 5], [6, 7]],
@@ -100,53 +105,69 @@ fn le_u32(data: &[u8], off: usize) -> Result<u32, String> {
 /// Parse the architecture table (fat) or single header (thin) of a Mach-O,
 /// returning every slice it describes, unclassified.
 fn collect_slices(data: &[u8]) -> Result<Vec<ArmSlice>, String> {
-    let mut raw = Vec::new();
-
     match data {
-        [0xca, 0xfe, 0xba, 0xbe, ..] => {
-            let count = be_u32(data, 4)?;
-            if count == 0 || count > 16 || 8 + count as usize * 20 > data.len() {
-                return Err("invalid FAT32 architecture table".to_string());
-            }
-            for i in 0..count as usize {
-                let off = 8 + i * 20;
-                raw.push(ArmSlice {
-                    cpu: be_u32(data, off)?,
-                    subtype: be_u32(data, off + 4)?,
-                    base: be_u32(data, off + 8)? as usize,
-                    size: be_u32(data, off + 12)? as usize,
-                });
-            }
-        }
-        [0xca, 0xfe, 0xba, 0xbf, ..] => {
-            let count = be_u32(data, 4)?;
-            if count == 0 || count > 16 || 8 + count as usize * 32 > data.len() {
-                return Err("invalid FAT64 architecture table".to_string());
-            }
-            for i in 0..count as usize {
-                let off = 8 + i * 32;
-                raw.push(ArmSlice {
-                    cpu: be_u32(data, off)?,
-                    subtype: be_u32(data, off + 4)?,
-                    base: usize::try_from(be_u64(data, off + 8)?)
-                        .map_err(|_| "Mach-O slice offset too large".to_string())?,
-                    size: usize::try_from(be_u64(data, off + 16)?)
-                        .map_err(|_| "Mach-O slice size too large".to_string())?,
-                });
-            }
-        }
-        [m0, 0xfa, 0xed, 0xfe, ..] if (*m0 == 0xce || *m0 == 0xcf) && data.len() >= 28 => {
-            raw.push(ArmSlice {
+        [0xca, 0xfe, 0xba, 0xbe, ..] => collect_fat_slices(data, false),
+        [0xca, 0xfe, 0xba, 0xbf, ..] => collect_fat_slices(data, true),
+        [m0, 0xfa, 0xed, 0xfe, ..]
+            if (*m0 == 0xce || *m0 == 0xcf) && data.len() >= MACHO_HEADER_SIZE =>
+        {
+            Ok(vec![ArmSlice {
                 cpu: le_u32(data, 4)?,
                 subtype: le_u32(data, 8)?,
                 base: 0,
                 size: data.len(),
-            });
+            }])
         }
-        _ => return Err("not a supported ARM Mach-O".to_string()),
+        _ => Err("not a supported ARM Mach-O".to_string()),
+    }
+}
+
+fn collect_fat_slices(data: &[u8], is_64_bit: bool) -> Result<Vec<ArmSlice>, String> {
+    let count = be_u32(data, 4)?;
+    let entry_size = if is_64_bit {
+        FAT64_ARCH_ENTRY_SIZE
+    } else {
+        FAT32_ARCH_ENTRY_SIZE
+    };
+    if count == 0
+        || count > MAX_FAT_SLICES
+        || FAT_HEADER_SIZE + count as usize * entry_size > data.len()
+    {
+        let format = if is_64_bit { "FAT64" } else { "FAT32" };
+        return Err(format!("invalid {format} architecture table"));
     }
 
-    Ok(raw)
+    (0..count as usize)
+        .map(|index| parse_fat_slice(data, index, is_64_bit, entry_size))
+        .collect()
+}
+
+fn parse_fat_slice(
+    data: &[u8],
+    index: usize,
+    is_64_bit: bool,
+    entry_size: usize,
+) -> Result<ArmSlice, String> {
+    let offset = FAT_HEADER_SIZE + index * entry_size;
+    let (base, size) = if is_64_bit {
+        (
+            usize::try_from(be_u64(data, offset + 8)?)
+                .map_err(|_| "Mach-O slice offset too large".to_string())?,
+            usize::try_from(be_u64(data, offset + 16)?)
+                .map_err(|_| "Mach-O slice size too large".to_string())?,
+        )
+    } else {
+        (
+            be_u32(data, offset + 8)? as usize,
+            be_u32(data, offset + 12)? as usize,
+        )
+    };
+    Ok(ArmSlice {
+        cpu: be_u32(data, offset)?,
+        subtype: be_u32(data, offset + 4)?,
+        base,
+        size,
+    })
 }
 
 /// Choose the one slice to decrypt: plain `arm64`, else `arm64e`, else
