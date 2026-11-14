@@ -426,6 +426,23 @@ mod tests {
         assert!(output.is_empty());
     }
 
+    #[tokio::test]
+    async fn serve_propagates_writer_errors() {
+        let invoker = FakeInvoker::default();
+        let (mut writer, reader) = tokio::io::duplex(1);
+        drop(reader);
+
+        let error = serve(
+            &invoker,
+            br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.as_slice(),
+            &mut writer,
+        )
+        .await
+        .expect_err("closed MCP output should fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
     #[test]
     fn call_tool_result_text_content_is_a_text_block() {
         let result = CallToolResult::error("x");
