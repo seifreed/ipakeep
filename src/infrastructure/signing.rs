@@ -95,4 +95,17 @@ mod tests {
 
         assert!(!targets.iter().any(|target| target == &link));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_socket_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let socket_path = dir.path().join("not-a-bundle");
+        let _socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+
+        let mut targets = Vec::new();
+        collect_sign_targets(&socket_path, &mut targets, &|_| Ok(true)).unwrap();
+
+        assert!(targets.is_empty());
+    }
 }
