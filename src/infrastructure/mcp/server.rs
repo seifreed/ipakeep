@@ -167,7 +167,21 @@ where
 mod tests {
     use super::*;
     use crate::infrastructure::mcp::protocol::{JSONRPC_VERSION, ToolContent};
+    use std::pin::Pin;
     use std::sync::Mutex;
+    use std::task::{Context, Poll};
+
+    struct FailingReader;
+
+    impl tokio::io::AsyncRead for FailingReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            _buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Err(std::io::Error::other("read failed")))
+        }
+    }
 
     struct FailingSerialize;
 
@@ -441,6 +455,15 @@ mod tests {
         .expect_err("closed MCP output should fail");
 
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    #[tokio::test]
+    async fn serve_propagates_reader_errors() {
+        let error = serve(&FakeInvoker::default(), FailingReader, Vec::new())
+            .await
+            .expect_err("failed MCP input should stop serving");
+
+        assert_eq!(error.to_string(), "read failed");
     }
 
     #[test]
