@@ -169,6 +169,21 @@ fn profile_application_id_requires_a_valid_string_pattern() {
 }
 
 #[test]
+fn non_bundle_signing_targets_do_not_get_bundle_entitlements() {
+    assert_eq!(
+        prepare_target(
+            Path::new("Frameworks/Support.dylib"),
+            &[],
+            None,
+            Path::new("unused"),
+            0,
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn entitlement_dictionary_matching_is_recursive_and_key_complete() {
     let allowed = Value::Dictionary(Dictionary::from_iter([
         ("group".to_string(), Value::String("TEAM.*".into())),
