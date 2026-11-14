@@ -97,3 +97,108 @@ pub fn format_version(version: &crate::domain::entity::AppVersion) -> String {
         version.version_string, version.external_version_id
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::{Account, App, AppVersion, OwnedApp};
+
+    struct BrokenSerialize;
+
+    impl Serialize for BrokenSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("expected failure"))
+        }
+    }
+
+    fn account() -> Account {
+        Account {
+            email: "user@example.com".into(),
+            name: "Test User".into(),
+            password_token: String::new(),
+            directory_services_id: "123".into(),
+            store_front: "143441-1".into(),
+            pod: "7".into(),
+            idms_token: None,
+            dsid: None,
+            adsid: None,
+            grandslam_session_key: None,
+            grandslam_continuation: None,
+            cookies: Vec::new(),
+        }
+    }
+
+    fn app(price: f64) -> App {
+        App {
+            id: 7,
+            bundle_id: "com.example.app".into(),
+            name: "Example".into(),
+            version: "1.0".into(),
+            price,
+        }
+    }
+
+    fn owned_app(platforms: Vec<String>, purchase_date: Option<&str>) -> OwnedApp {
+        OwnedApp {
+            id: 7,
+            bundle_id: "com.example.app".into(),
+            name: "Example".into(),
+            version: "1.0".into(),
+            platforms,
+            purchase_date: purchase_date.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn output_format_parses_supported_values_and_rejects_unknown_values() {
+        assert_eq!("JSON".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
+        assert_eq!("text".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
+        assert!("yaml".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn format_output_supports_json_and_text_and_serialization_errors() {
+        assert!(format_output(&app(0.0), &OutputFormat::Json).contains("com.example.app"));
+        assert!(format_output(&app(2.0), &OutputFormat::Text).contains("Example"));
+        assert!(
+            format_output(&BrokenSerialize, &OutputFormat::Json).contains("serialization failed")
+        );
+        assert!(format_output(&BrokenSerialize, &OutputFormat::Text).contains("unable to format"));
+    }
+
+    #[test]
+    fn format_list_supports_json_text_and_serialization_errors() {
+        let values = [1, 2];
+        assert_eq!(
+            format_list(&values, &OutputFormat::Text, i32::to_string),
+            "1\n2"
+        );
+        assert!(format_list(&values, &OutputFormat::Json, i32::to_string).contains("\n"));
+        assert!(
+            format_list(&[BrokenSerialize], &OutputFormat::Json, |_| String::new())
+                .contains("serialization failed")
+        );
+    }
+
+    #[test]
+    fn formatters_cover_account_apps_owned_apps_and_versions() {
+        assert!(format_account(&account()).contains("user@example.com"));
+        assert!(format_app(&app(0.0)).contains("Free"));
+        assert!(format_app(&app(2.0)).contains("$2.00"));
+        assert!(format_owned_app(&owned_app(vec![], None)).contains("Example"));
+        assert!(
+            format_owned_app(&owned_app(vec!["iphone".into()], Some("2026-01-01")))
+                .contains("purchased 2026-01-01")
+        );
+        assert_eq!(
+            format_version(&AppVersion {
+                external_version_id: "42".into(),
+                version_string: "1.0".into(),
+            }),
+            "1.0 (42)"
+        );
+    }
+}
