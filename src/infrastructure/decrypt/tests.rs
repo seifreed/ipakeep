@@ -743,6 +743,23 @@ fn bundle_executable_requires_a_nonempty_info_plist_value() {
 }
 
 #[test]
+fn entitlement_commands_report_unsigned_macho_errors() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let app = dir.path().join("Unsigned.app");
+    std::fs::create_dir(&app).unwrap();
+    let info = plist::Value::Dictionary(plist::Dictionary::from_iter([(
+        "CFBundleExecutable".to_string(),
+        plist::Value::String("TestExec".into()),
+    )]));
+    info.to_file_xml(app.join("Info.plist")).unwrap();
+    let executable = app.join("TestExec");
+    std::fs::write(&executable, b"not a Mach-O").unwrap();
+
+    assert!(resign_app(&app, "-", None).is_err());
+    assert!(entitlements_report(&executable).is_err());
+}
+
+#[test]
 fn patch_accepts_matching_uuid_and_warns_without_one() {
     let ipa = build_ipa(&thin_macho_with_uuid(0, 0x11, 0xAA));
     let dir = tempfile::TempDir::new().unwrap();
