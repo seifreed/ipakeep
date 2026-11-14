@@ -300,6 +300,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_call_requires_params_and_defaults_omitted_arguments() {
+        let invoker = FakeInvoker::default();
+        let missing = handle_request(&invoker, request("tools/call", Some(Value::from(4)), None))
+            .await
+            .expect("response");
+        assert_eq!(missing.error.expect("error").code, INVALID_PARAMS);
+
+        let called = handle_request(
+            &invoker,
+            request(
+                "tools/call",
+                Some(Value::from(5)),
+                Some(serde_json::json!({"name": "search"})),
+            ),
+        )
+        .await
+        .expect("response");
+        assert_eq!(called.result.expect("result")["isError"], false);
+        assert_eq!(
+            invoker.calls.lock().expect("lock")[0].1,
+            serde_json::json!({})
+        );
+    }
+
+    #[tokio::test]
     async fn unknown_method_is_method_not_found() {
         let invoker = FakeInvoker::default();
         let response = handle_request(
@@ -364,6 +389,18 @@ mod tests {
                 .expect("response");
         assert_eq!(response.error.expect("error").code, PARSE_ERROR);
         assert!(response.id.is_null());
+    }
+
+    #[tokio::test]
+    async fn serve_ignores_blank_lines() {
+        let invoker = FakeInvoker::default();
+        let mut output = Vec::new();
+
+        serve(&invoker, &b" \n\t\n"[..], &mut output)
+            .await
+            .expect("serve");
+
+        assert!(output.is_empty());
     }
 
     #[test]
