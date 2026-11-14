@@ -157,6 +157,13 @@ pub struct DumpArgs<'a> {
 ///
 /// Returns an error if the dumper/tool fails or the output cannot be written.
 pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
+    handle_dump_with(args, run_dump)
+}
+
+fn handle_dump_with<F>(args: &DumpArgs, run: F) -> Result<(), String>
+where
+    F: FnOnce(&DumpRequest) -> Result<Vec<u8>, String>,
+{
     let device = match args.device {
         "usb" => DumpDevice::Usb,
         "local" => DumpDevice::Local,
@@ -177,7 +184,7 @@ pub fn handle_dump(args: &DumpArgs) -> Result<(), String> {
         spawn: args.spawn,
         drop_undumped_extensions: args.drop_undumped_extensions,
     };
-    let bytes = run_dump(&req)?;
+    let bytes = run(&req)?;
     let out = args
         .output
         .map_or_else(|| dump_output(args.ipa, args.bundle_id), Path::to_path_buf);
@@ -197,7 +204,14 @@ pub fn handle_offline(
     output: Option<&Path>,
     allow_on_device: bool,
 ) -> Result<(), String> {
-    let bytes = run_offline(ipa, allow_on_device)?;
+    handle_offline_with(ipa, output, |path| run_offline(path, allow_on_device))
+}
+
+fn handle_offline_with<F>(ipa: &Path, output: Option<&Path>, run: F) -> Result<(), String>
+where
+    F: FnOnce(&Path) -> Result<Vec<u8>, String>,
+{
+    let bytes = run(ipa)?;
     let out = output.map_or_else(|| default_output(ipa), Path::to_path_buf);
     std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     println!("Wrote decrypted IPA: {}", out.display());
@@ -688,6 +702,60 @@ mod tests {
         };
 
         assert!(handle_dump(&args).unwrap_err().contains("needs --ipa"));
+    }
+
+    #[test]
+    fn dump_handler_writes_runner_output_to_the_ipa_default_path() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = work.path().join("Demo.ipa");
+        let args = DumpArgs {
+            bundle_id: "com.example.demo",
+            dumper: "builtin",
+            ipa: Some(&ipa),
+            device: "local",
+            agent: None,
+            spawn: true,
+            settle: 0.0,
+            output: None,
+            drop_undumped_extensions: false,
+            ssh_host: "127.0.0.1",
+            ssh_port: 2222,
+            ssh_user: "mobile",
+        };
+
+        handle_dump_with(&args, |request| {
+            assert!(matches!(request.device, DumpDevice::Local));
+            assert!(matches!(request.dumper, Dumper::Builtin));
+            Ok(b"decrypted".to_vec())
+        })
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(work.path().join("Demo-decrypted.ipa")).unwrap(),
+            b"decrypted"
+        );
+    }
+
+    #[test]
+    fn offline_handler_writes_output_and_propagates_runner_and_write_errors() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = work.path().join("Demo.ipa");
+        handle_offline_with(&ipa, None, |_| Ok(b"decrypted".to_vec())).unwrap();
+        assert_eq!(
+            std::fs::read(work.path().join("Demo-decrypted.ipa")).unwrap(),
+            b"decrypted"
+        );
+
+        let output = work.path().join("custom.ipa");
+        handle_offline_with(&ipa, Some(&output), |_| Ok(b"custom".to_vec())).unwrap();
+        assert_eq!(std::fs::read(output).unwrap(), b"custom");
+
+        let missing_parent = work.path().join("missing/output.ipa");
+        assert!(handle_offline_with(&ipa, Some(&missing_parent), |_| Ok(Vec::new())).is_err());
+        assert_eq!(
+            handle_offline_with(&ipa, None, |_| Err("runner failed".into())).unwrap_err(),
+            "runner failed"
+        );
     }
 
     #[test]
