@@ -1,6 +1,9 @@
 use super::*;
 use crate::domain::entity::Account;
-use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+use crate::domain::error::{AppStoreError, CredentialError, TwoFactorMethod};
+use crate::domain::repository::{
+    CredentialRepo, FakeAppStoreRepository, InMemoryCredentialRepository,
+};
 
 fn sensitive_account() -> Account {
     Account {
@@ -157,4 +160,168 @@ async fn login_grandslam_flag_selects_srp_flow() {
 
     assert_eq!(app_store.authenticate_grandslam_calls().len(), 1);
     assert!(app_store.authenticate_calls().is_empty());
+}
+
+#[test]
+fn store_front_uses_country_and_rejects_unknown_country() {
+    assert_eq!(resolve_store_front(Some("es")), Some("143454-1".into()));
+    assert_eq!(resolve_store_front(Some("zz")), None);
+}
+
+#[tokio::test]
+async fn login_propagates_noninteractive_credentials_and_authentication_errors() {
+    let missing = LoginOptions {
+        email: None,
+        password: Some("password"),
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+    assert_eq!(
+        handle_login(
+            &missing,
+            FakeAppStoreRepository::new(),
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err(),
+        "email is required in non-interactive mode"
+    );
+
+    let rejected = LoginOptions {
+        email: Some("test@example.com"),
+        password: Some("password"),
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+    let app_store = FakeAppStoreRepository::new()
+        .with_authenticate_result(Err(AppStoreError::InvalidCredentials));
+    assert!(
+        handle_login(
+            &rejected,
+            app_store,
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err()
+        .contains("login failed: invalid credentials")
+    );
+}
+
+#[tokio::test]
+async fn legacy_login_requires_a_code_or_completes_two_factor_authentication() {
+    let challenge = AppStoreError::AuthCodeRequired {
+        dsid: "dsid".into(),
+        idms_token: "token".into(),
+        method: TwoFactorMethod::Unspecified,
+    };
+    let options = LoginOptions {
+        email: Some("test@example.com"),
+        password: Some("password"),
+        code: None,
+        country: None,
+        non_interactive: true,
+        grandslam: false,
+    };
+    assert!(
+        handle_login(
+            &options,
+            FakeAppStoreRepository::new().with_authenticate_result(Err(challenge.clone())),
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err()
+        .contains("2FA code required")
+    );
+
+    let with_code = LoginOptions {
+        code: Some("123456"),
+        ..options
+    };
+    let app_store = FakeAppStoreRepository::new()
+        .with_authenticate_result(Err(challenge))
+        .with_authenticate_with_2fa_result(Ok(sensitive_account()));
+    handle_login(
+        &with_code,
+        app_store.clone(),
+        InMemoryCredentialRepository::new(),
+        &OutputFormat::Text,
+    )
+    .await
+    .unwrap();
+    assert_eq!(app_store.authenticate_with_2fa_calls().len(), 1);
+}
+
+#[tokio::test]
+async fn grandslam_login_reports_authentication_failure_and_noninteractive_2fa() {
+    let options = LoginOptions {
+        email: Some("test@example.com"),
+        password: Some("password"),
+        code: None,
+        country: Some("es"),
+        non_interactive: true,
+        grandslam: true,
+    };
+    let store = FakeAppStoreRepository::new()
+        .with_authenticate_grandslam_result(Err(AppStoreError::NetworkError("offline".into())));
+    assert!(
+        handle_login(
+            &options,
+            store,
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err()
+        .contains("login failed: network error: offline")
+    );
+
+    let challenge = AppStoreError::AuthCodeRequired {
+        dsid: "dsid".into(),
+        idms_token: "token".into(),
+        method: TwoFactorMethod::TrustedDevice,
+    };
+    let store = FakeAppStoreRepository::new().with_authenticate_grandslam_result(Err(challenge));
+    assert!(
+        handle_login(
+            &options,
+            store,
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err()
+        .contains("GrandSlam 2FA required")
+    );
+}
+
+#[tokio::test]
+async fn info_and_revoke_format_repository_failures() {
+    let mut credentials = CredentialRepo::new();
+    credentials
+        .expect_load_account()
+        .returning(|| Err(CredentialError::LoadFailed("unavailable".into())));
+    assert!(
+        handle_info(credentials, &OutputFormat::Text)
+            .await
+            .unwrap_err()
+            .contains("failed to load credentials")
+    );
+
+    let mut credentials = CredentialRepo::new();
+    credentials
+        .expect_delete_account()
+        .returning(|| Err(CredentialError::DeleteFailed("read-only".into())));
+    assert!(
+        handle_revoke(credentials)
+            .await
+            .unwrap_err()
+            .contains("failed to revoke credentials")
+    );
 }
