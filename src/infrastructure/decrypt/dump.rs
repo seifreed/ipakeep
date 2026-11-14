@@ -547,6 +547,77 @@ pub(super) fn external_argv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_executable(directory: &Path, name: &str, contents: &str) -> PathBuf {
+        let path = directory.join(name);
+        std::fs::write(&path, contents).expect("write executable");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("executable permissions");
+        path
+    }
+
+    #[test]
+    fn prepares_bundled_agent_files_and_keeps_an_override() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let override_path = Path::new("/custom/runner.py");
+        assert_eq!(
+            prepare_agent(Some(override_path), work.path()).unwrap(),
+            override_path
+        );
+
+        let bundled = prepare_agent(None, work.path()).expect("bundled agent");
+        assert_eq!(bundled, work.path().join("agent/ipakeep_dump.py"));
+        for name in [
+            "ipakeep_dump.py",
+            "ipakeep_dump.js",
+            "ipakeep_extensions.js",
+        ] {
+            assert!(bundled.with_file_name(name).is_file());
+        }
+    }
+
+    #[test]
+    fn writes_fouldecrypt_runner_into_work_directory() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let script = PathBuf::from(write_fouldecrypt_script(work.path()).unwrap());
+
+        assert_eq!(script, work.path().join("run.sh"));
+        assert!(
+            std::fs::read_to_string(script)
+                .unwrap()
+                .contains("FoulDecrypt")
+        );
+    }
+
+    #[test]
+    fn pulls_installed_bundle_with_the_requested_python() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let python = write_executable(work.path(), "python", "#!/bin/sh\nprintf pulled > \"$3\"\n");
+
+        let ipa = pull_installed_bundle(python.to_str().unwrap(), "com.example.app", work.path())
+            .expect("pulled IPA");
+
+        assert_eq!(ipa, work.path().join("installed-encrypted.ipa"));
+        assert_eq!(std::fs::read(ipa).unwrap(), b"pulled");
+        assert!(work.path().join("pull/ipakeep_pull.py").is_file());
+        assert!(work.path().join("pull/ipakeep_pull.js").is_file());
+    }
+
+    #[test]
+    fn run_remote_reports_success_exit_failure_and_start_failure() {
+        assert!(run_remote(("/bin/sh".into(), vec!["-c".into(), "exit 0".into()]), None).is_ok());
+        assert!(
+            run_remote(("/bin/sh".into(), vec!["-c".into(), "exit 9".into()]), None)
+                .unwrap_err()
+                .contains("exited")
+        );
+        assert!(
+            run_remote(("/missing/ssh".into(), Vec::new()), None)
+                .unwrap_err()
+                .contains("failed to run /missing/ssh")
+        );
+    }
 
     #[test]
     fn parses_known_dumpers_and_rejects_unknown() {
