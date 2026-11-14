@@ -5,6 +5,7 @@ use super::{
     SimulatorTarget, codesign_command, install_app, prepare_path, run_app, run_checked,
     temp_workdir,
 };
+use crate::infrastructure::ipa::{extract_ipa, find_app_bundle};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +19,7 @@ pub(super) fn install_ipa(
     let workdir = temp_workdir();
     fs::create_dir_all(&workdir).map_err(|e| format!("{}: {e}", workdir.display()))?;
     extract_ipa(ipa, &workdir)?;
-    let app = find_extracted_app(&workdir)?;
+    let app = find_app_bundle(&workdir)?;
     reject_encrypted_app(&app)?;
 
     prepare_path(&app)?;
@@ -29,27 +30,6 @@ pub(super) fn install_ipa(
         run_app(&bundle_id(&app)?, &[], console, target, entitlements)?;
     }
     Ok(app)
-}
-
-fn extract_ipa(ipa: &Path, destination: &Path) -> Result<(), String> {
-    let file = fs::File::open(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid IPA ZIP: {e}"))?;
-    archive
-        .extract(destination)
-        .map_err(|e| format!("failed to extract IPA: {e}"))
-}
-
-fn find_extracted_app(workdir: &Path) -> Result<PathBuf, String> {
-    let payload = workdir.join("Payload");
-    for entry in fs::read_dir(&payload).map_err(|e| format!("{}: {e}", payload.display()))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        if metadata.is_dir() && path.extension().is_some_and(|extension| extension == "app") {
-            return Ok(path);
-        }
-    }
-    Err("IPA did not contain Payload/*.app".into())
 }
 
 fn reject_encrypted_app(app: &Path) -> Result<(), String> {

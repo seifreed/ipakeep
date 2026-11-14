@@ -61,6 +61,37 @@ fn write_manifest(
         .expect("write manifest bytes");
 }
 
+#[test]
+fn extract_ipa_finds_the_payload_app_bundle() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let ipa = temp_dir.path().join("test.ipa");
+    let destination = temp_dir.path().join("extracted");
+    std::fs::write(&ipa, test_ipa_bytes()).expect("write IPA");
+    std::fs::create_dir(&destination).expect("create destination");
+
+    extract_ipa(&ipa, &destination).expect("extract IPA");
+
+    assert_eq!(
+        find_app_bundle(&destination).expect("find app bundle"),
+        destination.join("Payload/Test.app")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn find_app_bundle_ignores_symlinked_app_directories() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let payload = temp_dir.path().join("Payload");
+    let external_app = temp_dir.path().join("External.app");
+    std::fs::create_dir(&payload).expect("create payload");
+    std::fs::create_dir(&external_app).expect("create external app");
+    symlink(&external_app, payload.join("Linked.app")).expect("create app symlink");
+
+    assert!(find_app_bundle(temp_dir.path()).is_err());
+}
+
 fn zip_entry(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
     let mut file = archive.by_name(name).ok()?;

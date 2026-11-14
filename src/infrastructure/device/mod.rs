@@ -2,6 +2,7 @@
 
 use crate::infrastructure::decrypt::ensure_decrypted;
 use crate::infrastructure::exec::{require_program, run_inherit, temp_dir};
+use crate::infrastructure::ipa::{extract_ipa, find_app_bundle};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,7 +57,7 @@ pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
 
 fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
-    let app = find_app(workdir)?;
+    let app = find_app_bundle(workdir)?;
     signing::sign_bundle(&app, request, workdir)?;
     run_inherit(install_command(&app, request.device, request.legacy_device))?;
     if request.launch {
@@ -67,28 +68,6 @@ fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<()
         ))?;
     }
     Ok(())
-}
-
-fn extract_ipa(ipa: &Path, destination: &Path) -> Result<(), String> {
-    let file = fs::File::open(ipa).map_err(|error| format!("{}: {error}", ipa.display()))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|error| format!("invalid IPA ZIP: {error}"))?;
-    archive
-        .extract(destination)
-        .map_err(|error| format!("failed to extract IPA: {error}"))
-}
-
-fn find_app(workdir: &Path) -> Result<PathBuf, String> {
-    let payload = workdir.join("Payload");
-    for entry in
-        fs::read_dir(&payload).map_err(|error| format!("{}: {error}", payload.display()))?
-    {
-        let path = entry.map_err(|error| error.to_string())?.path();
-        if path.is_dir() && path.extension().is_some_and(|ext| ext == "app") {
-            return Ok(path);
-        }
-    }
-    Err("IPA did not contain Payload/*.app".into())
 }
 
 fn collect_sign_targets(path: &Path, targets: &mut Vec<PathBuf>) -> Result<(), String> {

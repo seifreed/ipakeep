@@ -13,6 +13,33 @@ use metadata::build_itunes_metadata_plist;
 use sinf::sinf_target_paths;
 use std::collections::HashSet;
 use std::io::{Cursor, Read, Seek, Write};
+use std::path::{Path, PathBuf};
+
+/// Extract an IPA archive into an existing destination directory.
+pub(crate) fn extract_ipa(ipa: &Path, destination: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(ipa).map_err(|error| format!("{}: {error}", ipa.display()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| format!("invalid IPA ZIP: {error}"))?;
+    archive
+        .extract(destination)
+        .map_err(|error| format!("failed to extract IPA: {error}"))
+}
+
+/// Find the first real `Payload/*.app` directory in an extracted IPA.
+pub(crate) fn find_app_bundle(workdir: &Path) -> Result<PathBuf, String> {
+    let payload = workdir.join("Payload");
+    for entry in
+        std::fs::read_dir(&payload).map_err(|error| format!("{}: {error}", payload.display()))?
+    {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        if metadata.is_dir() && path.extension().is_some_and(|extension| extension == "app") {
+            return Ok(path);
+        }
+    }
+    Err("IPA did not contain Payload/*.app".into())
+}
 
 /// Verify the MD5 checksum of downloaded bytes.
 ///
