@@ -435,6 +435,7 @@ mod tests {
         let binary = b"helper bytes";
 
         let path = install_helper(directory.path(), binary).expect("install helper");
+        assert_eq!(install_helper(directory.path(), binary).unwrap(), path);
 
         assert_eq!(std::fs::read(&path).expect("helper bytes"), binary);
         assert_eq!(
@@ -482,6 +483,32 @@ mod tests {
     }
 
     #[test]
+    fn validates_header_count_and_value_size() {
+        let too_many = (0..33)
+            .map(|index| (format!("header-{index}"), "value".to_string()))
+            .collect();
+        assert!(matches!(
+            validate_headers(&too_many),
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
+
+        let too_large = HashMap::from([("header".into(), "x".repeat(MAX_HEADER_VALUE + 1))]);
+        assert!(validate_headers(&too_large).is_err());
+    }
+
+    #[test]
+    fn installed_helper_must_match_expected_bytes() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("helper");
+        std::fs::write(&path, b"different").expect("helper file");
+
+        assert!(matches!(
+            verify_helper(&path, b"expected"),
+            Err(AppStoreError::NetworkError(_))
+        ));
+    }
+
+    #[test]
     fn store_login_maps_helper_responses() {
         let account = parse_store_login(
             br#"{"account":{"email":"a@b.c","name":"A B","passwordToken":"tok","directoryServicesIdentifier":"42","storeFront":"143454-8,32","pod":"71"},"cookies":["mz_at0-42=x; Domain=apple.com"]}"#,
@@ -500,6 +527,22 @@ mod tests {
             parse_store_login(br#"{"account":{"email":"a@b.c"}}"#),
             Err(AppStoreError::AuthenticationFailed(_))
         ));
+        assert!(matches!(
+            parse_store_login(br#"{"account":{"passwordToken":"tok"}}"#),
+            Err(AppStoreError::AuthenticationFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_provisioning_is_not_cached() {
+        let cell = OnceLock::new();
+        let result = cached(&cell, || async {
+            Err(AppStoreError::NetworkError("offline".into()))
+        })
+        .await;
+
+        assert!(matches!(result, Err(AppStoreError::NetworkError(_))));
+        assert!(cell.get().is_none());
     }
 
     #[tokio::test]
