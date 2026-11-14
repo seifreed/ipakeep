@@ -220,6 +220,21 @@ fn credential_dirs() -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    fn write_ipa(directory: &Path, members: &[(&str, &[u8])]) -> PathBuf {
+        let path = directory.join("input.ipa");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, contents) in members {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(contents).unwrap();
+        }
+        writer.finish().unwrap();
+        path
+    }
 
     fn plan_entry() -> PlanEntry {
         PlanEntry {
@@ -373,5 +388,45 @@ mod tests {
         };
 
         assert!(decrypt_ipa(&ipa, &creds, false, false).is_err());
+    }
+
+    #[test]
+    fn empty_decryption_plan_returns_actionable_error() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = write_ipa(work.path(), &[("Payload/App.app/Info.plist", b"plist")]);
+        let creds = Credentials {
+            standard: vec![0; CREDENTIAL_SIZE],
+            arcade: None,
+        };
+
+        assert!(
+            decrypt_ipa(&ipa, &creds, false, false)
+                .unwrap_err()
+                .contains("no encrypted binaries")
+        );
+    }
+
+    #[test]
+    fn decrypt_plan_can_skip_extensions_and_watch_apps() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = write_ipa(
+            work.path(),
+            &[
+                ("Payload/App.app/PlugIns/Ext.appex/SC_Info/Ext.supf", b"key"),
+                ("Payload/App.app/PlugIns/Ext.appex/Ext", b"binary"),
+                ("Payload/App.app/Watch/Watch.app/SC_Info/Watch.supf", b"key"),
+                ("Payload/App.app/Watch/Watch.app/Watch", b"binary"),
+            ],
+        );
+        let creds = Credentials {
+            standard: vec![0; CREDENTIAL_SIZE],
+            arcade: None,
+        };
+
+        assert!(
+            decrypt_ipa(&ipa, &creds, true, false)
+                .unwrap_err()
+                .contains("no encrypted binaries")
+        );
     }
 }
