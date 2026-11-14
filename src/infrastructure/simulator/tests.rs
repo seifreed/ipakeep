@@ -44,10 +44,47 @@ fn prepare_path_recurses_into_app_bundle() {
     fs::create_dir_all(&app).unwrap();
     let binary = app.join("Example");
     write_minimal_arm64_macho(&binary);
+    let hidden = dir.path().join(".hidden").join("HiddenBinary");
+    fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+    write_minimal_arm64_macho(&hidden);
 
     let converted = prepare_path(dir.path()).unwrap();
 
     assert_eq!(converted, vec![binary]);
+    let mut hidden_file = File::open(hidden).unwrap();
+    assert_eq!(
+        read_mach_header(&mut hidden_file).unwrap().unwrap().ncmds,
+        0
+    );
+}
+
+#[test]
+fn command_helpers_report_output_exit_and_start_failures() {
+    let output = command_output(command_with_args("/bin/sh", &["-c", "printf result"])).unwrap();
+    assert_eq!(output, "result");
+    assert!(
+        command_output(command_with_args(
+            "/bin/sh",
+            &["-c", "printf rejected >&2; exit 1"]
+        ))
+        .unwrap_err()
+        .contains("rejected")
+    );
+
+    assert!(run_checked(command_with_args("/bin/sh", &["-c", "exit 0"])).is_ok());
+    assert!(
+        run_checked(command_with_args(
+            "/bin/sh",
+            &["-c", "printf rejected >&2; exit 1"]
+        ))
+        .unwrap_err()
+        .contains("rejected")
+    );
+    assert!(
+        run_checked(command_with_args("/missing/simulator-tool", &[]))
+            .unwrap_err()
+            .contains("failed to run")
+    );
 }
 
 #[test]
