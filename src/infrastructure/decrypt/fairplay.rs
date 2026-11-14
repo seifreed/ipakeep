@@ -694,49 +694,70 @@ pub fn decrypt_binary(
         return Ok(None);
     };
 
-    let page_count = info.crypt_size / PAGE_SIZE;
     let first_page = (info.base + info.crypt_off) / PAGE_SIZE;
     let pclass = !supf.is_empty() && (supf[0] == 1 || supf[0] == 4);
-
-    let mut record_start = 0usize;
-    if !pclass {
-        record_start = arm_supf_record_offset(supf, page_count, info.cpu, info.subtype)?;
-    }
 
     let work = derive_work16(credential, sinf)?;
     let key_cipher = Aes128::new_from_slice(&work).map_err(|e| format!("invalid work key: {e}"))?;
 
     let slice = &source[info.base..info.base + info.size];
     let mut result = slice.to_vec();
-
-    for local_page in 0..page_count {
-        let absolute_index = first_page + local_page;
-        if pclass {
-            record_start = pclass_page_key_offset(supf, absolute_index)?;
-        }
-
-        if record_start + 32 > supf.len() {
-            return Err("truncated SUPF/SUPP page record".to_string());
-        }
-
-        let record = &supf[record_start..record_start + 32];
-        record_start += 32;
-
-        let index =
-            u32::try_from(absolute_index).map_err(|_| "page index too large".to_string())?;
-        let key = derive_page_key(&key_cipher, &record[..16], index);
-
-        let start = info.crypt_off + PAGE_SIZE * local_page;
-        let ciphertext = &slice[start..start + PAGE_SIZE];
-
-        let plain = aes128_cbc_decrypt_no_pad(&key, &record[16..32], ciphertext)?;
-        result[start..start + PAGE_SIZE].copy_from_slice(&plain);
-    }
+    let page_count = decrypt_pages(
+        supf,
+        &key_cipher,
+        slice,
+        &mut result,
+        &info,
+        first_page,
+        pclass,
+    )?;
 
     let off = info.cryptid_offset - info.base;
     result[off..off + 4].copy_from_slice(&0u32.to_le_bytes());
 
     Ok(Some((result, page_count)))
+}
+
+fn decrypt_pages(
+    supf: &[u8],
+    key_cipher: &Aes128,
+    slice: &[u8],
+    result: &mut [u8],
+    info: &MachoInfo,
+    first_page: usize,
+    pclass: bool,
+) -> Result<usize, String> {
+    let page_count = info.crypt_size / PAGE_SIZE;
+    let mut record_start = if pclass {
+        0
+    } else {
+        arm_supf_record_offset(supf, page_count, info.cpu, info.subtype)?
+    };
+    for local_page in 0..page_count {
+        let absolute_index = first_page + local_page;
+        if pclass {
+            record_start = pclass_page_key_offset(supf, absolute_index)?;
+        }
+        let record = page_key_record(supf, &mut record_start)?;
+        let index = u32::try_from(absolute_index).map_err(|_| "page index too large")?;
+        let key = derive_page_key(key_cipher, &record[..16], index);
+        let start = info.crypt_off + PAGE_SIZE * local_page;
+        let plain =
+            aes128_cbc_decrypt_no_pad(&key, &record[16..32], &slice[start..start + PAGE_SIZE])?;
+        result[start..start + PAGE_SIZE].copy_from_slice(&plain);
+    }
+    Ok(page_count)
+}
+
+fn page_key_record<'a>(supf: &'a [u8], offset: &mut usize) -> Result<&'a [u8], String> {
+    let end = offset
+        .checked_add(32)
+        .ok_or_else(|| "truncated SUPF/SUPP page record".to_string())?;
+    let record = supf
+        .get(*offset..end)
+        .ok_or_else(|| "truncated SUPF/SUPP page record".to_string())?;
+    *offset = end;
+    Ok(record)
 }
 
 #[cfg(test)]
