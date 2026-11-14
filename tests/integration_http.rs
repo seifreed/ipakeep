@@ -31,6 +31,20 @@ async fn get_json_rejects_non_success_status_before_decoding() {
 }
 
 #[tokio::test]
+async fn requests_report_invalid_url_errors() {
+    let client = AppleHttpClient::new().unwrap();
+
+    assert!(matches!(
+        client.get_json::<serde_json::Value>("not a URL").await,
+        Err(AppStoreError::NetworkError(_))
+    ));
+    assert!(matches!(
+        client.post_form("not a URL", &HashMap::new()).await,
+        Err(AppStoreError::NetworkError(_))
+    ));
+}
+
+#[tokio::test]
 async fn post_form_rejects_non_success_status_before_decoding() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
