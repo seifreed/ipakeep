@@ -233,3 +233,113 @@ mod observability_tests {
         assert!(!json.contains("url"));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::entity::{DownloadMetadata, Sinf, test_support::test_account};
+    use crate::domain::error::AppStoreError;
+    use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
+    use std::path::PathBuf;
+
+    fn request<'a>(output: Option<&'a str>) -> DownloadRequest<'a> {
+        DownloadRequest {
+            app: "42",
+            country: "us",
+            external_version_id: None,
+            output,
+            auto_purchase: false,
+            simulator_run: false,
+            simulator_launch: false,
+        }
+    }
+
+    fn item(md5: &str) -> DownloadItem {
+        DownloadItem {
+            url: "https://example.invalid/app.ipa".into(),
+            md5: md5.into(),
+            sinfs: Vec::<Sinf>::new(),
+            metadata: DownloadMetadata::from_iter([(
+                "bundleId".into(),
+                serde_json::json!("com.example.app"),
+            )]),
+        }
+    }
+
+    #[test]
+    fn validation_rejects_empty_and_multi_item_simulator_results() {
+        assert!(validate_download_items(&[], false).is_err());
+        assert!(validate_download_items(&[item(""), item("")], true).is_err());
+        assert!(validate_download_items(&[item(""), item("")], false).is_ok());
+        assert!(validate_download_items(&[item("")], true).is_ok());
+    }
+
+    #[test]
+    fn install_is_skipped_when_simulator_run_is_disabled() {
+        assert!(install_downloaded_ipa(&[], false, false).is_ok());
+    }
+
+    #[test]
+    fn result_and_progress_printers_support_both_formats() {
+        let results = [DownloadResult {
+            path: "App.ipa".into(),
+            size: 123,
+        }];
+        assert!(print_download_results(&results, &OutputFormat::Text).is_ok());
+        assert!(print_download_results(&results, &OutputFormat::Json).is_ok());
+        print_download_progress(&OutputFormat::Text, "text progress");
+        print_download_progress(&OutputFormat::Json, "json progress");
+    }
+
+    #[tokio::test]
+    async fn download_reports_missing_login_and_empty_repository_results() {
+        let error = handle_download(
+            request(None),
+            FakeAppStoreRepository::new(),
+            InMemoryCredentialRepository::new(),
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not logged in"));
+
+        let app_store = FakeAppStoreRepository::new().with_download_result(Ok(Vec::new()));
+        let credentials = InMemoryCredentialRepository::new().with_account(test_account());
+        let error = handle_download(request(None), app_store, credentials, &OutputFormat::Text)
+            .await
+            .unwrap_err();
+        assert!(error.contains("no download items"));
+    }
+
+    #[tokio::test]
+    async fn download_item_progresses_then_returns_repository_download_error() {
+        let app_store = FakeAppStoreRepository::new()
+            .with_download_bytes_result(Err(AppStoreError::NetworkError("offline".into())));
+        let download_item = item("");
+        let destination = OutputDestination::File(PathBuf::from("App.ipa"));
+        let error = download_and_save_item(
+            &app_store,
+            &download_item,
+            0,
+            42,
+            &destination,
+            &OutputFormat::Text,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("offline"));
+
+        let download_item = item("expected-md5");
+        let error = download_and_save_item(
+            &app_store,
+            &download_item,
+            1,
+            42,
+            &destination,
+            &OutputFormat::Json,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("offline"));
+    }
+}
