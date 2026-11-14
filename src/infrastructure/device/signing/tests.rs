@@ -168,6 +168,39 @@ fn profile_application_id_requires_a_valid_string_pattern() {
     assert!(wrong_type.app_id("com.example.app").is_none());
 }
 
+#[test]
+fn parses_entitlements_from_cms_profile_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profile.mobileprovision");
+    let encoded = dir.path().join("profile.plist");
+    Value::Dictionary(Dictionary::from_iter([(
+        "Entitlements".to_string(),
+        Value::Dictionary(Dictionary::new()),
+    )]))
+    .to_file_xml(&encoded)
+    .unwrap();
+    let output = fs::read(&encoded).unwrap();
+
+    let profile = Profile::from_cms_output(&path, &output).unwrap();
+    assert_eq!(profile.path, path);
+    assert!(profile.entitlements.is_empty());
+    assert!(
+        Profile::from_cms_output(&path, b"invalid plist")
+            .err()
+            .unwrap()
+            .contains("invalid profile")
+    );
+
+    Value::Dictionary(Dictionary::new())
+        .to_file_xml(&encoded)
+        .unwrap();
+    let output = fs::read(&encoded).unwrap();
+    assert_eq!(
+        Profile::from_cms_output(&path, &output).err().unwrap(),
+        "provisioning profile has no Entitlements dictionary"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn profile_reader_rejects_invalid_cms_data() {

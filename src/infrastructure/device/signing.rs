@@ -30,7 +30,11 @@ impl Profile {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        let value = Value::from_reader(Cursor::new(output.stdout))
+        Self::from_cms_output(path, &output.stdout)
+    }
+
+    fn from_cms_output(path: &Path, output: &[u8]) -> Result<Self, String> {
+        let value = Value::from_reader(Cursor::new(output))
             .map_err(|error| format!("invalid profile {}: {error}", path.display()))?;
         let entitlements = value
             .as_dictionary()
