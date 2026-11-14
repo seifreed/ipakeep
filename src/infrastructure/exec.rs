@@ -179,7 +179,10 @@ pub(crate) fn newest_ipa(dir: &Path) -> Option<PathBuf> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::observed_output;
+    use super::{
+        find_in_path, newest_ipa, observed_output, observed_status, require_program, run_inherit,
+        run_quiet, temp_dir,
+    };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::process::Command;
 
@@ -199,5 +202,56 @@ mod tests {
         assert!(logs.contains("duration_ms="));
         assert!(!logs.contains("process-secret"));
         assert!(!logs.contains("exit 7"));
+    }
+
+    #[test]
+    fn process_helpers_report_success_failure_and_spawn_errors() {
+        assert!(find_in_path("sh").is_some());
+        assert!(find_in_path("/bin/sh").is_some());
+        assert!(find_in_path("/missing/ipakeep-command").is_none());
+        assert!(require_program("sh").is_ok());
+        assert!(require_program("ipakeep-command-that-does-not-exist").is_err());
+
+        let mut success = Command::new("sh");
+        success.args(["-c", "exit 0"]);
+        assert!(observed_status(&mut success).unwrap().success());
+
+        let mut missing = Command::new("ipakeep-command-that-does-not-exist");
+        assert!(observed_output(&mut missing).is_err());
+        let mut missing = Command::new("ipakeep-command-that-does-not-exist");
+        assert!(observed_status(&mut missing).is_err());
+    }
+
+    #[test]
+    fn command_runners_return_status_and_trimmed_stderr() {
+        let mut success = Command::new("sh");
+        success.args(["-c", "exit 0"]);
+        assert!(run_inherit(success).is_ok());
+
+        let mut failed = Command::new("sh");
+        failed.args(["-c", "exit 7"]);
+        assert!(run_inherit(failed).unwrap_err().contains("exit status: 7"));
+
+        let mut quiet = Command::new("sh");
+        quiet.args(["-c", "printf '  failure  ' >&2; exit 7"]);
+        assert_eq!(run_quiet(quiet).unwrap_err(), "failure");
+        let mut quiet = Command::new("sh");
+        quiet.args(["-c", "exit 0"]);
+        assert!(run_quiet(quiet).is_ok());
+    }
+
+    #[test]
+    fn temporary_directory_and_newest_ipa_helpers_handle_empty_and_present_files() {
+        let path = temp_dir("coverage").unwrap();
+        assert!(path.is_dir());
+        std::fs::remove_dir_all(&path).unwrap();
+
+        let work = tempfile::tempdir().unwrap();
+        assert_eq!(newest_ipa(work.path()), None);
+        let ipa = work.path().join("one.ipa");
+        std::fs::write(&ipa, b"ipa").unwrap();
+        std::fs::write(work.path().join("notes.txt"), b"text").unwrap();
+        assert_eq!(newest_ipa(work.path()), Some(ipa));
+        assert_eq!(newest_ipa(&work.path().join("missing")), None);
     }
 }
