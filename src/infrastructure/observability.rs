@@ -152,7 +152,11 @@ fn sanitize_environment(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogFormat, LoggingConfig, panic_payload_type, sanitize_environment};
+    use super::{
+        LogFormat, LoggingConfig, environment, install_panic_hook, panic_payload_type,
+        sanitize_environment,
+    };
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use std::io::{self, Write};
 
     struct FailingWriter;
@@ -209,6 +213,38 @@ mod tests {
         let payload = String::from("credential-secret");
         assert_eq!(panic_payload_type(&payload), "string");
         assert_eq!(panic_payload_type(&42_u8), "non_string");
+    }
+
+    #[test]
+    fn installed_panic_hook_logs_location_and_payload_type_only() {
+        let capture = LogCapture::default();
+        let subscriber = capture.install();
+        let previous = std::panic::take_hook();
+        install_panic_hook();
+        let string_panic = std::panic::catch_unwind(|| panic!("credential-secret"));
+        let non_string_panic = std::panic::catch_unwind(|| std::panic::panic_any(42_u8));
+        std::panic::set_hook(previous);
+        drop(subscriber);
+
+        let logs = capture.contents();
+        assert!(string_panic.is_err());
+        assert!(non_string_panic.is_err());
+        assert!(logs.contains("application.panic"));
+        assert!(logs.contains("panic_payload_type=\"string\""));
+        assert!(logs.contains("panic_payload_type=\"non_string\""));
+        assert!(!logs.contains("credential-secret"));
+    }
+
+    #[test]
+    fn environment_is_a_nonempty_sanitized_label() {
+        let environment = environment();
+        assert!(!environment.is_empty());
+        assert!(environment.len() <= 64);
+        assert!(
+            environment
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "_.-".contains(character))
+        );
     }
 
     #[test]
