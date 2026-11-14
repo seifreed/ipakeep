@@ -67,6 +67,15 @@ fn compute_u_pads_values_to_group_width() {
 }
 
 #[test]
+fn compute_u_rejects_values_wider_than_the_group() {
+    let width = G_2048.n.to_bytes_be().len();
+    assert_eq!(
+        left_pad(&vec![0; width + 1], width).unwrap_err(),
+        "SRP value is wider than the group modulus"
+    );
+}
+
+#[test]
 fn compute_client_proof_rejects_zero_b() {
     let a = generate_a();
     let a_pub = compute_a_pub(&a);
