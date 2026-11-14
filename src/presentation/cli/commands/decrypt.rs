@@ -678,4 +678,42 @@ mod tests {
             b"profile"
         );
     }
+
+    #[test]
+    fn provisioning_reports_profile_embedding_failure() {
+        let work = tempfile::tempdir().unwrap();
+        let output = work.path().join("provisioned");
+        let result = ProvisionResult {
+            team_id: "TEAM".into(),
+            mobileprovision: b"profile".to_vec(),
+            key_pem: b"key".to_vec(),
+            certificate_der: b"certificate".to_vec(),
+            certificate_serial: "serial".into(),
+        };
+
+        let error =
+            write_provisioning_files(&work.path().join("missing.app"), Some(&output), &result)
+                .unwrap_err();
+        assert!(error.contains("embedding profile"));
+    }
+
+    #[tokio::test]
+    async fn provision_requires_stored_credentials_before_network_access() {
+        let error = handle_provision(
+            Path::new("/missing/App.app"),
+            "device",
+            None,
+            "app-id",
+            None,
+            crate::domain::repository::InMemoryCredentialRepository::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("not logged in"));
+    }
+
+    #[test]
+    fn entitlement_warning_is_silent_when_report_cannot_be_read() {
+        warn_unregrantable_entitlements(Path::new("/missing/App.app"));
+    }
 }
