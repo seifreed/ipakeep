@@ -111,6 +111,15 @@ pub async fn store_login(
     password: &str,
     code: Option<&str>,
 ) -> Result<Account, AppStoreError> {
+    store_login_with_helper(None, email, password, code).await
+}
+
+async fn store_login_with_helper(
+    helper: Option<PathBuf>,
+    email: &str,
+    password: &str,
+    code: Option<&str>,
+) -> Result<Account, AppStoreError> {
     let request = serde_json::to_vec(&serde_json::json!({
         "email": email,
         "password": password,
@@ -118,16 +127,24 @@ pub async fn store_login(
     }))
     .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
     let span = tracing::Span::current();
-    let output = tokio::task::spawn_blocking(move || span.in_scope(|| run_login_helper(&request)))
-        .await
-        .map_err(|error| {
-            AppStoreError::NetworkError(format!("App Store login task failed: {error}"))
-        })??;
+    let output = tokio::task::spawn_blocking(move || {
+        span.in_scope(|| {
+            let helper = match helper {
+                Some(helper) => helper,
+                None => helper_path()?,
+            };
+            run_login_helper(&helper, &request)
+        })
+    })
+    .await
+    .map_err(|error| {
+        AppStoreError::NetworkError(format!("App Store login task failed: {error}"))
+    })??;
     parse_store_login(&output)
 }
 
-fn run_login_helper(request: &[u8]) -> Result<Vec<u8>, AppStoreError> {
-    let output = run_helper_command("login", request)?;
+fn run_login_helper(helper: &Path, request: &[u8]) -> Result<Vec<u8>, AppStoreError> {
+    let output = run_helper_command(helper, "login", request)?;
     if !output.status.success() {
         return Err(AppStoreError::AuthenticationFailed(helper_error(&output)));
     }
@@ -152,11 +169,25 @@ pub async fn store_request(
     operation: &'static str,
     request: &Value,
 ) -> Result<Value, AppStoreError> {
+    store_request_with_helper(None, operation, request).await
+}
+
+async fn store_request_with_helper(
+    helper: Option<PathBuf>,
+    operation: &'static str,
+    request: &Value,
+) -> Result<Value, AppStoreError> {
     let request = serde_json::to_vec(request)
         .map_err(|error| AppStoreError::Unexpected(error.to_string()))?;
     let span = tracing::Span::current();
     let output = tokio::task::spawn_blocking(move || {
-        span.in_scope(|| run_helper_command(operation, &request))
+        span.in_scope(|| {
+            let helper = match helper {
+                Some(helper) => helper,
+                None => helper_path()?,
+            };
+            run_helper_command(&helper, operation, &request)
+        })
     })
     .await
     .map_err(|error| {
@@ -180,8 +211,12 @@ pub async fn store_request(
     })
 }
 
-fn run_helper_command(operation: &str, request: &[u8]) -> Result<Output, AppStoreError> {
-    let mut child = Command::new(helper_path()?)
+fn run_helper_command(
+    helper: &Path,
+    operation: &str,
+    request: &[u8],
+) -> Result<Output, AppStoreError> {
+    let mut child = Command::new(helper)
         .arg(operation)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -254,8 +289,11 @@ fn build_anisette_data(headers: HashMap<String, String>) -> Result<AnisetteData,
 }
 
 fn run_helper() -> Result<Vec<u8>, AppStoreError> {
-    let helper_path = helper_path()?;
-    let mut command = Command::new(helper_path);
+    run_helper_at(&helper_path()?)
+}
+
+fn run_helper_at(helper: &Path) -> Result<Vec<u8>, AppStoreError> {
+    let mut command = Command::new(helper);
     let output = observed_output(&mut command).map_err(|error| {
         AppStoreError::NetworkError(format!("could not start modern Anisette helper: {error}"))
     })?;
@@ -404,6 +442,14 @@ fn validate_headers(headers: &HashMap<String, String>) -> Result<(), AppStoreErr
 mod tests {
     use super::*;
 
+    fn write_helper(directory: &Path, script: &str) -> PathBuf {
+        let path = directory.join("helper.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("helper script");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            .expect("helper permissions");
+        path
+    }
+
     #[test]
     fn cpd_matches_the_modern_adi_client_identity() {
         let headers = HashMap::from([
@@ -530,6 +576,88 @@ mod tests {
         assert!(matches!(
             parse_store_login(br#"{"account":{"passwordToken":"tok"}}"#),
             Err(AppStoreError::AuthenticationFailed(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn store_operations_run_a_local_helper() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let helper = write_helper(
+            directory.path(),
+            "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; *) printf '%s' '{\"ok\":true}' ;; esac",
+        );
+
+        let account = store_login_with_helper(Some(helper.clone()), "a@b.c", "secret", None)
+            .await
+            .expect("store login");
+        let response =
+            store_request_with_helper(Some(helper), "purchase", &serde_json::json!({"id": 42}))
+                .await
+                .expect("store request");
+
+        assert_eq!(account.password_token, "token");
+        assert_eq!(response["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn store_operations_report_helper_failures_and_invalid_json() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let rejected = write_helper(
+            directory.path(),
+            "cat >/dev/null\nprintf rejected >&2\nexit 1",
+        );
+        assert!(matches!(
+            store_login_with_helper(Some(rejected.clone()), "a@b.c", "secret", None).await,
+            Err(AppStoreError::AuthenticationFailed(message)) if message == "rejected"
+        ));
+        assert!(matches!(
+            store_request_with_helper(Some(rejected), "download", &Value::Null).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("rejected")
+        ));
+
+        let invalid = write_helper(directory.path(), "cat >/dev/null\nprintf not-json");
+        assert!(matches!(
+            store_request_with_helper(Some(invalid), "purchase", &Value::Null).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("invalid JSON")
+        ));
+    }
+
+    #[tokio::test]
+    async fn store_operations_reject_helper_output_over_their_limits() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let helper = write_helper(
+            directory.path(),
+            "cat >/dev/null\ncase \"$1\" in login) head -c 65537 /dev/zero ;; *) head -c 4194305 /dev/zero ;; esac",
+        );
+        assert!(matches!(
+            store_login_with_helper(Some(helper.clone()), "a@b.c", "secret", None).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("size limit")
+        ));
+        assert!(matches!(
+            store_request_with_helper(Some(helper), "download", &Value::Null).await,
+            Err(AppStoreError::NetworkError(message)) if message.contains("size limit")
+        ));
+    }
+
+    #[test]
+    fn anisette_helper_output_is_checked() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let valid = write_helper(directory.path(), "printf '{\"headers\":{}}'");
+        assert_eq!(
+            run_helper_at(&valid).expect("helper output"),
+            br#"{"headers":{}}"#
+        );
+
+        let rejected = write_helper(directory.path(), "printf rejected >&2\nexit 1");
+        assert!(matches!(
+            run_helper_at(&rejected),
+            Err(AppStoreError::NetworkError(message)) if message.contains("rejected")
+        ));
+
+        let oversized = write_helper(directory.path(), "head -c 65537 /dev/zero");
+        assert!(matches!(
+            run_helper_at(&oversized),
+            Err(AppStoreError::NetworkError(message)) if message.contains("size limit")
         ));
     }
 
