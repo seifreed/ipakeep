@@ -338,6 +338,33 @@ fn write_minimal_arm64_macho(path: &Path) {
     fs::write(path, bytes).unwrap();
 }
 
+fn write_minimal_arm64_simulator_macho(path: &Path) {
+    let mut bytes = Vec::new();
+    for value in [
+        MH_MAGIC_64,
+        CPU_TYPE_ARM64,
+        0,
+        6,
+        1,
+        BUILD_VERSION_COMMAND_SIZE,
+        0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    for value in [
+        LC_BUILD_VERSION,
+        BUILD_VERSION_COMMAND_SIZE,
+        PLATFORM_IOSSIMULATOR,
+        SIMULATOR_VERSION_14_0,
+        SIMULATOR_VERSION_14_0,
+        0,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    fs::write(path, bytes).unwrap();
+}
+
 fn write_arm64_macho_without_load_commands_but_with_payload(path: &Path) {
     let mut bytes = Vec::new();
     for value in [MH_MAGIC_64, CPU_TYPE_ARM64, 0, 0, 0, 0, 0, 0] {
@@ -390,6 +417,37 @@ fn thin_to_arm64_inplace_keeps_only_arm64_slice() {
     file.seek(SeekFrom::Start(0)).unwrap();
     file.read_exact(&mut magic).unwrap();
     assert_eq!(u32::from_le_bytes(magic), MH_MAGIC_64);
+}
+
+#[test]
+fn already_simulator_dylib_is_accepted_without_rewriting_or_signing() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("SimulatorDylib");
+    write_minimal_arm64_simulator_macho(&path);
+    let before = fs::read(&path).unwrap();
+
+    ensure_simulator_dylib(&path, None).unwrap();
+
+    assert_eq!(fs::read(path).unwrap(), before);
+}
+
+#[test]
+fn dylib_thinning_rejects_missing_and_non_arm64_files() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let missing = dir.path().join("MissingDylib");
+    assert!(
+        thin_to_arm64_inplace(&missing)
+            .unwrap_err()
+            .contains("MissingDylib")
+    );
+
+    let non_arm64 = dir.path().join("X86Dylib");
+    fs::write(&non_arm64, build_slice_with_cputype(0x0100_0007, 3)).unwrap();
+    assert!(
+        thin_to_arm64_inplace(&non_arm64)
+            .unwrap_err()
+            .contains("no arm64 slice")
+    );
 }
 
 #[test]
