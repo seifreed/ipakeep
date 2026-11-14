@@ -89,8 +89,6 @@ pub fn patch_ipa(
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
 
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let mut written = HashSet::new();
-
     let sinf_targets = sinf_target_paths(&mut archive, sinfs)?;
     let sinf_target_names: HashSet<String> =
         sinf_targets.iter().map(|(name, _)| name.clone()).collect();
@@ -105,15 +103,11 @@ pub fn patch_ipa(
         if name == "iTunesMetadata.plist" && !metadata.is_empty() {
             continue;
         }
-        if !written.insert(name.clone()) {
-            continue;
-        }
-
         copy_zip_entry(&mut writer, file).map_err(|e| e.to_string())?;
     }
 
-    inject_metadata(&mut writer, &mut written, metadata)?;
-    inject_sinfs(&mut writer, &mut written, sinf_targets)?;
+    inject_metadata(&mut writer, metadata)?;
+    inject_sinfs(&mut writer, sinf_targets)?;
 
     let cursor = writer.finish().map_err(|e| e.to_string())?;
     Ok(cursor.into_inner())
@@ -136,10 +130,9 @@ pub fn prepare_download(item: &DownloadItem, bytes: &[u8]) -> Result<Vec<u8>, St
 
 fn inject_metadata<W: Write + Seek>(
     writer: &mut zip::ZipWriter<W>,
-    written: &mut HashSet<String>,
     metadata: &DownloadMetadata,
 ) -> Result<(), String> {
-    if metadata.is_empty() || !written.insert("iTunesMetadata.plist".to_string()) {
+    if metadata.is_empty() {
         return Ok(());
     }
     let plist_data = build_itunes_metadata_plist(metadata).map_err(|e| e.to_string())?;
@@ -151,13 +144,9 @@ fn inject_metadata<W: Write + Seek>(
 
 fn inject_sinfs<W: Write + Seek>(
     writer: &mut zip::ZipWriter<W>,
-    written: &mut HashSet<String>,
     sinf_targets: Vec<(String, Vec<u8>)>,
 ) -> Result<(), String> {
     for (sinf_name, data) in sinf_targets {
-        if !written.insert(sinf_name.clone()) {
-            continue;
-        }
         writer
             .start_file(&sinf_name, inserted_file_options())
             .map_err(|e| e.to_string())?;

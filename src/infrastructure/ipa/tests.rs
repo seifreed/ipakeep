@@ -206,6 +206,81 @@ fn patch_ipa_preserves_zip_permissions() {
 }
 
 #[test]
+fn patch_ipa_replaces_existing_metadata_and_sinf_and_preserves_directories() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    write_info_plist(&mut writer, options);
+    writer
+        .add_directory("Payload/Test.app/Frameworks/", options)
+        .expect("add Frameworks directory");
+    writer
+        .start_file("Payload/Test.app/SC_Info/TestExec.sinf", options)
+        .expect("start old sinf");
+    writer.write_all(b"old sinf").expect("write old sinf");
+    writer
+        .start_file("iTunesMetadata.plist", options)
+        .expect("start old metadata");
+    writer
+        .write_all(b"old metadata")
+        .expect("write old metadata");
+    let ipa = writer.finish().expect("finish zip").into_inner();
+    let metadata = serde_json::json!({"bundleId": "com.example.app"});
+    let sinfs = [Sinf {
+        id: 0,
+        data: b"new sinf".to_vec(),
+    }];
+
+    let patched =
+        patch_ipa(&ipa, &sinfs, metadata.as_object().expect("metadata")).expect("patch ipa");
+
+    assert_eq!(
+        zip_entry(&patched, "Payload/Test.app/SC_Info/TestExec.sinf").expect("sinf"),
+        b"new sinf"
+    );
+    assert_eq!(
+        zip_entry(&patched, "Payload/Test.app/Frameworks/"),
+        Some(Vec::new())
+    );
+    let metadata_bytes = zip_entry(&patched, "iTunesMetadata.plist").expect("metadata plist");
+    assert!(String::from_utf8_lossy(&metadata_bytes).contains("com.example.app"));
+}
+
+#[test]
+fn patch_ipa_deduplicates_input_entries_with_the_same_name() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for (name, contents) in [("first.txt", &b"first"[..]), ("other.txt", &b"second"[..])] {
+        writer.start_file(name, options).expect("start entry");
+        writer.write_all(contents).expect("write entry");
+    }
+    let mut ipa = writer.finish().expect("finish zip").into_inner();
+    for offset in 0..=ipa.len() - b"other.txt".len() {
+        if ipa[offset..offset + b"other.txt".len()] == *b"other.txt" {
+            ipa[offset..offset + b"first.txt".len()].copy_from_slice(b"first.txt");
+        }
+    }
+    let expected = {
+        let mut input = zip::ZipArchive::new(Cursor::new(&ipa)).expect("input ZIP");
+        assert!(input.has_duplicate_names());
+        let mut first = input.by_index(0).expect("first duplicate");
+        let mut contents = Vec::new();
+        first
+            .read_to_end(&mut contents)
+            .expect("read first duplicate");
+        contents
+    };
+
+    let patched = patch_ipa(&ipa, &[], &DownloadMetadata::new()).expect("patch IPA");
+    let mut archive = zip::ZipArchive::new(Cursor::new(patched)).expect("patched ZIP");
+
+    assert_eq!(archive.len(), 1);
+    let mut entry = archive.by_name("first.txt").expect("single entry");
+    let mut contents = Vec::new();
+    entry.read_to_end(&mut contents).expect("read entry");
+    assert_eq!(contents, expected);
+}
+
+#[test]
 fn patch_ipa_replicates_manifest_sinf_paths() {
     let mut manifest = plist::Dictionary::new();
     manifest.insert(
