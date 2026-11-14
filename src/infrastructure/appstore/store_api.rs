@@ -240,7 +240,10 @@ impl PurchaseRepository for AppleAppStoreRepository {
     ) -> Result<(), AppStoreError> {
         #[cfg(ipakeep_modern_adi)]
         if self.config.signed_store_login {
-            return signed_commerce::purchase(account, app_id).await;
+            return signed_commerce::purchase(account, app_id, |operation, request| async move {
+                crate::infrastructure::grandslam::store_request(operation, &request).await
+            })
+            .await;
         }
         commerce::purchase(self, account, app_id, guid).await
     }
@@ -251,7 +254,10 @@ impl PurchaseRepository for AppleAppStoreRepository {
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
         #[cfg(ipakeep_modern_adi)]
         if self.config.signed_store_login {
-            return signed_commerce::owned_apps(account, limit).await;
+            return signed_commerce::owned_apps(account, limit, |operation, request| async move {
+                crate::infrastructure::grandslam::store_request(operation, &request).await
+            })
+            .await;
         }
         let _ = (account, limit);
         Err(AppStoreError::Unexpected(
@@ -271,7 +277,15 @@ impl DownloadRepository for AppleAppStoreRepository {
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
         #[cfg(ipakeep_modern_adi)]
         if self.config.signed_store_login {
-            return signed_commerce::download(account, app_id, version_id.as_deref()).await;
+            return signed_commerce::download(
+                account,
+                app_id,
+                version_id.as_deref(),
+                |operation, request| async move {
+                    crate::infrastructure::grandslam::store_request(operation, &request).await
+                },
+            )
+            .await;
         }
         commerce::download(self, account, app_id, guid, version_id).await
     }
@@ -300,7 +314,14 @@ impl VersionRepository for AppleAppStoreRepository {
     ) -> Result<Vec<AppVersion>, AppStoreError> {
         #[cfg(ipakeep_modern_adi)]
         if self.config.signed_store_login {
-            return signed_commerce::list_versions(account, app_id).await;
+            return signed_commerce::list_versions(
+                account,
+                app_id,
+                |operation, request| async move {
+                    crate::infrastructure::grandslam::store_request(operation, &request).await
+                },
+            )
+            .await;
         }
         commerce::list_versions(self, account, app_id, guid).await
     }

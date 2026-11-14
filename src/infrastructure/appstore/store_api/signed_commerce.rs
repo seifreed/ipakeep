@@ -8,43 +8,66 @@
 use super::parsing::parse_download_item;
 use crate::domain::entity::{Account, AppVersion, DownloadItem, OwnedApp};
 use crate::domain::error::AppStoreError;
-use crate::infrastructure::grandslam::store_request;
 use serde_json::{Value, json};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 const PASSWORD_TOKEN_EXPIRED: &str = "passwordTokenExpired";
 const LICENSE_REQUIRED: &str = "licenseRequired";
 const STAGING_DIRECTORY: &str = "downloads";
 
-pub(super) async fn purchase(account: &Account, app_id: i64) -> Result<(), AppStoreError> {
-    let response = store_request("purchase", &request(account, app_id, None)).await?;
+pub(super) async fn purchase<F, Fut>(
+    account: &Account,
+    app_id: i64,
+    store_request: F,
+) -> Result<(), AppStoreError>
+where
+    F: FnOnce(&'static str, Value) -> Fut,
+    Fut: Future<Output = Result<Value, AppStoreError>>,
+{
+    let response = store_request("purchase", request(account, app_id, None)).await?;
     check_failure(&response, app_id, AppStoreError::PurchaseFailed)
 }
 
-pub(super) async fn list_versions(
+pub(super) async fn list_versions<F, Fut>(
     account: &Account,
     app_id: i64,
-) -> Result<Vec<AppVersion>, AppStoreError> {
-    let response = store_request("list-versions", &request(account, app_id, None)).await?;
+    store_request: F,
+) -> Result<Vec<AppVersion>, AppStoreError>
+where
+    F: FnOnce(&'static str, Value) -> Fut,
+    Fut: Future<Output = Result<Value, AppStoreError>>,
+{
+    let response = store_request("list-versions", request(account, app_id, None)).await?;
     check_failure(&response, app_id, AppStoreError::DownloadFailed)?;
     Ok(parse_versions(&response))
 }
 
-pub(super) async fn download(
+pub(super) async fn download<F, Fut>(
     account: &Account,
     app_id: i64,
     version_id: Option<&str>,
-) -> Result<Vec<DownloadItem>, AppStoreError> {
-    let response = store_request("download", &request(account, app_id, version_id)).await?;
+    store_request: F,
+) -> Result<Vec<DownloadItem>, AppStoreError>
+where
+    F: FnOnce(&'static str, Value) -> Fut,
+    Fut: Future<Output = Result<Value, AppStoreError>>,
+{
+    let response = store_request("download", request(account, app_id, version_id)).await?;
     check_failure(&response, app_id, AppStoreError::DownloadFailed)?;
     Ok(vec![staged_item(&response)?])
 }
 
-pub(super) async fn owned_apps(
+pub(super) async fn owned_apps<F, Fut>(
     account: &Account,
     limit: u32,
-) -> Result<Vec<OwnedApp>, AppStoreError> {
-    let response = store_request("owned-apps", &owned_apps_request(account, limit)).await?;
+    store_request: F,
+) -> Result<Vec<OwnedApp>, AppStoreError>
+where
+    F: FnOnce(&'static str, Value) -> Fut,
+    Fut: Future<Output = Result<Value, AppStoreError>>,
+{
+    let response = store_request("owned-apps", owned_apps_request(account, limit)).await?;
     check_failure(&response, 0, AppStoreError::Unexpected)?;
     Ok(parse_owned_apps(&response))
 }
@@ -216,6 +239,97 @@ fn staged_item(response: &Value) -> Result<DownloadItem, AppStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account() -> Account {
+        Account {
+            email: "user@example.com".into(),
+            name: "User".into(),
+            password_token: "token".into(),
+            directory_services_id: "123".into(),
+            store_front: "143441-1".into(),
+            pod: "48".into(),
+            idms_token: None,
+            dsid: None,
+            adsid: None,
+            grandslam_session_key: None,
+            grandslam_continuation: None,
+            cookies: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn commerce_operations_map_helper_responses() {
+        let account = account();
+        assert!(
+            purchase(&account, 7, |operation, request| async move {
+                assert_eq!(operation, "purchase");
+                assert_eq!(request["appId"], 7);
+                Ok(json!({}))
+            })
+            .await
+            .is_ok()
+        );
+        assert_eq!(
+            list_versions(&account, 7, |operation, _| async move {
+                assert_eq!(operation, "list-versions");
+                Ok(json!({"latestVersion":"1.2", "externalVersionIds":["9"]}))
+            })
+            .await
+            .expect("versions")[0]
+                .version_string,
+            "1.2"
+        );
+        assert_eq!(
+            download(&account, 7, Some("9"), |operation, request| async move {
+                assert_eq!(operation, "download");
+                assert_eq!(request["externalVersionId"], "9");
+                Ok(json!({"item":{"URL":"/tmp/package.ipa"}}))
+            })
+            .await
+            .expect("download")
+            .len(),
+            1
+        );
+        assert!(
+            owned_apps(&account, 25, |operation, request| async move {
+                assert_eq!(operation, "owned-apps");
+                assert_eq!(request["limit"], 25);
+                Ok(json!({"apps":[{"trackId":7}]}))
+            })
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn commerce_operations_propagate_helper_and_response_errors() {
+        let account = account();
+        assert!(matches!(
+            purchase(&account, 7, |_, _| async {
+                Err(AppStoreError::NetworkError("offline".into()))
+            })
+            .await,
+            Err(AppStoreError::NetworkError(_))
+        ));
+        assert!(matches!(
+            list_versions(&account, 7, |_, _| async {
+                Ok(json!({"error":{"message":"unavailable"}}))
+            })
+            .await,
+            Err(AppStoreError::DownloadFailed(_))
+        ));
+        assert!(matches!(
+            download(&account, 7, None, |_, _| async { Ok(json!({})) }).await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+        assert!(matches!(
+            owned_apps(&account, 25, |_, _| async {
+                Ok(json!({"error":{"message":"failed"}}))
+            })
+            .await,
+            Err(AppStoreError::Unexpected(_))
+        ));
+    }
 
     #[test]
     fn maps_helper_failures_to_domain_errors() {

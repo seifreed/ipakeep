@@ -30,6 +30,8 @@ struct HelperResponse {
 }
 
 static PROCESS_ANISETTE: OnceLock<AnisetteData> = OnceLock::new();
+#[cfg(test)]
+static TEST_HELPER_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 /// Generate Anisette using Apple's current Store ADI implementation.
 ///
@@ -39,7 +41,7 @@ static PROCESS_ANISETTE: OnceLock<AnisetteData> = OnceLock::new();
 /// so the first result is reused for the rest of the process.
 // ponytail: OTP reused for the whole process; add a TTL refresh if long-running commands start failing.
 pub(super) async fn generate() -> Result<AnisetteData, AppStoreError> {
-    cached(&PROCESS_ANISETTE, generate_fresh).await
+    cached(&PROCESS_ANISETTE, || generate_fresh_with_helper(None)).await
 }
 
 async fn cached<F, Fut>(
@@ -55,10 +57,6 @@ where
     }
     let data = fresh().await?;
     Ok(cell.get_or_init(|| data).clone())
-}
-
-async fn generate_fresh() -> Result<AnisetteData, AppStoreError> {
-    generate_fresh_with_helper(None).await
 }
 
 async fn generate_fresh_with_helper(
@@ -323,6 +321,10 @@ fn run_helper_at(helper: &Path) -> Result<Vec<u8>, AppStoreError> {
 }
 
 fn helper_path() -> Result<PathBuf, AppStoreError> {
+    #[cfg(test)]
+    if let Some(path) = TEST_HELPER_PATH.get() {
+        return Ok(path.clone());
+    }
     let app_directory = dirs::config_dir()
         .ok_or_else(|| AppStoreError::NetworkError("cannot find user config directory".into()))?
         .join("ipakeep");
@@ -575,6 +577,10 @@ mod tests {
             verify_helper(&path, b"expected"),
             Err(AppStoreError::NetworkError(_))
         ));
+        assert!(matches!(
+            verify_helper(&directory.path().join("missing"), b"expected"),
+            Err(AppStoreError::NetworkError(message)) if message.contains("open installed")
+        ));
         std::fs::write(&path, b"tampered").expect("tampered helper file");
 
         assert!(matches!(
@@ -637,7 +643,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let helper = write_helper(
             directory.path(),
-            "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; *) printf '%s' '{\"ok\":true}' ;; esac",
+            "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; purchase) printf '%s' '{\"ok\":true}' ;; *) printf '%s' '{\"headers\":{\"X-Apple-I-MD\":\"otp\",\"X-Apple-I-MD-M\":\"machine\",\"X-Mme-Client-Info\":\"<Mac>\"}}' ;; esac",
         );
 
         let account =
@@ -648,6 +654,31 @@ mod tests {
             store_request_with_helper(Some(helper), "purchase", &serde_json::json!({"id": 42}))
                 .await
                 .expect("store request");
+
+        assert_eq!(account.password_token, "token");
+        assert_eq!(response["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn public_store_operations_run_the_configured_helper() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let helper = write_helper(
+            directory.path(),
+            "cat >/dev/null\ncase \"$1\" in login) printf '%s' '{\"account\":{\"passwordToken\":\"token\",\"directoryServicesIdentifier\":\"42\"}}' ;; purchase) printf '%s' '{\"ok\":true}' ;; *) printf '%s' '{\"headers\":{\"X-Apple-I-MD\":\"otp\",\"X-Apple-I-MD-M\":\"machine\",\"X-Mme-Client-Info\":\"<Mac>\"}}' ;; esac",
+        );
+        TEST_HELPER_PATH
+            .set(helper)
+            .expect("test helper starts unset");
+
+        generate_fresh_with_helper(None)
+            .await
+            .expect("public Anisette generation");
+        let account = store_login("a@b.c", "secret", None)
+            .await
+            .expect("public store login");
+        let response = store_request("purchase", &serde_json::json!({"id": 42}))
+            .await
+            .expect("public store request");
 
         assert_eq!(account.password_token, "token");
         assert_eq!(response["ok"], true);
@@ -792,6 +823,23 @@ mod tests {
 
         assert_eq!(first.headers["X-Apple-I-MD-M"], "first");
         assert_eq!(second.headers["X-Apple-I-MD-M"], "first");
+    }
+
+    #[tokio::test]
+    async fn generate_returns_the_process_cached_provisioning() {
+        let data = build_anisette_data(HashMap::from([
+            ("X-Apple-I-MD".into(), "cached-otp".into()),
+            ("X-Apple-I-MD-M".into(), "machine".into()),
+        ]))
+        .expect("Anisette data");
+        PROCESS_ANISETTE
+            .set(data)
+            .expect("process cache starts empty");
+
+        assert_eq!(
+            generate().await.expect("cached data").headers["X-Apple-I-MD"],
+            "cached-otp"
+        );
     }
 
     #[tokio::test]

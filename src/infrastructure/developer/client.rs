@@ -40,6 +40,15 @@ impl DeveloperClient {
         let anisette = resolve_anisette(http.client())
             .await
             .map_err(|e| e.to_string())?;
+        Ok(Self::from_credentials(account, http, gs_token, anisette))
+    }
+
+    fn from_credentials(
+        account: &Account,
+        http: AppleHttpClient,
+        gs_token: String,
+        anisette: AnisetteData,
+    ) -> Self {
         let identity_id = account
             .adsid
             .as_deref()
@@ -48,13 +57,13 @@ impl DeveloperClient {
             .unwrap_or(account.directory_services_id.as_str())
             .to_string();
 
-        Ok(Self {
+        Self {
             http,
             base_url: BASE_URL.into(),
             identity_id,
             gs_token,
             anisette,
-        })
+        }
     }
 
     async fn post(
@@ -269,6 +278,42 @@ mod tests {
             grandslam_continuation: None,
             cookies: Vec::new(),
         }
+    }
+
+    #[test]
+    fn credentials_build_a_client_with_the_best_account_identity() {
+        let mut account = account();
+        account.adsid = Some("adsid".into());
+        account.dsid = Some("dsid".into());
+        let make_client = |account: &Account| {
+            DeveloperClient::from_credentials(
+                account,
+                AppleHttpClient::new().expect("HTTP client"),
+                "gs-token".into(),
+                AnisetteData {
+                    headers: HashMap::from([("X-Apple-I-MD".into(), "otp".into())]),
+                    cpd: json!({"dt":"Mac"}),
+                },
+            )
+        };
+        let client = make_client(&account);
+
+        assert_eq!(client.identity_id, "adsid");
+        assert_eq!(client.gs_token, "gs-token");
+        assert_eq!(client.anisette.headers["X-Apple-I-MD"], "otp");
+        assert_eq!(client.base_url, BASE_URL);
+
+        account.adsid = Some(String::new());
+        let fallback = make_client(&account);
+        assert_eq!(fallback.identity_id, "12345");
+
+        account.adsid = None;
+        let fallback = make_client(&account);
+        assert_eq!(fallback.identity_id, "dsid");
+
+        account.dsid = None;
+        let fallback = make_client(&account);
+        assert_eq!(fallback.identity_id, "12345");
     }
 
     #[tokio::test]
