@@ -123,68 +123,105 @@ fn parse_slice(bytes: &[u8], base: u64) -> Result<Slice, String> {
     let cputype = read_le_u32(bytes, header + 4).ok_or("truncated Mach-O header")?;
     let cpusubtype = read_le_u32(bytes, header + 8).ok_or("truncated Mach-O header")?;
     let arch = arch_label(cputype, cpusubtype);
-
-    let mut encryption = None;
-    // `LC_BUILD_VERSION` (modern) wins over `LC_VERSION_MIN_*` (older) if both
-    // appear; track them separately and combine at the end.
-    let mut build_version = None;
-    let mut version_min = None;
-    let mut uuid = None;
-
-    if read_le_u32(bytes, header) == Some(MH_MAGIC_64) {
+    let commands = if read_le_u32(bytes, header) == Some(MH_MAGIC_64) {
         let ncmds = read_le_u32(bytes, header + 16).ok_or("truncated Mach-O header")?;
-        let mut offset = base + MACH_HEADER_64_LEN;
-        for _ in 0..ncmds {
-            let cmd_at = usize::try_from(offset).map_err(|_| "load command offset overflow")?;
-            let cmd = read_le_u32(bytes, cmd_at).ok_or("truncated load command")?;
-            let cmdsize = read_le_u32(bytes, cmd_at + 4).ok_or("truncated load command")?;
-            if cmdsize == 0 {
-                return Err(format!("invalid zero-size load command at {offset:#x}"));
-            }
-            match cmd {
-                LC_ENCRYPTION_INFO | LC_ENCRYPTION_INFO_64 => {
-                    encryption = Some(EncryptionInfo {
-                        cryptoff: read_le_u32(bytes, cmd_at + 8).ok_or("truncated crypt info")?,
-                        cryptsize: read_le_u32(bytes, cmd_at + 12).ok_or("truncated crypt info")?,
-                        cryptid: read_le_u32(bytes, cmd_at + 16).ok_or("truncated crypt info")?,
-                        command_offset: offset,
-                    });
-                }
-                LC_UUID => {
-                    let raw = bytes
-                        .get(cmd_at + 8..cmd_at + 24)
-                        .ok_or("truncated uuid command")?;
-                    uuid = Some(<[u8; 16]>::try_from(raw).map_err(|_| "truncated uuid command")?);
-                }
-                // `minos` at command +12.
-                LC_BUILD_VERSION => {
-                    build_version = Some(BuildVersion {
-                        minos: read_le_u32(bytes, cmd_at + 12).ok_or("truncated build version")?,
-                        minos_offset: offset + 12,
-                    });
-                }
-                // `version` at command +8.
-                LC_VERSION_MIN_MACOSX
-                | LC_VERSION_MIN_IPHONEOS
-                | LC_VERSION_MIN_TVOS
-                | LC_VERSION_MIN_WATCHOS => {
-                    version_min = Some(BuildVersion {
-                        minos: read_le_u32(bytes, cmd_at + 8).ok_or("truncated version min")?,
-                        minos_offset: offset + 8,
-                    });
-                }
-                _ => {}
-            }
-            offset += u64::from(cmdsize);
-        }
-    }
+        parse_load_commands(bytes, base + MACH_HEADER_64_LEN, ncmds)?
+    } else {
+        LoadCommandMetadata::default()
+    };
 
     Ok(Slice {
         arch,
         base,
-        encryption,
-        build_version: build_version.or(version_min),
-        uuid,
+        encryption: commands.encryption,
+        build_version: commands.build_version.or(commands.version_min),
+        uuid: commands.uuid,
+    })
+}
+
+#[derive(Default)]
+struct LoadCommandMetadata {
+    encryption: Option<EncryptionInfo>,
+    build_version: Option<BuildVersion>,
+    version_min: Option<BuildVersion>,
+    uuid: Option<[u8; 16]>,
+}
+
+fn parse_load_commands(
+    bytes: &[u8],
+    mut offset: u64,
+    count: u32,
+) -> Result<LoadCommandMetadata, String> {
+    let mut metadata = LoadCommandMetadata::default();
+    for _ in 0..count {
+        let cmdsize = parse_load_command(bytes, offset, &mut metadata)?;
+        offset += u64::from(cmdsize);
+    }
+    Ok(metadata)
+}
+
+fn parse_load_command(
+    bytes: &[u8],
+    offset: u64,
+    metadata: &mut LoadCommandMetadata,
+) -> Result<u32, String> {
+    let cmd_at = usize::try_from(offset).map_err(|_| "load command offset overflow")?;
+    let cmd = read_le_u32(bytes, cmd_at).ok_or("truncated load command")?;
+    let cmdsize = read_le_u32(bytes, cmd_at + 4).ok_or("truncated load command")?;
+    if cmdsize == 0 {
+        return Err(format!("invalid zero-size load command at {offset:#x}"));
+    }
+    parse_load_command_metadata(bytes, cmd_at, offset, cmd, metadata)?;
+    Ok(cmdsize)
+}
+
+fn parse_load_command_metadata(
+    bytes: &[u8],
+    cmd_at: usize,
+    offset: u64,
+    cmd: u32,
+    metadata: &mut LoadCommandMetadata,
+) -> Result<(), String> {
+    match cmd {
+        LC_ENCRYPTION_INFO | LC_ENCRYPTION_INFO_64 => {
+            metadata.encryption = Some(parse_encryption_info(bytes, cmd_at, offset)?);
+        }
+        LC_UUID => {
+            let raw = bytes
+                .get(cmd_at + 8..cmd_at + 24)
+                .ok_or("truncated uuid command")?;
+            metadata.uuid = Some(raw.try_into().map_err(|_| "truncated uuid command")?);
+        }
+        LC_BUILD_VERSION => {
+            metadata.build_version = Some(BuildVersion {
+                minos: read_le_u32(bytes, cmd_at + 12).ok_or("truncated build version")?,
+                minos_offset: offset + 12,
+            });
+        }
+        LC_VERSION_MIN_MACOSX
+        | LC_VERSION_MIN_IPHONEOS
+        | LC_VERSION_MIN_TVOS
+        | LC_VERSION_MIN_WATCHOS => {
+            metadata.version_min = Some(BuildVersion {
+                minos: read_le_u32(bytes, cmd_at + 8).ok_or("truncated version min")?,
+                minos_offset: offset + 8,
+            });
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn parse_encryption_info(
+    bytes: &[u8],
+    cmd_at: usize,
+    offset: u64,
+) -> Result<EncryptionInfo, String> {
+    Ok(EncryptionInfo {
+        cryptoff: read_le_u32(bytes, cmd_at + 8).ok_or("truncated crypt info")?,
+        cryptsize: read_le_u32(bytes, cmd_at + 12).ok_or("truncated crypt info")?,
+        cryptid: read_le_u32(bytes, cmd_at + 16).ok_or("truncated crypt info")?,
+        command_offset: offset,
     })
 }
 
