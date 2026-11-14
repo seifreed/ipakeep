@@ -1,7 +1,6 @@
-//! Manual fake implementations of repository traits for domain unit tests.
+//! Deterministic in-memory repository implementations for adapter tests.
 //!
-//! These fakes replace `mockall` mocks with real, deterministic, in-memory
-//! implementations that respect Clean Architecture (no I/O, no external deps).
+//! These fakes avoid I/O and external dependencies.
 
 mod app_store;
 mod credential;
