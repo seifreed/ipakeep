@@ -144,6 +144,89 @@ fn entitlement_arrays_require_every_requested_value_to_be_authorized() {
     ));
 }
 
+#[test]
+fn profile_application_id_requires_a_valid_string_pattern() {
+    assert_eq!(
+        profile("PREFIX.*").app_id("com.example.app").as_deref(),
+        Some("PREFIX.com.example.app")
+    );
+    assert_eq!(
+        profile("PREFIX.com.example.app")
+            .app_id("com.example.app")
+            .as_deref(),
+        Some("PREFIX.com.example.app")
+    );
+    assert!(profile("malformed").app_id("com.example.app").is_none());
+
+    let mut missing = profile("PREFIX.*");
+    missing.entitlements.remove("application-identifier");
+    assert!(missing.app_id("com.example.app").is_none());
+    let mut wrong_type = profile("PREFIX.*");
+    wrong_type
+        .entitlements
+        .insert("application-identifier".into(), Value::Boolean(true));
+    assert!(wrong_type.app_id("com.example.app").is_none());
+}
+
+#[test]
+fn entitlement_dictionary_matching_is_recursive_and_key_complete() {
+    let allowed = Value::Dictionary(Dictionary::from_iter([
+        ("group".to_string(), Value::String("TEAM.*".into())),
+        ("enabled".to_string(), Value::Boolean(true)),
+    ]));
+    let accepted = Value::Dictionary(Dictionary::from_iter([(
+        "group".to_string(),
+        Value::String("TEAM.app".into()),
+    )]));
+    let rejected = Value::Dictionary(Dictionary::from_iter([(
+        "group".to_string(),
+        Value::String("OTHER.app".into()),
+    )]));
+    assert!(permits(&allowed, &accepted));
+    assert!(!permits(&allowed, &rejected));
+    assert!(!permits(&allowed, &Value::Array(Vec::new())));
+}
+
+#[test]
+fn entitlement_override_must_be_a_dictionary_and_profile_must_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let override_path = dir.path().join("entitlements.plist");
+    Value::Dictionary(Dictionary::new())
+        .to_file_xml(&override_path)
+        .unwrap();
+    assert!(
+        read_entitlements(Path::new("unused.app"), Some(&override_path))
+            .unwrap()
+            .is_empty()
+    );
+
+    Value::Array(Vec::new())
+        .to_file_xml(&override_path)
+        .unwrap();
+    assert!(
+        read_entitlements(Path::new("unused.app"), Some(&override_path))
+            .unwrap_err()
+            .contains("must be a dictionary")
+    );
+    assert!(
+        signing_entitlements(
+            &Dictionary::new(),
+            &profile("OTHER.com.other"),
+            "com.example.app"
+        )
+        .unwrap_err()
+        .contains("profile does not match bundle ID")
+    );
+}
+
+#[test]
+fn entitlement_patterns_only_treat_trailing_star_as_wildcard() {
+    assert!(matches_pattern("TEAM.app", "TEAM.app"));
+    assert!(!matches_pattern("TEAM.app", "TEAM.app.extra"));
+    assert!(matches_pattern("TEAM*", "TEAM.app"));
+    assert!(!matches_pattern("TEAM.*.app", "TEAM.one.app"));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn prepare_target_reads_real_codesign_entitlements_and_embeds_matching_profile() {
