@@ -180,6 +180,9 @@ fn find_app_sinf(names: &BTreeSet<String>, prefix: &str) -> Option<String> {
 pub fn read_members(ipa_path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let file = std::fs::File::open(ipa_path).map_err(|e| format!("{}: {e}", ipa_path.display()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    if archive.has_duplicate_names() {
+        return Err("input zip has duplicate member names".into());
+    }
 
     let mut members = BTreeMap::new();
     for i in 0..archive.len() {
@@ -189,9 +192,7 @@ pub fn read_members(ipa_path: &Path) -> Result<BTreeMap<String, Vec<u8>>, String
         member
             .read_to_end(&mut data)
             .map_err(|e| format!("read {name}: {e}"))?;
-        if members.insert(name.clone(), data).is_some() {
-            return Err(format!("input zip has duplicate member {name:?}"));
-        }
+        members.insert(name, data);
     }
 
     Ok(members)
@@ -480,6 +481,27 @@ mod tests {
 
         assert_eq!(members.get("Payload/App.app/App").unwrap(), b"binary");
         assert_eq!(members.get("Payload/App.app/Info.plist").unwrap(), b"plist");
+    }
+
+    #[test]
+    fn read_members_rejects_duplicate_names() {
+        let mut zip = build_zip(&[("first.txt", b"first"), ("other.txt", b"second")]);
+        let positions: Vec<usize> = zip
+            .windows(b"other.txt".len())
+            .enumerate()
+            .filter_map(|(index, bytes)| (bytes == b"other.txt").then_some(index))
+            .collect();
+        assert_eq!(positions.len(), 2);
+        for position in positions {
+            zip[position..position + b"other.txt".len()].copy_from_slice(b"first.txt");
+        }
+
+        let path = temp_path("duplicate");
+        std::fs::write(&path, &zip).unwrap();
+        let result = read_members(&path);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(result.unwrap_err().contains("duplicate member"));
     }
 
     #[test]
