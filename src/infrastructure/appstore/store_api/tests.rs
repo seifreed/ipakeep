@@ -57,6 +57,78 @@ async fn commerce_download_sends_version_and_list_versions_skips_missing_ids() {
 }
 
 #[tokio::test]
+async fn commerce_list_versions_expands_external_version_ids() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "songList": [{
+                "URL": "https://example.test/app.ipa",
+                "metadata": {
+                    "bundleShortVersionString": "1.2",
+                    "softwareVersionExternalIdentifiers": "9001, 9002"
+                }
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let config = AppleApiConfig {
+        store_base_url: server.uri(),
+        signed_store_login: false,
+        ..AppleApiConfig::default()
+    };
+    let repository =
+        AppleAppStoreRepository::with_config(AppleHttpClient::new().expect("HTTP client"), config);
+    let mut account = test_account();
+    account.pod.clear();
+
+    let versions = repository
+        .list_versions(&account, 42, "guid")
+        .await
+        .expect("versions");
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].external_version_id, "9001");
+    assert_eq!(versions[0].version_string, "1.2");
+    assert_eq!(versions[1].external_version_id, "9002");
+    assert_eq!(versions[1].version_string, "1.2");
+}
+
+#[tokio::test]
+async fn commerce_download_propagates_store_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(
+            "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "failureType": "503",
+            "customerMessage": "try later"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let config = AppleApiConfig {
+        store_base_url: server.uri(),
+        signed_store_login: false,
+        ..AppleApiConfig::default()
+    };
+    let repository =
+        AppleAppStoreRepository::with_config(AppleHttpClient::new().expect("HTTP client"), config);
+    let mut account = test_account();
+    account.pod.clear();
+
+    assert!(matches!(
+        repository.download(&account, 42, "guid", None).await,
+        Err(AppStoreError::DownloadFailed(message)) if message == "try later"
+    ));
+}
+
+#[tokio::test]
 async fn commerce_purchase_reports_storefront_mismatch_without_failure_type() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
