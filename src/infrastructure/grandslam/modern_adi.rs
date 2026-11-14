@@ -510,6 +510,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
 
         let path = install_helper(directory.path(), HELPER_BINARY).expect("install helper");
+        assert_eq!(
+            install_helper(directory.path(), HELPER_BINARY).expect("reuse helper"),
+            path
+        );
 
         assert!(
             std::fs::metadata(path)
@@ -562,6 +566,20 @@ mod tests {
         assert!(matches!(
             verify_helper(&path, b"expected"),
             Err(AppStoreError::NetworkError(_))
+        ));
+    }
+
+    #[test]
+    fn install_rejects_a_tampered_cached_helper() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let expected = b"expected";
+        let digest = hex::encode(Sha256::digest(expected));
+        let path = directory.path().join(format!("modern-anisette-{digest}"));
+        std::fs::write(path, b"tampered").expect("tampered helper");
+
+        assert!(matches!(
+            install_helper(directory.path(), expected),
+            Err(AppStoreError::NetworkError(message)) if message.contains("integrity validation")
         ));
     }
 
