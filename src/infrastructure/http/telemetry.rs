@@ -1,6 +1,6 @@
 //! Safe metadata logging for outbound HTTP requests.
 
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{Client, Request, RequestBuilder, Response};
 use serde::de::DeserializeOwned;
 use std::time::Instant;
 
@@ -11,7 +11,24 @@ pub(crate) async fn send_with_observability(
     client: &Client,
     request: RequestBuilder,
 ) -> Result<Response, reqwest::Error> {
-    let request = request
+    let request = build_request(request)?;
+    let method = request.method().as_str().to_string();
+    let host = request.url().host_str().unwrap_or("unknown").to_string();
+    let started = Instant::now();
+    match client.execute(request).await {
+        Ok(response) => {
+            log_response_headers(&method, &host, &response, elapsed_ms(started));
+            Ok(response)
+        }
+        Err(error) => {
+            log_request_failure(&method, &host, &error, elapsed_ms(started));
+            Err(error.without_url())
+        }
+    }
+}
+
+fn build_request(request: RequestBuilder) -> Result<Request, reqwest::Error> {
+    request
         .build()
         .inspect_err(|_error| {
             tracing::warn!(
@@ -23,63 +40,56 @@ pub(crate) async fn send_with_observability(
                 "HTTP request could not be built"
             );
         })
-        .map_err(reqwest::Error::without_url)?;
-    let method = request.method().as_str().to_string();
-    let host = request.url().host_str().unwrap_or("unknown").to_string();
-    let started = Instant::now();
-    match client.execute(request).await {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            let duration_ms = elapsed_ms(started);
-            let outcome = if response.status().is_success() {
-                "success"
-            } else {
-                "http_error"
-            };
-            let expected_client_error =
-                response.status().is_client_error() && !matches!(status, 408 | 429);
-            if response.status().is_success() || expected_client_error {
-                tracing::debug!(
-                    service = "ipakeep",
-                    component = "http",
-                    event_name = "http.response.headers_received",
-                    method,
-                    host,
-                    status,
-                    outcome,
-                    duration_ms,
-                    "HTTP response headers received"
-                );
-            } else {
-                tracing::warn!(
-                    service = "ipakeep",
-                    component = "http",
-                    event_name = "http.response.headers_received",
-                    method,
-                    host,
-                    status,
-                    outcome,
-                    duration_ms,
-                    "HTTP response returned a non-success status"
-                );
-            }
-            Ok(response)
-        }
-        Err(error) => {
-            tracing::warn!(
-                service = "ipakeep",
-                component = "http",
-                event_name = "http.request.failed",
-                method,
-                host,
-                outcome = "failure",
-                duration_ms = elapsed_ms(started),
-                error_type = request_error_type(&error),
-                "HTTP request failed"
-            );
-            Err(error.without_url())
-        }
+        .map_err(reqwest::Error::without_url)
+}
+
+fn log_response_headers(method: &str, host: &str, response: &Response, duration_ms: u64) {
+    let status = response.status().as_u16();
+    let outcome = if response.status().is_success() {
+        "success"
+    } else {
+        "http_error"
+    };
+    let expected_client_error = response.status().is_client_error() && !matches!(status, 408 | 429);
+    if response.status().is_success() || expected_client_error {
+        tracing::debug!(
+            service = "ipakeep",
+            component = "http",
+            event_name = "http.response.headers_received",
+            method,
+            host,
+            status,
+            outcome,
+            duration_ms,
+            "HTTP response headers received"
+        );
+    } else {
+        tracing::warn!(
+            service = "ipakeep",
+            component = "http",
+            event_name = "http.response.headers_received",
+            method,
+            host,
+            status,
+            outcome,
+            duration_ms,
+            "HTTP response returned a non-success status"
+        );
     }
+}
+
+fn log_request_failure(method: &str, host: &str, error: &reqwest::Error, duration_ms: u64) {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "http",
+        event_name = "http.request.failed",
+        method,
+        host,
+        outcome = "failure",
+        duration_ms,
+        error_type = request_error_type(error),
+        "HTTP request failed"
+    );
 }
 
 pub(crate) async fn read_response_bytes(response: Response) -> Result<Vec<u8>, reqwest::Error> {
