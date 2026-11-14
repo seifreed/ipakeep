@@ -2,9 +2,9 @@
 
 use crate::domain::repository::CredentialRepository;
 use crate::infrastructure::decrypt::{
-    DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport, SshParams,
-    VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted, resign_app, run_dump,
-    run_offline, set_min_os, verify_ipa,
+    DumpDevice, DumpRequest, Dumper, EntitlementRisk, EntitlementVerdict, InspectReport,
+    MachoReport, SshParams, VerifyReport, entitlements_report, inspect_ipa, patch_ipa_decrypted,
+    resign_app, run_dump, run_offline, set_min_os, verify_ipa,
 };
 use crate::infrastructure::developer::{self, ProvisionRequest, ProvisionResult};
 use crate::presentation::cli::output::OutputFormat;
@@ -396,36 +396,40 @@ fn render_text(report: &InspectReport) -> String {
     );
 
     for macho in &report.machos {
-        let _ = writeln!(out, "\n{}", macho.entry);
-        for slice in &macho.slices {
-            let _ = write!(out, "  [{}]", slice.arch);
-            if slice.encrypted {
-                let _ = write!(
-                    out,
-                    " encrypted cryptid={} cryptoff={} cryptsize={}",
-                    slice.cryptid.unwrap_or(0),
-                    slice.cryptoff.unwrap_or(0),
-                    slice.cryptsize.unwrap_or(0),
-                );
-            } else {
-                out.push_str(" not encrypted");
-            }
-            if let Some(min) = &slice.minimum_os {
-                let _ = write!(out, " minos={min}");
-            }
-            out.push('\n');
-            if let Some(name) = &slice.dump_filename {
-                let _ = writeln!(out, "    dump as: {name}");
-            }
-            if !slice.dumpable_on.is_empty() {
-                let matrix: Vec<String> = slice
-                    .dumpable_on
-                    .iter()
-                    .map(|t| format!("iOS{}={}", t.ios_major, if t.dumpable { "y" } else { "n" }))
-                    .collect();
-                let _ = writeln!(out, "    dumpable: {}", matrix.join(" "));
-            }
-        }
+        append_macho_text(&mut out, macho);
     }
     out
+}
+
+fn append_macho_text(out: &mut String, macho: &MachoReport) {
+    let _ = writeln!(out, "\n{}", macho.entry);
+    for slice in &macho.slices {
+        let _ = write!(out, "  [{}]", slice.arch);
+        if slice.encrypted {
+            let _ = write!(
+                out,
+                " encrypted cryptid={} cryptoff={} cryptsize={}",
+                slice.cryptid.unwrap_or(0),
+                slice.cryptoff.unwrap_or(0),
+                slice.cryptsize.unwrap_or(0),
+            );
+        } else {
+            out.push_str(" not encrypted");
+        }
+        if let Some(min) = &slice.minimum_os {
+            let _ = write!(out, " minos={min}");
+        }
+        out.push('\n');
+        if let Some(name) = &slice.dump_filename {
+            let _ = writeln!(out, "    dump as: {name}");
+        }
+        if !slice.dumpable_on.is_empty() {
+            let matrix: Vec<String> = slice
+                .dumpable_on
+                .iter()
+                .map(|t| format!("iOS{}={}", t.ios_major, if t.dumpable { "y" } else { "n" }))
+                .collect();
+            let _ = writeln!(out, "    dumpable: {}", matrix.join(" "));
+        }
+    }
 }
