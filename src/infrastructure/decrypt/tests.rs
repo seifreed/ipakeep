@@ -2,7 +2,7 @@
 
 use super::min_os::parse_version;
 use super::*;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
 const MH_MAGIC_64: u32 = 0xfeed_facf;
 const CPU_TYPE_ARM64: u32 = 0x0100_000c;
@@ -14,6 +14,11 @@ const LC_BUILD_VERSION: u32 = 0x32;
 const CRYPTOFF: u32 = 0x100;
 const CRYPTSIZE: u32 = 0x40;
 const MINOS_16: u32 = 16 << 16;
+const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>TestExec</string>
+<key>MinimumOSVersion</key><string>16.0</string>
+</dict></plist>"#;
 
 fn push_u32_le(bytes: &mut Vec<u8>, value: u32) {
     bytes.extend(value.to_le_bytes());
@@ -69,25 +74,34 @@ fn fat_macho(slices: &[(u32, u32, Vec<u8>)]) -> Vec<u8> {
 }
 
 fn build_ipa(executable: &[u8]) -> Vec<u8> {
-    let info = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>TestExec</string>
-<key>MinimumOSVersion</key><string>16.0</string>
-</dict></plist>"#;
+    zip_members(&[
+        ("Payload/Test.app/Info.plist", INFO_PLIST.as_bytes()),
+        ("Payload/Test.app/TestExec", executable),
+        ("Payload/Test.app/SC_Info/TestExec.sinf", b"STUBSINF"),
+    ])
+}
 
+fn zip_members(members: &[(&str, &[u8])]) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let opts =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (name, data) in [
-        ("Payload/Test.app/Info.plist", info.as_bytes()),
-        ("Payload/Test.app/TestExec", executable),
-        ("Payload/Test.app/SC_Info/TestExec.sinf", b"STUBSINF"),
-    ] {
+    for (name, data) in members {
         writer.start_file(name, opts).unwrap();
         writer.write_all(data).unwrap();
     }
     writer.finish().unwrap().into_inner()
+}
+
+fn thin_macho_without_build_version() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for value in [MH_MAGIC_64, CPU_TYPE_ARM64, 0, 2, 1, 24, 0, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    for value in [LC_ENCRYPTION_INFO_64, 24, CRYPTOFF, CRYPTSIZE, 1, 0] {
+        push_u32_le(&mut bytes, value);
+    }
+    bytes.resize((CRYPTOFF + CRYPTSIZE) as usize, 0x11);
+    bytes
 }
 
 #[test]
@@ -316,7 +330,29 @@ fn parse_version_packs_and_validates() {
     assert_eq!(parse_version("16.4").unwrap(), (16 << 16) | (4 << 8));
     assert_eq!(parse_version("16.4.1").unwrap(), (16 << 16) | (4 << 8) | 1);
     assert!(parse_version("16.300").is_err());
+    assert!(parse_version("65536").is_err());
     assert!(parse_version("x.y").is_err());
+    assert!(parse_version("16.4.x").is_err());
+}
+
+#[test]
+fn set_min_os_handles_unmatched_archives_and_slices_without_versions() {
+    let no_target = zip_members(&[("Payload/readme.txt", b"no app")]);
+    assert!(
+        set_min_os(&no_target, "12.0")
+            .unwrap_err()
+            .contains("no LC_BUILD_VERSION")
+    );
+
+    let app_without_version = zip_members(&[
+        ("Payload/readme.txt", b"not a Mach-O"),
+        ("Payload/Test.app/Info.plist", INFO_PLIST.as_bytes()),
+        (
+            "Payload/Test.app/TestExec",
+            &thin_macho_without_build_version(),
+        ),
+    ]);
+    assert!(set_min_os(&app_without_version, "12.0").is_ok());
 }
 
 /// A thin arm64 Mach-O whose minimum OS comes from `LC_VERSION_MIN_IPHONEOS`
