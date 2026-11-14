@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	cookiejar "github.com/juju/persistent-cookiejar"
 	"github.com/majd/ipatool/v2/pkg/appstore"
 )
 
@@ -93,6 +94,36 @@ func TestRunStoreReturnsPurchaseValidationErrorAsJSON(t *testing.T) {
 	}
 }
 
+func TestRunStoreReportsCookieJarSaveErrors(t *testing.T) {
+	jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "missing", "cookies")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := `{"account":{"passwordToken":"token","directoryServicesIdentifier":"dsid"}}`
+	var output bytes.Buffer
+	err = runStoreWithOpener("owned-apps", "state.json", strings.NewReader(request), &output, func(string) (appstore.AppStore, *cookiejar.Jar, error) {
+		return &storeStub{}, jar, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response storeResponse
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil || response.Error == nil || !strings.Contains(response.Error.Message, "save Store cookie jar") {
+		t.Fatalf("cookie save response = %+v, %v", response, err)
+	}
+}
+
+func TestRunStoreReportsStoreOpenErrors(t *testing.T) {
+	var output bytes.Buffer
+	request := `{"account":{"passwordToken":"token","directoryServicesIdentifier":"dsid"}}`
+	err := runStoreWithOpener("owned-apps", "state.json", strings.NewReader(request), &output, func(string) (appstore.AppStore, *cookiejar.Jar, error) {
+		return nil, nil, errors.New("store unavailable")
+	})
+	if err == nil || err.Error() != "store unavailable" {
+		t.Fatalf("store open error = %v", err)
+	}
+}
+
 func TestStoreOperationsValidateAppIDsBeforeCallingStore(t *testing.T) {
 	for name, operation := range map[string]storeOperation{
 		"purchase":      purchase,
@@ -160,6 +191,52 @@ func TestReadITunesMetadataRejectsMalformedAndOversizedMetadata(t *testing.T) {
 				t.Fatal("readITunesMetadata accepted invalid metadata")
 			}
 		})
+	}
+}
+
+func TestReadITunesMetadataReportsArchiveReadErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt.ipa")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create(itunesMetadataEntry)
+	if err == nil {
+		_, err = entry.Write([]byte("<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>"))
+	}
+	if err == nil {
+		err = writer.Close()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataOffset, err := archive.File[0].DataOffset()
+	compressedSize := int(archive.File[0].CompressedSize64)
+	_ = archive.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err = os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = file.WriteAt(bytes.Repeat([]byte{0xff}, compressedSize), dataOffset); err == nil {
+		err = file.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = readITunesMetadata(path); err == nil {
+		t.Fatal("readITunesMetadata accepted a corrupt package entry")
 	}
 }
 
@@ -321,5 +398,14 @@ func TestDownloadPropagatesStoreAndMetadataErrors(t *testing.T) {
 	}
 	if _, err := download(store, storeRequest{AppID: 42}, blocked); err == nil {
 		t.Fatal("download accepted a file as staging directory")
+	}
+}
+
+func TestDownloadReportsStagingCreationErrors(t *testing.T) {
+	_, err := downloadWithTempDir(&storeStub{}, storeRequest{AppID: 42}, t.TempDir(), func(string, string) (string, error) {
+		return "", errors.New("disk unavailable")
+	})
+	if err == nil || !strings.Contains(err.Error(), "create download staging directory") {
+		t.Fatalf("staging error = %v", err)
 	}
 }

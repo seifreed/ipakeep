@@ -16,16 +16,30 @@ import (
 
 const maxStateSize = 1 << 20
 
+var generateAnisetteHeaders = storeauth.AnisetteHeaders
+
 type response struct {
 	Headers map[string]string `json:"headers"`
 }
 
 func main() {
-	if err := run(); err != nil {
+	if err := runMain(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		exitMain(1)
 	}
 }
+
+var runMain = run
+var exitMain = os.Exit
+var inspectStateDirectory = os.Lstat
+var secureStateDirectory = os.Chmod
+var secureLockFile = func(file *os.File, mode os.FileMode) error { return file.Chmod(mode) }
+var lockStateFile = syscall.Flock
+var writeStateContents = func(file *os.File, state []byte) error {
+	_, err := file.Write(state)
+	return err
+}
+var replaceStateFile = os.Rename
 
 func run() error {
 	configDir, err := os.UserConfigDir()
@@ -54,7 +68,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	headers, updatedState, err := storeauth.AnisetteHeaders(context.Background(), http.DefaultClient, state)
+	headers, updatedState, err := generateAnisetteHeaders(context.Background(), http.DefaultClient, state)
 	if err != nil {
 		return fmt.Errorf("generate local Apple Anisette: %w", err)
 	}
@@ -72,14 +86,14 @@ func ensurePrivateDirectory(path string) error {
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		return fmt.Errorf("create anisette state directory: %w", err)
 	}
-	info, err := os.Lstat(path)
+	info, err := inspectStateDirectory(path)
 	if err != nil {
 		return fmt.Errorf("inspect anisette state directory: %w", err)
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("anisette state path is not a real directory")
 	}
-	if err = os.Chmod(path, 0o700); err != nil {
+	if err = secureStateDirectory(path, 0o700); err != nil {
 		return fmt.Errorf("secure anisette state directory: %w", err)
 	}
 	return nil
@@ -101,11 +115,11 @@ func lockState(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open anisette state lock: %w", err)
 	}
-	if err = file.Chmod(0o600); err != nil {
+	if err = secureLockFile(file, 0o600); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("secure anisette state lock: %w", err)
 	}
-	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+	if err = lockStateFile(int(file.Fd()), syscall.LOCK_EX); err != nil {
 		_ = file.Close()
 		return nil, fmt.Errorf("lock anisette state: %w", err)
 	}
@@ -113,7 +127,7 @@ func lockState(path string) (*os.File, error) {
 }
 
 func unlockState(file *os.File) {
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = lockStateFile(int(file.Fd()), syscall.LOCK_UN)
 	_ = file.Close()
 }
 
@@ -147,7 +161,7 @@ func writeState(path string, state []byte) error {
 	temporaryPath := file.Name()
 	defer os.Remove(temporaryPath)
 	if err = file.Chmod(0o600); err == nil {
-		_, err = file.Write(state)
+		err = writeStateContents(file, state)
 	}
 	if err == nil {
 		err = file.Sync()
@@ -158,7 +172,7 @@ func writeState(path string, state []byte) error {
 	if err != nil {
 		return fmt.Errorf("write anisette state: %w", err)
 	}
-	if err = os.Rename(temporaryPath, path); err != nil {
+	if err = replaceStateFile(temporaryPath, path); err != nil {
 		return fmt.Errorf("replace anisette state: %w", err)
 	}
 	return nil

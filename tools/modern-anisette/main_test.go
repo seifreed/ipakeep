@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +248,237 @@ func TestRunDispatchesValidStoreRequestWithoutAppleCalls(t *testing.T) {
 	}
 }
 
+func TestMainReportsErrorsAndReturnsOnSuccess(t *testing.T) {
+	originalRun, originalExit := runMain, exitMain
+	defer func() { runMain, exitMain = originalRun, originalExit }()
+	runMain = func() error { return nil }
+	exitMain = func(code int) { t.Fatalf("exit called with %d on success", code) }
+	main()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStderr := os.Stderr
+	defer func() { os.Stderr = originalStderr }()
+	os.Stderr = writer
+	var exitCode int
+	runMain = func() error { return errors.New("failed") }
+	exitMain = func(code int) { exitCode = code }
+	main()
+	_ = writer.Close()
+	output, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || exitCode != 1 || string(output) != "failed\n" {
+		t.Fatalf("main error path: code=%d output=%q err=%v", exitCode, output, err)
+	}
+}
+
+func runDefaultCommand(t *testing.T, config string) (string, error) {
+	t.Helper()
+	t.Setenv("HOME", config)
+	originalArgs, originalStdout := os.Args, os.Stdout
+	defer func() { os.Args, os.Stdout = originalArgs, originalStdout }()
+	os.Args = []string{"ipakeep"}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	os.Stdout = writer
+	runErr := run()
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	output, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+	return string(output), runErr
+}
+
+func TestRunAnisetteGenerationOutcomesWithoutApple(t *testing.T) {
+	originalGenerator := generateAnisetteHeaders
+	defer func() { generateAnisetteHeaders = originalGenerator }()
+
+	t.Run("writes headers and state", func(t *testing.T) {
+		config := t.TempDir()
+		generateAnisetteHeaders = func(context.Context, *http.Client, []byte) (http.Header, []byte, error) {
+			return http.Header{"X-Test": {"value"}}, []byte("state"), nil
+		}
+		output, err := runDefaultCommand(t, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response response
+		if err = json.Unmarshal([]byte(output), &response); err != nil || response.Headers["X-Test"] != "value" {
+			t.Fatalf("Anisette response = %+v, %v", response, err)
+		}
+		statePath := filepath.Join(config, "Library", "Application Support", "ipakeep", "anisette-v4.json")
+		state, err := readState(statePath)
+		if err != nil || string(state) != "state" {
+			t.Fatalf("persisted state = %q, %v", state, err)
+		}
+	})
+
+	t.Run("generator failure", func(t *testing.T) {
+		generateAnisetteHeaders = func(context.Context, *http.Client, []byte) (http.Header, []byte, error) {
+			return nil, nil, errors.New("offline")
+		}
+		_, err := runDefaultCommand(t, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "generate local Apple Anisette") {
+			t.Fatalf("generator error = %v", err)
+		}
+	})
+
+	t.Run("invalid generated state", func(t *testing.T) {
+		generateAnisetteHeaders = func(context.Context, *http.Client, []byte) (http.Header, []byte, error) {
+			return http.Header{"X-Test": {"value"}}, nil, nil
+		}
+		_, err := runDefaultCommand(t, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "invalid size") {
+			t.Fatalf("state write error = %v", err)
+		}
+	})
+
+	t.Run("invalid response headers", func(t *testing.T) {
+		generateAnisetteHeaders = func(context.Context, *http.Client, []byte) (http.Header, []byte, error) {
+			return http.Header{"X-Test": {"one", "two"}}, []byte("state"), nil
+		}
+		_, err := runDefaultCommand(t, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "invalid X-Test header") {
+			t.Fatalf("header error = %v", err)
+		}
+	})
+}
+
+func TestRunRejectsConfigurationAndStatePathErrors(t *testing.T) {
+	t.Run("missing config directory", func(t *testing.T) {
+		_, err := runDefaultCommand(t, "")
+		if err == nil || !strings.Contains(err.Error(), "find user config directory") {
+			t.Fatalf("config error = %v", err)
+		}
+	})
+
+	t.Run("invalid config parent", func(t *testing.T) {
+		config := t.TempDir()
+		if err := os.WriteFile(filepath.Join(config, "Library"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := runDefaultCommand(t, config)
+		if err == nil || !strings.Contains(err.Error(), "create anisette state directory") {
+			t.Fatalf("directory error = %v", err)
+		}
+	})
+
+	t.Run("lock symlink", func(t *testing.T) {
+		config := t.TempDir()
+		stateDir := filepath.Join(config, "Library", "Application Support", "ipakeep")
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		lockPath := filepath.Join(stateDir, "anisette-v4.json.lock")
+		if err := os.Symlink(target, lockPath); err != nil {
+			t.Fatal(err)
+		}
+		_, err := runDefaultCommand(t, config)
+		if err == nil || !strings.Contains(err.Error(), "open anisette state lock") {
+			t.Fatalf("lock error = %v", err)
+		}
+	})
+
+	t.Run("state symlink", func(t *testing.T) {
+		config := t.TempDir()
+		stateDir := filepath.Join(config, "Library", "Application Support", "ipakeep")
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("state"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, filepath.Join(stateDir, "anisette-v4.json")); err != nil {
+			t.Fatal(err)
+		}
+		called := false
+		original := generateAnisetteHeaders
+		generateAnisetteHeaders = func(context.Context, *http.Client, []byte) (http.Header, []byte, error) {
+			called = true
+			return nil, nil, nil
+		}
+		defer func() { generateAnisetteHeaders = original }()
+		_, err := runDefaultCommand(t, config)
+		if err == nil || called {
+			t.Fatalf("state symlink result: err=%v generator_called=%t", err, called)
+		}
+	})
+}
+
+func TestStateFilesystemOperationsReportInjectedErrors(t *testing.T) {
+	t.Run("directory inspection", func(t *testing.T) {
+		original := inspectStateDirectory
+		inspectStateDirectory = func(string) (os.FileInfo, error) { return nil, errors.New("stat failed") }
+		defer func() { inspectStateDirectory = original }()
+		err := ensurePrivateDirectory(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "inspect anisette state directory") {
+			t.Fatalf("inspect error = %v", err)
+		}
+	})
+
+	t.Run("directory permissions", func(t *testing.T) {
+		original := secureStateDirectory
+		secureStateDirectory = func(string, os.FileMode) error { return errors.New("chmod failed") }
+		defer func() { secureStateDirectory = original }()
+		err := ensurePrivateDirectory(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "secure anisette state directory") {
+			t.Fatalf("chmod error = %v", err)
+		}
+	})
+
+	t.Run("lock permissions", func(t *testing.T) {
+		original := secureLockFile
+		secureLockFile = func(*os.File, os.FileMode) error { return errors.New("chmod failed") }
+		defer func() { secureLockFile = original }()
+		_, err := lockState(filepath.Join(t.TempDir(), "state.lock"))
+		if err == nil || !strings.Contains(err.Error(), "secure anisette state lock") {
+			t.Fatalf("lock chmod error = %v", err)
+		}
+	})
+
+	t.Run("lock operation", func(t *testing.T) {
+		original := lockStateFile
+		lockStateFile = func(int, int) error { return errors.New("flock failed") }
+		defer func() { lockStateFile = original }()
+		_, err := lockState(filepath.Join(t.TempDir(), "state.lock"))
+		if err == nil || !strings.Contains(err.Error(), "lock anisette state") {
+			t.Fatalf("lock error = %v", err)
+		}
+	})
+
+	t.Run("write state", func(t *testing.T) {
+		original := writeStateContents
+		writeStateContents = func(*os.File, []byte) error { return errors.New("write failed") }
+		defer func() { writeStateContents = original }()
+		err := writeState(filepath.Join(t.TempDir(), "state.json"), []byte("state"))
+		if err == nil || !strings.Contains(err.Error(), "write anisette state") {
+			t.Fatalf("write error = %v", err)
+		}
+	})
+
+	t.Run("replace state", func(t *testing.T) {
+		original := replaceStateFile
+		replaceStateFile = func(string, string) error { return errors.New("rename failed") }
+		defer func() { replaceStateFile = original }()
+		err := writeState(filepath.Join(t.TempDir(), "state.json"), []byte("state"))
+		if err == nil || !strings.Contains(err.Error(), "replace anisette state") {
+			t.Fatalf("replace error = %v", err)
+		}
+	})
+}
+
 func TestFinishLoginHandlesChallengeFailureAndSuccess(t *testing.T) {
 	t.Run("two-factor challenge", func(t *testing.T) {
 		jar, err := cookiejar.New(&cookiejar.Options{Filename: filepath.Join(t.TempDir(), "cookies")})
@@ -279,6 +512,11 @@ func TestFinishLoginHandlesChallengeFailureAndSuccess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		appleURL, err := url.Parse("https://apple.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		jar.SetCookies(appleURL, []*http.Cookie{{Name: "session", Value: "cookie"}})
 		account := appstore.Account{Email: "a@b.c", Password: "secret"}
 		var output bytes.Buffer
 		err = finishLogin(&storeStub{login: appstore.LoginOutput{Account: account}}, jar, loginRequest{}, &output)
@@ -289,7 +527,7 @@ func TestFinishLoginHandlesChallengeFailureAndSuccess(t *testing.T) {
 		if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if response.Account.Password != "" || response.Account.Email != account.Email {
+		if response.Account.Password != "" || response.Account.Email != account.Email || len(response.Cookies) != 1 {
 			t.Fatalf("login response leaked or changed account: %+v", response.Account)
 		}
 	})

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	cookiejar "github.com/juju/persistent-cookiejar"
 	"github.com/majd/ipatool/v2/pkg/appstore"
 	"howett.net/plist"
 )
@@ -71,6 +72,16 @@ var storeOperations = map[string]storeOperation{
 // it carries the Store AMD proof, kbsync and session cookies Apple requires.
 // Apple-side failures are reported in the JSON response, not the exit status.
 func runStore(operation, statePath string, input io.Reader, output io.Writer) error {
+	return runStoreWithOpener(operation, statePath, input, output, openStore)
+}
+
+func runStoreWithOpener(
+	operation string,
+	statePath string,
+	input io.Reader,
+	output io.Writer,
+	open func(string) (appstore.AppStore, *cookiejar.Jar, error),
+) error {
 	handler, ok := storeOperations[operation]
 	if !ok {
 		return fmt.Errorf("unknown Store operation %q", operation)
@@ -83,7 +94,7 @@ func runStore(operation, statePath string, input io.Reader, output io.Writer) er
 		return errors.New("Store request requires a signed-in account")
 	}
 
-	store, jar, err := openStore(statePath)
+	store, jar, err := open(statePath)
 	if err != nil {
 		return err
 	}
@@ -175,13 +186,22 @@ func ownedApps(store appstore.AppStore, request storeRequest, _ string) (storeRe
 }
 
 func download(store appstore.AppStore, request storeRequest, staging string) (storeResponse, error) {
+	return downloadWithTempDir(store, request, staging, os.MkdirTemp)
+}
+
+func downloadWithTempDir(
+	store appstore.AppStore,
+	request storeRequest,
+	staging string,
+	createTempDir func(string, string) (string, error),
+) (storeResponse, error) {
 	if request.AppID <= 0 {
 		return storeResponse{}, errors.New("Store request requires an app id")
 	}
 	if err := ensurePrivateDirectory(staging); err != nil {
 		return storeResponse{}, err
 	}
-	directory, err := os.MkdirTemp(staging, "download-*")
+	directory, err := createTempDir(staging, "download-*")
 	if err != nil {
 		return storeResponse{}, fmt.Errorf("create download staging directory: %w", err)
 	}
