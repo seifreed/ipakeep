@@ -174,7 +174,7 @@ fn external_version_ids_parses_csv_array_and_number() {
         vec!["1", "2", "3"]
     );
     assert_eq!(
-        external_version_ids(&serde_json::json!([10, "20", ""])),
+        external_version_ids(&serde_json::json!([10, "20", "", null, {}])),
         vec!["10", "20"]
     );
     assert_eq!(external_version_ids(&serde_json::json!(99)), vec!["99"]);
