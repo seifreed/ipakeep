@@ -319,6 +319,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_econtent_that_is_not_an_octet_string() {
+        const TAG_UTF8_STRING: u8 = 0x0C;
+        let data_oid = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x07, 0x01];
+        let econtent = definite(TAG_EXPLICIT_0, &definite(TAG_UTF8_STRING, b"payload"));
+        let encap = definite(
+            TAG_SEQUENCE,
+            &[definite(TAG_OID, data_oid), econtent].concat(),
+        );
+        let signed = [definite(0x02, &[1]), definite(0x31, &[]), encap].concat();
+        let explicit = definite(TAG_EXPLICIT_0, &definite(TAG_SEQUENCE, &signed));
+        let envelope = definite(
+            TAG_SEQUENCE,
+            &[definite(TAG_OID, SIGNED_DATA_OID), explicit].concat(),
+        );
+
+        assert_eq!(
+            signed_data_content(&envelope),
+            Err(CmsError::UnexpectedTag {
+                expected: TAG_OCTET_STRING,
+                found: TAG_UTF8_STRING,
+            })
+        );
+    }
+
+    #[test]
     fn deep_indefinite_nesting_is_bounded() {
         let levels = 100_000;
         let bomb = [[0x30, 0x80].repeat(levels), [0, 0].repeat(levels)].concat();
