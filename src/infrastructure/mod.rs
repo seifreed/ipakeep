@@ -4,6 +4,7 @@
 //! defined in the domain layer. It depends on the domain layer but
 //! nothing in the domain layer depends on it.
 
+pub mod apple_sap;
 pub mod appstore;
 pub mod decrypt;
 pub mod developer;

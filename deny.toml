@@ -19,6 +19,11 @@ allow = [
     "Unlicense",
     "Unicode-3.0",
     "MPL-2.0",
+    # unicorn-engine: the ARM64 emulator that runs Apple SAP/ADI code. Linking it
+    # makes distributed ipakeep binaries GPL-2.0 (accepted by the maintainer).
+    "GPL-2.0",
+    # libloading (via unicorn-engine build tooling).
+    "ISC",
 ]
 
 [bans]
