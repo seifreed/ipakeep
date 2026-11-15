@@ -85,15 +85,21 @@ where
     }
     match outcome {
         Attempt::Purchased | Attempt::AlreadyOwned => Ok(()),
-        Attempt::TokenExpired => owns_license().await.map_err(|_| {
-            AppStoreError::AuthenticationFailed(
-                "Apple requires a recent sign-in to acquire this license: password token is expired; run auth login again".into(),
-            )
-        }),
-        Attempt::TemporarilyUnavailable => Err(AppStoreError::PurchaseFailed(format!(
-            "failed to purchase item with param '{PRICING_ARCADE}': item is temporarily unavailable"
-        ))),
+        Attempt::TokenExpired => owns_license().await.map_err(|_| expired_token_error()),
+        Attempt::TemporarilyUnavailable => Err(unavailable_error()),
     }
+}
+
+fn unavailable_error() -> AppStoreError {
+    AppStoreError::PurchaseFailed(format!(
+        "failed to purchase item with param '{PRICING_ARCADE}': item is temporarily unavailable"
+    ))
+}
+
+fn expired_token_error() -> AppStoreError {
+    AppStoreError::AuthenticationFailed(
+        "Apple requires a recent sign-in to acquire this license: password token is expired; run auth login again".into(),
+    )
 }
 
 async fn attempt(

@@ -120,9 +120,8 @@ mod go_bytes {
         deserializer: D,
     ) -> Result<Vec<u8>, D::Error> {
         let encoded = Option::<String>::deserialize(deserializer)?.unwrap_or_default();
-        STANDARD
-            .decode(encoded)
-            .map_err(<D::Error as serde::de::Error>::custom)
+        let decoded = STANDARD.decode(encoded);
+        decoded.map_err(<D::Error as serde::de::Error>::custom)
     }
 }
 

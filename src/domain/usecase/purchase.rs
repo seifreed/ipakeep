@@ -2,6 +2,7 @@
 
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::{CredentialRepository, PurchaseRepository};
+use crate::domain::usecase::require_account;
 
 /// Use case for acquiring an app license on the Apple App Store.
 pub struct Purchase<R, C>
@@ -33,12 +34,7 @@ where
     /// Returns `AppStoreError::AuthenticationFailed` if not logged in.
     /// Returns `AppStoreError::PurchaseFailed` if the purchase is rejected.
     pub async fn execute(&self, app_id: i64, guid: &str) -> Result<(), AppStoreError> {
-        let account = self
-            .credentials
-            .load_account()
-            .await
-            .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
-            .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
+        let account = require_account(self.credentials.load_account().await)?;
         self.app_store.purchase(&account, app_id, guid).await?;
         Ok(())
     }

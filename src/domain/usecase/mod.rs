@@ -3,6 +3,9 @@
 //! Each use case depends only on repository traits (ports),
 //! making them fully testable with mock implementations.
 
+use crate::domain::entity::Account;
+use crate::domain::error::{AppStoreError, CredentialError};
+
 pub mod auth_info;
 pub mod auth_login;
 pub mod auth_revoke;
@@ -23,3 +26,12 @@ pub use purchase::Purchase;
 pub use purchases::Purchases;
 pub use resolve_app::ResolveApp;
 pub use search::Search;
+
+/// Stored account a use case acts on; a missing account means not logged in.
+fn require_account(
+    loaded: Result<Option<Account>, CredentialError>,
+) -> Result<Account, AppStoreError> {
+    loaded
+        .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
+        .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))
+}

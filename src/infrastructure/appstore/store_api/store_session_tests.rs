@@ -157,12 +157,9 @@ fn credentials(auth_code: Option<&str>) -> Credentials<'_> {
     }
 }
 
-fn header_value<'r>(request: &'r Request, name: &str) -> &'r str {
-    request
-        .headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
+fn header_value(request: &Request, name: &str) -> String {
+    let value = request.headers.get(name).map(|value| value.to_str());
+    value.and_then(Result::ok).unwrap_or_default().to_string()
 }
 
 fn account() -> Account {

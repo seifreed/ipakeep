@@ -3,6 +3,7 @@
 use crate::domain::entity::AppVersion;
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::{CredentialRepository, VersionRepository};
+use crate::domain::usecase::require_account;
 
 /// Use case for listing available versions of an app on the App Store.
 pub struct ListVersions<R, C>
@@ -34,12 +35,7 @@ where
     /// Returns `AppStoreError::AuthenticationFailed` if not logged in.
     /// Returns `AppStoreError::Unexpected` if version metadata is missing.
     pub async fn execute(&self, app_id: i64, guid: &str) -> Result<Vec<AppVersion>, AppStoreError> {
-        let account = self
-            .credentials
-            .load_account()
-            .await
-            .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
-            .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
+        let account = require_account(self.credentials.load_account().await)?;
         let versions = self.app_store.list_versions(&account, app_id, guid).await?;
         Ok(versions)
     }

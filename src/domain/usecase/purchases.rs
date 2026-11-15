@@ -3,6 +3,7 @@
 use crate::domain::entity::OwnedApp;
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::{CredentialRepository, PurchaseRepository};
+use crate::domain::usecase::require_account;
 
 const MAX_FILTERED_PURCHASE_CANDIDATES: u32 = 100;
 
@@ -43,12 +44,7 @@ where
         limit: u32,
         platform: Option<&str>,
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
-        let account = self
-            .credentials
-            .load_account()
-            .await
-            .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
-            .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
+        let account = require_account(self.credentials.load_account().await)?;
         let fetch_limit = if platform.is_some() {
             limit.max(MAX_FILTERED_PURCHASE_CANDIDATES)
         } else {

@@ -3,6 +3,7 @@
 use crate::domain::entity::DownloadItem;
 use crate::domain::error::AppStoreError;
 use crate::domain::repository::{CredentialRepository, DownloadRepository, PurchaseRepository};
+use crate::domain::usecase::require_account;
 
 /// Use case for downloading an IPA file from the App Store.
 pub struct Download<R, C>
@@ -40,24 +41,22 @@ where
         version_id: Option<String>,
         auto_purchase: bool,
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
-        let account = self
-            .credentials
-            .load_account()
-            .await
-            .map_err(|e| AppStoreError::Unexpected(e.to_string()))?
-            .ok_or(AppStoreError::AuthenticationFailed("not logged in".into()))?;
+        let account = require_account(self.credentials.load_account().await)?;
         if auto_purchase {
-            match self.app_store.purchase(&account, app_id, guid).await {
-                Ok(()) | Err(AppStoreError::NoLicense(_)) => {}
-                Err(e) => return Err(e),
-            }
+            let purchased = self.app_store.purchase(&account, app_id, guid).await;
+            tolerate_missing_license(purchased)?;
         }
 
-        let items = self
-            .app_store
-            .download(&account, app_id, guid, version_id)
-            .await?;
+        let store = &self.app_store;
+        let items = store.download(&account, app_id, guid, version_id).await?;
         Ok(items)
+    }
+}
+
+fn tolerate_missing_license(purchased: Result<(), AppStoreError>) -> Result<(), AppStoreError> {
+    match purchased {
+        Err(AppStoreError::NoLicense(_)) => Ok(()),
+        other => other,
     }
 }
 

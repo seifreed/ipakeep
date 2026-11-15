@@ -265,8 +265,7 @@ where
 
     async fn update_product(&self, ticket: &Ticket<'_>, version: &str) -> Attempt {
         let url = self.bag.update_product.as_deref().unwrap_or_default();
-        let endpoint =
-            download_endpoint(url, UPDATE_PRODUCT_PATH).map_err(|error| failure(None, error))?;
+        let endpoint = required_endpoint(url, UPDATE_PRODUCT_PATH)?;
         let response = self
             .send_legacy(ticket, &endpoint, Some(version), None)
             .await?;
@@ -313,8 +312,7 @@ where
         ent_url: &str,
         version: Option<String>,
     ) -> Attempt {
-        let endpoint =
-            download_endpoint(ent_url, ENT_DOWNLOAD_PATH).map_err(|error| failure(None, error))?;
+        let endpoint = required_endpoint(ent_url, ENT_DOWNLOAD_PATH)?;
         let version = match version {
             Some(version) => version,
             None => self
@@ -367,30 +365,9 @@ where
         blob: &str,
     ) -> Attempt {
         let body = ent_body(ticket, version, blob);
-        let mut response = self
-            .post(
-                ticket,
-                endpoint,
-                CONTENT_TYPE_FORM,
-                &body,
-                Some(AUTHENTICATION_TIMEOUT),
-            )
-            .await?;
-        normalize_failure(&mut response.body);
-        let failure_code = failure_type(&response.body);
-        if !failure_code.is_empty() {
-            let error = AppStoreError::DownloadFailed(format!(
-                "received ent/download error: {failure_code}"
-            ));
-            return Err(failure(Some(response), error));
-        }
-        let response = validated(response, ticket.app_id, version, "ent/download")?;
-        if item_url(&response).is_empty() {
-            let error =
-                AppStoreError::DownloadFailed("ent/download response has no package URL".into());
-            return Err(failure(Some(response), error));
-        }
-        Ok(response)
+        let timeout = Some(AUTHENTICATION_TIMEOUT);
+        let pending = self.post(ticket, endpoint, CONTENT_TYPE_FORM, &body, timeout);
+        checked_ent_response(pending.await?, ticket.app_id, version)
     }
 
     async fn send_legacy(
@@ -417,10 +394,8 @@ where
         let headers = self
             .commerce_headers(ticket.account, &url, content_type)
             .map_err(|error| failure(None, error))?;
-        let mut request = self
-            .client
-            .post(self.wire_url(&url))
-            .body(encode_request_plist(body));
+        let mut request = self.client.post(self.wire_url(&url));
+        request = request.body(encode_request_plist(body));
         for (name, value) in headers {
             request = request.header(name, value);
         }
@@ -463,11 +438,9 @@ where
     }
 
     async fn latest_version_id(&self, ticket: &Ticket<'_>) -> Result<String, VersionLookupError> {
-        let country = self
-            .storefronts
-            .country_code(&ticket.account.store_front)
-            .await
-            .map_err(VersionLookupError::Failed)?;
+        let storefronts = &self.storefronts;
+        let country = storefronts.country_code(&ticket.account.store_front).await;
+        let country = country.map_err(VersionLookupError::Failed)?;
         let mut last_error = None;
         for catalog in PLATFORM_CATALOGS {
             match self
@@ -556,11 +529,8 @@ where
     }
 
     async fn catalog_version(&self, account: &Account, app_id: i64) -> Option<String> {
-        let country = self
-            .storefronts
-            .country_code(&account.store_front)
-            .await
-            .ok()?;
+        let storefronts = &self.storefronts;
+        let country = storefronts.country_code(&account.store_front).await.ok()?;
         let url = itunes_lookup_url(app_id, &country);
         let (status, body) = self.get_json(&url).await.ok()?;
         if status != reqwest::StatusCode::OK.as_u16() {
@@ -572,9 +542,8 @@ where
     }
 
     async fn get_json(&self, url: &str) -> Result<(u16, Value), AppStoreError> {
-        let response = self
-            .client
-            .get(self.wire_url(url))
+        let request = self.client.get(self.wire_url(url));
+        let response = request
             .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
             .send()
             .await
@@ -596,19 +565,8 @@ where
     /// Apple URL as sent; tests reroute its origin to a mock server while
     /// keeping the allowlisted Apple URL for validation.
     fn wire_url(&self, url: &str) -> String {
-        let Some(origin) = &self.origin else {
-            return url.to_string();
-        };
-        Url::parse(url).map_or_else(
-            |_| url.to_string(),
-            |parsed| {
-                let query = parsed
-                    .query()
-                    .map(|query| format!("?{query}"))
-                    .unwrap_or_default();
-                format!("{origin}{}{query}", parsed.path())
-            },
-        )
+        let origin = self.origin.as_deref();
+        origin.map_or_else(|| url.to_string(), |origin| rerouted_url(origin, url))
     }
 }
 
@@ -620,18 +578,18 @@ impl<'a> Ticket<'a> {
             .ok_or_else(|| {
                 AppStoreError::Unexpected("store download requires a six-byte device GUID".into())
             })?;
-        Ok(Self {
+        let ticket = Self {
             account,
             app_id,
             guid,
             hardware_id,
-        })
+        };
+        Ok(ticket)
     }
 
     fn dsid(&self) -> Result<u64, AppStoreError> {
-        self.account
-            .directory_services_id
-            .parse::<u64>()
+        let dsid = &self.account.directory_services_id;
+        dsid.parse::<u64>()
             .ok()
             .filter(|dsid| *dsid != 0)
             .ok_or_else(|| {
@@ -654,6 +612,44 @@ impl VersionLookupError {
             Self::CatalogNotFound(error) | Self::Failed(error) => error,
         }
     }
+}
+
+fn rerouted_url(origin: &str, url: &str) -> String {
+    Url::parse(url).map_or_else(
+        |_| url.to_string(),
+        |parsed| {
+            let query = parsed
+                .query()
+                .map(|query| format!("?{query}"))
+                .unwrap_or_default();
+            format!("{origin}{}{query}", parsed.path())
+        },
+    )
+}
+
+fn required_endpoint(url: &str, path: &str) -> Result<Endpoint, Failure> {
+    download_endpoint(url, path).map_err(|error| failure(None, error))
+}
+
+fn checked_ent_response(
+    mut response: StoreResponse,
+    app_id: i64,
+    version: Option<&str>,
+) -> Attempt {
+    normalize_failure(&mut response.body);
+    let failure_code = failure_type(&response.body);
+    if !failure_code.is_empty() {
+        let error =
+            AppStoreError::DownloadFailed(format!("received ent/download error: {failure_code}"));
+        return Err(failure(Some(response), error));
+    }
+    let response = validated(response, app_id, version, "ent/download")?;
+    if item_url(&response).is_empty() {
+        let error =
+            AppStoreError::DownloadFailed("ent/download response has no package URL".into());
+        return Err(failure(Some(response), error));
+    }
+    Ok(response)
 }
 
 fn failure(response: Option<StoreResponse>, error: AppStoreError) -> Failure {
@@ -1015,29 +1011,36 @@ fn first_item<'r>(
     app_id: i64,
     expired: &[&str],
 ) -> Result<&'r Value, AppStoreError> {
-    let code = failure_type(&response.body);
-    let message = customer_message(&response.body);
     let list = items(&response.body);
+    if let Some(error) = response_failure(&response.body, list.is_empty(), app_id, expired) {
+        return Err(error);
+    }
+    list.first()
+        .ok_or_else(|| AppStoreError::Unexpected("invalid download response".into()))
+}
+
+fn response_failure(
+    body: &Value,
+    no_items: bool,
+    app_id: i64,
+    expired: &[&str],
+) -> Option<AppStoreError> {
+    let code = failure_type(body);
+    let message = customer_message(body);
     if expired.contains(&code.as_str()) {
-        return Err(AppStoreError::AuthenticationFailed(format!(
+        return Some(AppStoreError::AuthenticationFailed(format!(
             "Apple rejected the Store session (failureType {code}); run auth login again"
         )));
     }
     if code == FAILURE_LICENSE_NOT_FOUND {
-        return Err(AppStoreError::NoLicense(app_id));
+        return Some(AppStoreError::NoLicense(app_id));
     }
-    if !message.is_empty() && (!code.is_empty() || list.is_empty()) {
-        return Err(AppStoreError::DownloadFailed(format!(
+    if !message.is_empty() && (!code.is_empty() || no_items) {
+        return Some(AppStoreError::DownloadFailed(format!(
             "received error: {message}"
         )));
     }
-    if !code.is_empty() {
-        return Err(AppStoreError::DownloadFailed(format!(
-            "received error: {code}"
-        )));
-    }
-    list.first()
-        .ok_or_else(|| AppStoreError::Unexpected("invalid download response".into()))
+    (!code.is_empty()).then(|| AppStoreError::DownloadFailed(format!("received error: {code}")))
 }
 
 fn version_identifiers(item: &Value) -> Result<Vec<String>, AppStoreError> {
