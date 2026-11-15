@@ -7,6 +7,7 @@
 //! back into the archive while zeroing `cryptid` ([`patch_ipa_decrypted`]), and
 //! re-signs a bundle preserving its entitlements ([`resign_app`]).
 
+mod codesign;
 pub mod dump;
 mod entitlements;
 mod fairplay;
@@ -17,6 +18,8 @@ mod min_os;
 mod offline;
 mod verify;
 
+pub(crate) use codesign::extract_entitlements;
+pub use codesign::{entitlements_report, resign_app};
 pub use dump::{DumpDevice, DumpRequest, Dumper, SshParams, run_dump};
 pub use entitlements::{EntitlementRisk, EntitlementVerdict};
 pub use min_os::set_min_os;
@@ -24,14 +27,12 @@ pub use offline::run_offline;
 pub(crate) use verify::ensure_decrypted;
 pub use verify::{MachoVerify, SliceVerify, VerifyReport, verify_ipa};
 
-use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::ipa::{copy_zip_entry, entry_options};
 use macho::Slice;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
-use std::process::Command;
 
 /// Per-iOS-major dumpability verdict for one slice.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -597,50 +598,6 @@ fn repack(
     Ok(cursor.into_inner())
 }
 
-/// Re-sign an extracted `.app` bundle, preserving its entitlements.
-///
-/// When `entitlements_override` is `None`, the original entitlements are read
-/// from the bundle's main executable with `codesign -d`.
-///
-/// # Errors
-///
-/// Returns an error if entitlements cannot be read or signing fails.
-pub fn resign_app(
-    app: &Path,
-    identity: &str,
-    entitlements_override: Option<&Path>,
-) -> Result<(), String> {
-    if let Some(entitlements) = entitlements_override {
-        return crate::infrastructure::simulator::resign_bundle(app, identity, Some(entitlements));
-    }
-
-    let executable = bundle_executable_on_disk(app)?;
-    let xml = extract_entitlements(&app.join(&executable))?;
-    if xml.trim().is_empty() {
-        // No custom entitlements to preserve; sign without an override.
-        return crate::infrastructure::simulator::resign_bundle(app, identity, None);
-    }
-
-    let temp = std::env::temp_dir().join(format!("ipakeep-entitlements-{executable}.plist"));
-    std::fs::write(&temp, xml).map_err(|e| format!("{}: {e}", temp.display()))?;
-    let result = crate::infrastructure::simulator::resign_bundle(app, identity, Some(&temp));
-    let _ = std::fs::remove_file(&temp);
-    result
-}
-
-pub(crate) fn extract_entitlements(executable: &Path) -> Result<String, String> {
-    let mut command = Command::new("/usr/bin/codesign");
-    command
-        .args(["-d", "--entitlements", ":-", "--xml"])
-        .arg(executable);
-    let output =
-        observed_output(&mut command).map_err(|e| format!("failed to run codesign: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
 fn bundle_executable_on_disk(app: &Path) -> Result<String, String> {
     let info = app.join("Info.plist");
     let plist = plist::Value::from_file(&info).map_err(|e| format!("{}: {e}", info.display()))?;
@@ -671,10 +628,8 @@ fn read_if_macho<R: Read + Seek>(
         return Ok(None);
     }
     let mut magic = [0_u8; 4];
-    match file.read_exact(&mut magic) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error.to_string()),
+    if let Err(error) = file.read_exact(&mut magic) {
+        return unreadable_magic(&error);
     }
     if !macho::is_macho(&magic) {
         return Ok(None);
@@ -684,23 +639,19 @@ fn read_if_macho<R: Read + Seek>(
     Ok(Some((name, bytes)))
 }
 
+/// A member too short to hold a magic is simply not a Mach-O.
+fn unreadable_magic(error: &std::io::Error) -> Result<Option<(String, Vec<u8>)>, String> {
+    if error.kind() == std::io::ErrorKind::UnexpectedEof {
+        Ok(None)
+    } else {
+        Err(error.to_string())
+    }
+}
+
 fn read_app_info<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> Result<(Option<String>, Option<String>), String> {
-    let mut info_name = None;
-    for i in 0..archive.len() {
-        let name = archive
-            .by_index(i)
-            .map_err(|e| e.to_string())?
-            .name()
-            .map_err(|error| error.to_string())?
-            .into_owned();
-        if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
-            info_name = Some(name);
-            break;
-        }
-    }
-    let Some(info_name) = info_name else {
+    let Some(info_name) = min_os::find_info_plist_name(archive)? else {
         return Ok((None, None));
     };
 
@@ -761,23 +712,14 @@ fn format_version(packed: u32) -> String {
     )
 }
 
-/// Extract and classify a binary's (or bundle's) entitlements by re-sign risk.
-///
-/// # Errors
-///
-/// Returns an error if the executable cannot be located or `codesign` fails.
-pub fn entitlements_report(path: &Path) -> Result<Vec<EntitlementVerdict>, String> {
-    let binary = if path.extension().is_some_and(|e| e == "app") {
-        path.join(bundle_executable_on_disk(path)?)
-    } else {
-        path.to_path_buf()
-    };
-    let xml = extract_entitlements(&binary)?;
+/// Classify `codesign`-extracted entitlements XML by re-sign risk; empty
+/// output means the binary carries no entitlements.
+fn classify_entitlements_xml(xml: &str) -> Result<Vec<EntitlementVerdict>, String> {
     if xml.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let value = plist::Value::from_reader(Cursor::new(xml.into_bytes()))
-        .map_err(|e| format!("parsing entitlements: {e}"))?;
+    let value = plist::Value::from_reader(Cursor::new(xml.as_bytes()));
+    let value = value.map_err(|e| format!("parsing entitlements: {e}"))?;
     let dict = value
         .as_dictionary()
         .ok_or("entitlements are not a plist dictionary")?;

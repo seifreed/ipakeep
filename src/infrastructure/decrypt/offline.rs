@@ -12,11 +12,14 @@ use super::ensure_decrypted;
 use super::fairplay::{self, CREDENTIAL_SIZE};
 use super::fairplay_ipa::{self, PlanEntry};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// Environment overrides pointing at raw 16-byte credential files.
 const STANDARD_ENV: &str = "IPAKEEP_FAIRPLAY_CREDENTIAL";
 const ARCADE_ENV: &str = "IPAKEEP_FAIRPLAY_ARCADE_CREDENTIAL";
+const ARCADE_CREDENTIAL_MISSING: &str =
+    "this Apple Arcade app needs the account's Arcade credential";
 
 /// The account's `FairPlay` credentials: `standard` decodes regular App Store
 /// licenses, `arcade` (optional) decodes Apple Arcade ones.
@@ -37,8 +40,15 @@ struct Credentials {
 /// decryptable binary, or the produced IPA does not verify as decrypted.
 pub fn run_offline(ipa: &Path, allow_on_device: bool) -> Result<Vec<u8>, String> {
     let _ = allow_on_device;
+    run_offline_with(ipa, load_credentials)
+}
+
+fn run_offline_with(
+    ipa: &Path,
+    credentials: impl FnOnce() -> Result<Credentials, String>,
+) -> Result<Vec<u8>, String> {
     let ipa = local_ipa(ipa)?;
-    let creds = load_credentials()?;
+    let creds = credentials()?;
     let bytes = decrypt_ipa(&ipa, &creds, false, false)?;
     ensure_decrypted(bytes)
 }
@@ -101,14 +111,11 @@ fn decrypt_entry(
 }
 
 fn entry_credential<'a>(creds: &'a Credentials, sinf: &[u8]) -> Result<&'a [u8], String> {
-    if fairplay::is_arcade_sinf(sinf) {
-        creds
-            .arcade
-            .as_deref()
-            .ok_or_else(|| "this Apple Arcade app needs the account's Arcade credential".into())
-    } else {
-        Ok(creds.standard.as_slice())
+    if !fairplay::is_arcade_sinf(sinf) {
+        return Ok(creds.standard.as_slice());
     }
+    let arcade = creds.arcade.as_deref();
+    arcade.ok_or_else(|| ARCADE_CREDENTIAL_MISSING.to_string())
 }
 
 /// The SINF bytes for an entry: its own, else a fallback from the enclosing
@@ -124,10 +131,8 @@ fn read_entry_sinf<'a>(
         fairplay_ipa::enclosing_app_sinf(names, &entry.bundle)
             .ok_or_else(|| format!("SUPF/SUPP lacks binary/SINF: {}", entry.supf_path))?
     };
-    members
-        .get(&sinf_path)
-        .map(Vec::as_slice)
-        .ok_or_else(|| format!("missing SINF member {sinf_path}"))
+    let sinf = members.get(&sinf_path).map(Vec::as_slice);
+    sinf.ok_or_else(|| format!("missing SINF member {sinf_path}"))
 }
 
 /// Accept only an existing local `.ipa`.
@@ -144,14 +149,29 @@ fn local_ipa(ipa: &Path) -> Result<PathBuf, String> {
     std::path::absolute(ipa).map_err(|e| format!("{}: {e}", ipa.display()))
 }
 
-/// Resolve the account credential(s). Order: the `IPAKEEP_FAIRPLAY_CREDENTIAL`
-/// env path, else the single `*.bin` under a known credential directory.
+/// Resolve the account credential(s) from the process environment.
 fn load_credentials() -> Result<Credentials, String> {
-    let standard = match std::env::var_os(STANDARD_ENV) {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dirs = credential_dirs(home.as_deref());
+    credentials_from(
+        std::env::var_os(STANDARD_ENV),
+        std::env::var_os(ARCADE_ENV),
+        &dirs,
+    )
+}
+
+/// Order: the `IPAKEEP_FAIRPLAY_CREDENTIAL` path, else the single `*.bin`
+/// under the first credential directory that holds any.
+fn credentials_from(
+    standard_path: Option<OsString>,
+    arcade_path: Option<OsString>,
+    dirs: &[PathBuf],
+) -> Result<Credentials, String> {
+    let standard = match standard_path {
         Some(path) => read_credential(Path::new(&path))?,
-        None => read_credential(&sole_credential_file()?)?,
+        None => read_credential(&sole_credential_file(dirs)?)?,
     };
-    let arcade = match std::env::var_os(ARCADE_ENV) {
+    let arcade = match arcade_path {
         Some(path) => Some(read_credential(Path::new(&path))?),
         None => None,
     };
@@ -173,10 +193,10 @@ fn read_credential(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// The one `*.bin` credential in a known directory, or an actionable error.
-fn sole_credential_file() -> Result<PathBuf, String> {
+fn sole_credential_file(dirs: &[PathBuf]) -> Result<PathBuf, String> {
     let mut found: Vec<PathBuf> = Vec::new();
-    for dir in credential_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
         };
         for entry in entries.flatten() {
@@ -202,9 +222,9 @@ fn sole_credential_file() -> Result<PathBuf, String> {
 }
 
 /// Directories searched for a cached credential, best first.
-fn credential_dirs() -> Vec<PathBuf> {
+fn credential_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = home {
         dirs.push(
             home.join("Library")
                 .join("Application Support")
@@ -450,5 +470,123 @@ mod tests {
                 .unwrap_err()
                 .contains("SUPF/SUPP lacks binary/SINF")
         );
+    }
+
+    fn encrypted_game_ipa(directory: &Path, credential: &[u8; 16]) -> PathBuf {
+        let (sinf, _) = fairplay::tests::encrypted_sinf(credential, false);
+        let binary = fairplay::tests::thin_arm64_macho(1);
+        let supf = fairplay::tests::single_page_arm64_supf();
+        let entry = plan_entry();
+        write_ipa(
+            directory,
+            &[
+                (&entry.binary_path, &binary),
+                (&entry.sinf_path, &sinf),
+                (&entry.supf_path, &supf),
+            ],
+        )
+    }
+
+    #[test]
+    fn offline_decryption_produces_a_verified_ipa() {
+        let work = tempfile::tempdir().unwrap();
+        let credential = [0x31u8; CREDENTIAL_SIZE];
+        let ipa = encrypted_game_ipa(work.path(), &credential);
+        let creds = || {
+            Ok(Credentials {
+                standard: credential.to_vec(),
+                arcade: None,
+            })
+        };
+
+        let decrypted = run_offline_with(&ipa, creds).unwrap();
+
+        assert!(super::super::verify_ipa(&decrypted).unwrap().ok);
+    }
+
+    #[test]
+    fn offline_decryption_stops_when_no_credential_loads() {
+        let work = tempfile::tempdir().unwrap();
+        let ipa = encrypted_game_ipa(work.path(), &[0x31; CREDENTIAL_SIZE]);
+
+        let error = run_offline_with(&ipa, || Err("no credential".into())).unwrap_err();
+
+        assert_eq!(error, "no credential");
+    }
+
+    #[test]
+    fn explicit_credential_paths_take_precedence_over_directories() {
+        let work = tempfile::tempdir().unwrap();
+        let standard = work.path().join("standard.key");
+        let arcade = work.path().join("arcade.key");
+        std::fs::write(&standard, [1u8; CREDENTIAL_SIZE]).unwrap();
+        std::fs::write(&arcade, [2u8; CREDENTIAL_SIZE]).unwrap();
+
+        let creds = credentials_from(
+            Some(standard.into_os_string()),
+            Some(arcade.clone().into_os_string()),
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(creds.standard, vec![1u8; CREDENTIAL_SIZE]);
+        assert_eq!(creds.arcade, Some(vec![2u8; CREDENTIAL_SIZE]));
+        let missing = work.path().join("missing.key").into_os_string();
+        assert!(credentials_from(Some(missing.clone()), None, &[]).is_err());
+        let standard_only = Some(arcade.into_os_string());
+        assert!(credentials_from(standard_only, Some(missing), &[]).is_err());
+    }
+
+    #[test]
+    fn credential_directories_supply_the_sole_cached_credential() {
+        let work = tempfile::tempdir().unwrap();
+        let absent = work.path().join("absent");
+        let empty = work.path().join("empty");
+        let cached = work.path().join("cached");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&cached).unwrap();
+        std::fs::write(empty.join("notes.txt"), b"not a credential").unwrap();
+        std::fs::write(cached.join("account.bin"), [3u8; CREDENTIAL_SIZE]).unwrap();
+
+        let creds = credentials_from(None, None, &[absent, empty, cached.clone()]).unwrap();
+        assert_eq!(creds.standard, vec![3u8; CREDENTIAL_SIZE]);
+        assert!(creds.arcade.is_none());
+
+        std::fs::write(cached.join("other.bin"), [4u8; CREDENTIAL_SIZE]).unwrap();
+        let ambiguous = credentials_from(None, None, std::slice::from_ref(&cached));
+        assert!(
+            ambiguous
+                .map(|_| ())
+                .unwrap_err()
+                .contains("multiple credentials")
+        );
+        let none = credentials_from(None, None, &[]);
+        assert!(
+            none.map(|_| ())
+                .unwrap_err()
+                .contains("no FairPlay credential")
+        );
+    }
+
+    #[test]
+    fn credential_directories_live_under_home() {
+        let home = Path::new("/home/tester");
+        let dirs = credential_dirs(Some(home));
+        let expected_app = home.join("Library/Application Support/ipakeep/credentials");
+        assert_eq!(
+            dirs,
+            vec![expected_app, home.join(".ipadecrypt/credentials")]
+        );
+        assert_eq!(credential_dirs(None), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn process_credentials_follow_the_environment_resolution() {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let dirs = credential_dirs(home.as_deref());
+        let standard = std::env::var_os(STANDARD_ENV);
+        let expected = credentials_from(standard, std::env::var_os(ARCADE_ENV), &dirs);
+
+        assert_eq!(load_credentials().is_ok(), expected.is_ok());
     }
 }

@@ -80,8 +80,8 @@ fn patched_info_plist<R: Read + Seek>(
         .map_err(|error| error.to_string())?
         .read_to_end(&mut data)
         .map_err(|error| error.to_string())?;
-    let mut value =
-        plist::Value::from_reader(Cursor::new(data)).map_err(|error| error.to_string())?;
+    let parsed = plist::Value::from_reader(Cursor::new(data));
+    let mut value = parsed.map_err(|error| error.to_string())?;
     let dictionary = value
         .as_dictionary_mut()
         .ok_or("Info.plist is not a dictionary")?;
@@ -96,7 +96,7 @@ fn patched_info_plist<R: Read + Seek>(
     Ok(Some((info_name, output)))
 }
 
-fn find_info_plist_name<R: Read + Seek>(
+pub(super) fn find_info_plist_name<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> Result<Option<String>, String> {
     for index in 0..archive.len() {

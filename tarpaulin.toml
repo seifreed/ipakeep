@@ -8,7 +8,7 @@ all-features = true
 workspace = true
 
 # Boundary adapters depend on Apple services, the pinned Apple assets, the
-# Unicorn-emulated Apple guest, Keychain, Xcode simctl, or
+# Unicorn-emulated Apple guest, Keychain, Xcode simctl, Apple codesign, or
 # process-level CLI dispatch. They are covered by integration/smoke tests where
 # practical; line coverage here is measured for deterministic core code.
 exclude-files = [
@@ -25,6 +25,7 @@ exclude-files = [
   "src/infrastructure/apple_sap/storeauth/worker.rs",
   "src/infrastructure/appstore/store_api/store_machine.rs",
   "src/infrastructure/appstore/store_api/store_session.rs",
+  "src/infrastructure/decrypt/codesign.rs",
   "src/presentation/cli/**",
   "src/domain/repository/fake/**",
   "src/domain/usecase/auth_login.rs",

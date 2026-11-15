@@ -820,7 +820,7 @@ fn page_key_record<'a>(supf: &'a [u8], offset: &mut usize) -> Result<&'a [u8], S
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     /// Build an MP4-style atom: 4-byte big-endian size, 4-byte tag, payload.
@@ -844,7 +844,10 @@ mod tests {
         atom(*b"sinf", &schi)
     }
 
-    fn encrypted_sinf(credential: &[u8; 16], legacy_length: bool) -> (Vec<u8>, [u8; 16]) {
+    pub(in super::super) fn encrypted_sinf(
+        credential: &[u8; 16],
+        legacy_length: bool,
+    ) -> (Vec<u8>, [u8; 16]) {
         use aes::cipher::block_padding::NoPadding;
         use aes::cipher::{BlockEncryptMut, KeyIvInit};
         use cbc::Encryptor;
@@ -880,7 +883,7 @@ mod tests {
     }
 
     /// A minimal thin arm64 Mach-O carrying one `LC_ENCRYPTION_INFO_64` command.
-    fn thin_arm64_macho(cryptid: u32) -> Vec<u8> {
+    pub(in super::super) fn thin_arm64_macho(cryptid: u32) -> Vec<u8> {
         let mut data = vec![0u8; 8192];
         // mach_header_64
         data[0..4].copy_from_slice(&MACHO_MAGIC_64_LE.to_le_bytes());
@@ -1356,12 +1359,8 @@ mod tests {
         assert!(decrypt_binary(&encrypted, &sinf, &missing_pclass_page, &credential).is_err());
     }
 
-    #[test]
-    fn decrypt_binary_decrypts_supf_and_pclass_pages() {
-        let encrypted = thin_arm64_macho(1);
-        let credential = [0x31u8; 16];
-        let (sinf, _) = encrypted_sinf(&credential, false);
-
+    /// A SUPF holding one arm64 page-key record (for [`thin_arm64_macho`]).
+    pub(in super::super) fn single_page_arm64_supf() -> Vec<u8> {
         let mut supf = vec![5u8];
         supf.extend_from_slice(b"502");
         supf.extend_from_slice(&[0u8; 4]);
@@ -1371,6 +1370,15 @@ mod tests {
         supf.extend_from_slice(&0u32.to_be_bytes());
         supf.extend_from_slice(&1u32.to_be_bytes());
         supf.extend_from_slice(&[0u8; 32]);
+        supf
+    }
+
+    #[test]
+    fn decrypt_binary_decrypts_supf_and_pclass_pages() {
+        let encrypted = thin_arm64_macho(1);
+        let credential = [0x31u8; 16];
+        let (sinf, _) = encrypted_sinf(&credential, false);
+        let supf = single_page_arm64_supf();
 
         let mut supp_records = vec![4u8, 0, 0, 0];
         supp_records.extend_from_slice(&2u32.to_be_bytes());

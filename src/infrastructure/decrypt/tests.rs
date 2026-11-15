@@ -778,6 +778,21 @@ fn bundle_executable_requires_a_nonempty_info_plist_value() {
 }
 
 #[test]
+fn entitlements_xml_is_classified_or_rejected() {
+    assert!(classify_entitlements_xml("  \n").unwrap().is_empty());
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>get-task-allow</key><true/></dict></plist>"#;
+    let verdicts = classify_entitlements_xml(xml).unwrap();
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].key, "get-task-allow");
+    let not_dict = r#"<plist version="1.0"><string>x</string></plist>"#;
+    let not_dict = classify_entitlements_xml(not_dict).unwrap_err();
+    assert!(not_dict.contains("not a plist dictionary"));
+    let malformed = classify_entitlements_xml("<plist>").unwrap_err();
+    assert!(malformed.contains("parsing entitlements"));
+}
+
+#[test]
 fn entitlement_commands_report_unsigned_macho_errors() {
     let dir = tempfile::TempDir::new().unwrap();
     let app = dir.path().join("Unsigned.app");

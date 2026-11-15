@@ -179,18 +179,13 @@ fn dispatch_dump(
 }
 
 fn run_builtin(req: &DumpRequest, work: &Path) -> Result<Vec<u8>, String> {
-    run_builtin_with(
-        req,
-        work,
-        || {
-            python_with_frida(
-                std::env::var(PYTHON_OVERRIDE_ENV).ok(),
-                std::env::var_os("PATH").as_deref(),
-                python_imports_frida,
-            )
-        },
-        run_inherit,
-    )
+    run_builtin_with(req, work, detect_python_with_frida, run_inherit)
+}
+
+fn detect_python_with_frida() -> Result<String, String> {
+    let override_python = std::env::var(PYTHON_OVERRIDE_ENV).ok();
+    let path = std::env::var_os("PATH");
+    python_with_frida(override_python, path.as_deref(), python_imports_frida)
 }
 
 fn run_builtin_with(
@@ -211,11 +206,22 @@ fn run_builtin_with(
         }
     };
     let agent = prepare_agent(req.agent, work)?;
+    run(builtin_command(req, &python, &agent, &ipa, work))?;
+    patch_dumped_ipa(&ipa, work, req.drop_undumped_extensions)
+}
+
+fn builtin_command(
+    req: &DumpRequest,
+    python: &str,
+    agent: &Path,
+    ipa: &Path,
+    work: &Path,
+) -> Command {
     let (program, args) = builtin_argv(BuiltinArgv {
-        python: &python,
-        agent: &agent,
+        python,
+        agent,
         bundle_id: req.bundle_id,
-        ipa: &ipa,
+        ipa,
         device: req.device,
         out_dir: work,
         settle: req.settle,
@@ -223,14 +229,12 @@ fn run_builtin_with(
     });
     let mut command = Command::new(program);
     command.args(&args);
-    run(command)?;
+    command
+}
 
-    let ipa_bytes = std::fs::read(&ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
-    ensure_decrypted(patch_ipa_decrypted_with(
-        &ipa_bytes,
-        work,
-        req.drop_undumped_extensions,
-    )?)
+fn patch_dumped_ipa(ipa: &Path, work: &Path, drop_undumped: bool) -> Result<Vec<u8>, String> {
+    let ipa_bytes = std::fs::read(ipa).map_err(|e| format!("{}: {e}", ipa.display()))?;
+    ensure_decrypted(patch_ipa_decrypted_with(&ipa_bytes, work, drop_undumped)?)
 }
 
 /// Copy the installed, still-encrypted bundle off the device so the patch base
@@ -275,14 +279,22 @@ fn python_with_frida(
     let candidates = python_candidates(override_python, &launchers);
     for candidate in &candidates {
         if imports_frida(candidate) {
-            #[rustfmt::skip]
-            tracing::info!(service = "ipakeep", component = "decrypt", event_name = "frida.interpreter.selected", interpreter = candidate.as_str(), "selected Python interpreter for the Frida runner");
+            log_selected_interpreter(candidate);
             return Ok(candidate.clone());
         }
     }
-    Err(format!(
+    Err(frida_import_error(&candidates))
+}
+
+fn log_selected_interpreter(candidate: &str) {
+    #[rustfmt::skip]
+    tracing::info!(service = "ipakeep", component = "decrypt", event_name = "frida.interpreter.selected", interpreter = candidate, "selected Python interpreter for the Frida runner");
+}
+
+fn frida_import_error(candidates: &[String]) -> String {
+    format!(
         "cannot import Frida from any of {candidates:?}; set {PYTHON_OVERRIDE_ENV} or install `frida` and `frida-tools` in the same Python environment"
-    ))
+    )
 }
 
 fn python_imports_frida(candidate: &str) -> bool {
@@ -400,26 +412,11 @@ fn run_fouldecrypt(
         })?;
     }
 
-    let local_script = write_fouldecrypt_script(work)?;
-    deploy_and_run_fouldecrypt_with(
-        req,
-        &local_script,
-        password,
-        use_password,
-        &mut remote,
-        pause,
-    )?;
+    let script = write_fouldecrypt_script(work)?;
+    deploy_and_run_script(req, &script, password, use_password, &mut remote, pause)?;
 
     let local_ipa = work.join("fouldecrypt.ipa");
-    remote(
-        scp_argv(
-            req.ssh,
-            use_password,
-            &remote_spec(req.ssh, REMOTE_OUT_IPA),
-            &local_ipa.to_string_lossy(),
-        ),
-        password,
-    )?;
+    remote(pull_ipa_argv(req.ssh, use_password, &local_ipa), password)?;
     let bytes = std::fs::read(&local_ipa)
         .map_err(|error| fouldecrypt_missing_ipa_error(&local_ipa, &error))?;
     ensure_decrypted(bytes)
@@ -439,34 +436,33 @@ fn write_fouldecrypt_script(work: &Path) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
-fn deploy_and_run_fouldecrypt_with(
+fn deploy_and_run_script(
     req: &DumpRequest,
-    local_script: &str,
+    script: &str,
     password: Option<&str>,
     use_password: bool,
     remote: &mut impl FnMut((String, Vec<String>), Option<&str>) -> Result<(), String>,
     pause: impl Fn(Duration),
 ) -> Result<(), String> {
-    remote(
-        scp_argv(
-            req.ssh,
-            use_password,
-            local_script,
-            &remote_spec(req.ssh, REMOTE_SCRIPT),
-        ),
-        password,
-    )?;
+    remote(push_script_argv(req.ssh, use_password, script), password)?;
     pause(SSH_PAUSE);
-    remote(
-        ssh_argv(
-            req.ssh,
-            use_password,
-            &remote_command(REMOTE_SCRIPT, req.bundle_id, REMOTE_OUT_IPA),
-        ),
-        password,
-    )?;
+    remote(run_script_argv(req, use_password), password)?;
     pause(SSH_PAUSE);
     Ok(())
+}
+
+fn push_script_argv(ssh: SshParams<'_>, use_password: bool, script: &str) -> (String, Vec<String>) {
+    scp_argv(ssh, use_password, script, &remote_spec(ssh, REMOTE_SCRIPT))
+}
+
+fn run_script_argv(req: &DumpRequest, use_password: bool) -> (String, Vec<String>) {
+    let command = remote_command(REMOTE_SCRIPT, req.bundle_id, REMOTE_OUT_IPA);
+    ssh_argv(req.ssh, use_password, &command)
+}
+
+fn pull_ipa_argv(ssh: SshParams<'_>, use_password: bool, local: &Path) -> (String, Vec<String>) {
+    let source = remote_spec(ssh, REMOTE_OUT_IPA);
+    scp_argv(ssh, use_password, &source, &local.to_string_lossy())
 }
 
 /// Run a prepared ssh/scp command, feeding the password through `SSHPASS` (never
@@ -840,6 +836,14 @@ mod tests {
                 .contains("cannot import Frida")
         );
         assert!(!python_imports_frida("/bin/false"));
+    }
+
+    #[test]
+    fn process_python_detection_finds_frida_or_explains_how_to_install_it() {
+        match detect_python_with_frida() {
+            Ok(python) => assert_ne!(python, ""),
+            Err(error) => assert!(error.contains("cannot import Frida")),
+        }
     }
 
     #[test]
