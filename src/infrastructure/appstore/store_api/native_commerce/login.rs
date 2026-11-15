@@ -1069,7 +1069,8 @@ mod tests {
                 1,
             )
             .await;
-        let client = super::super::bag::store_client(Arc::default()).expect("client");
+        let client = super::super::bag::store_client(Arc::new(reqwest::cookie::Jar::default()))
+            .expect("client");
         let mut sign = |_: &[u8]| Ok(Vec::new());
         let endpoint = format!("{}{AUTH_PATH}", harness.server.uri());
         let mut context = LoginContext {

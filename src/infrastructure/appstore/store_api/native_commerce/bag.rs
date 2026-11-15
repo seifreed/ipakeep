@@ -5,7 +5,6 @@
 
 use crate::domain::error::AppStoreError;
 use reqwest::Url;
-use reqwest::cookie::Jar;
 use std::sync::Arc;
 
 /// Production URL bag endpoint (`https://init.itunes.apple.com/bag.xml`).
@@ -74,15 +73,17 @@ pub fn machine_guid(hardware_id: &[u8]) -> String {
     hex::encode_upper(hardware_id)
 }
 
-/// Build the shared Store client: cookies from `jar`, redirects never followed
+/// Build the shared Store client: cookies from `cookies` (any cookie store), redirects never followed
 /// (login replays the signed POST itself), like upstream's Store transport.
 ///
 /// # Errors
 ///
 /// Returns [`AppStoreError::NetworkError`] when the client cannot be built.
-pub fn store_client(jar: Arc<Jar>) -> Result<reqwest::Client, AppStoreError> {
+pub fn store_client<C: reqwest::cookie::CookieStore + 'static>(
+    cookies: Arc<C>,
+) -> Result<reqwest::Client, AppStoreError> {
     reqwest::Client::builder()
-        .cookie_provider(jar)
+        .cookie_provider(cookies)
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| AppStoreError::NetworkError(format!("build Store client: {error}")))
@@ -349,6 +350,7 @@ fn find_ci(haystack: &[u8], needle: &[u8], last: bool) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::cookie::Jar;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
