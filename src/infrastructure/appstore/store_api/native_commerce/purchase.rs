@@ -432,6 +432,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reports_items_unavailable_under_both_pricings() {
+        let server = MockServer::start().await;
+        mount(&server, PRICING_APP_STORE, 200, failure("2059", "x")).await;
+        mount(&server, PRICING_ARCADE, 200, failure("2059", "x")).await;
+        let (result, _) = run(&server, Ok(())).await;
+        assert!(
+            matches!(result, Err(AppStoreError::PurchaseFailed(m)) if m.contains("temporarily unavailable"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_unreachable_purchase_endpoint() {
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
+        let context = PurchaseContext {
+            client: &client,
+            url: "http://127.0.0.1:1/buyProduct",
+            guid: GUID,
+        };
+        let result = purchase(&context, &account(), APP, || async { Ok(()) }).await;
+        assert!(
+            matches!(result, Err(AppStoreError::NetworkError(m)) if m.starts_with("purchase request failed"))
+        );
+    }
+
+    #[test]
+    fn reads_integer_and_string_statuses() {
+        let status = |value: plist::Value| {
+            let mut result = plist::Dictionary::new();
+            result.insert("status".into(), value);
+            purchase_status(&result)
+        };
+        assert_eq!(status(plist::Value::Integer(3.into())), 3);
+        assert_eq!(status(plist::Value::Integer(u64::MAX.into())), -1);
+        assert_eq!(status(plist::Value::String("7".into())), 7);
+        assert_eq!(status(plist::Value::String("seven".into())), -1);
+        assert_eq!(status(plist::Value::Boolean(true)), 0);
+    }
+
     #[test]
     fn classifies_upstream_failures() {
         let parse = |body: String| decode_store_plist(body.as_bytes()).expect("plist");

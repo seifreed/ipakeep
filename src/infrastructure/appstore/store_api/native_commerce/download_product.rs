@@ -515,18 +515,18 @@ where
                 "platform version lookup returned no app".into(),
             )));
         };
-        let Some(offer) = item
+        let offer = item
             .get("offers")
             .and_then(Value::as_array)
-            .and_then(|offers| offers.first())
-        else {
-            return Ok(Err(AppStoreError::VersionNotAvailable(
+            .and_then(|offers| offers.first());
+        match offer {
+            Some(offer) => offer_version_id(offer)
+                .map(Ok)
+                .map_err(VersionLookupError::Failed),
+            None => Ok(Err(AppStoreError::VersionNotAvailable(
                 "platform version lookup returned no offers".into(),
-            )));
-        };
-        offer_version_id(offer)
-            .map(Ok)
-            .map_err(VersionLookupError::Failed)
+            ))),
+        }
     }
 
     async fn ios_catalog_lookup(
@@ -1598,6 +1598,459 @@ mod tests {
                 .expect_err("failure");
             assert!(check(&error), "{error:?}");
         }
+    }
+
+    const LICENSE_NOT_FOUND: &str = "<key>failureType</key><string>9610</string>";
+
+    async fn mount_get(harness: &Harness, route: &str, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(response)
+            .mount(&harness.server)
+            .await;
+    }
+
+    fn json(body: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_string(body)
+    }
+
+    fn item_without_url() -> ResponseTemplate {
+        plist_body(
+            "<key>songList</key><array><dict><key>metadata</key><dict>\
+             <key>itemId</key><integer>42</integer>\
+             <key>softwareVersionBundleId</key><string>com.example.app</string>\
+             <key>softwareVersionExternalIdentifier</key><integer>123456789</integer>\
+             </dict></dict></array>",
+        )
+    }
+
+    async fn download_error(harness: &Harness, version: Option<&str>) -> AppStoreError {
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, version)
+            .await
+            .expect_err("download failure")
+    }
+
+    /// The app is gone from every catalog and the volume store answers empty.
+    async fn mount_delisted(harness: &Harness) {
+        mount_get(harness, PLATFORM_LOOKUP_PATH, json(r#"{"results":{}}"#)).await;
+        mount_get(harness, CATALOG_PATH, ResponseTemplate::new(404)).await;
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+    }
+
+    #[tokio::test]
+    async fn delisted_apps_use_the_kbsync_fallback_answer() {
+        let harness = Harness::new(true).await;
+        mount_delisted(&harness).await;
+        harness
+            .mount(REDOWNLOAD_PATH, plist_body(LICENSE_NOT_FOUND))
+            .await;
+        harness
+            .mount(
+                ENT_DOWNLOAD_PATH,
+                plist_body("<key>failureType</key><string>2034</string>"),
+            )
+            .await;
+        assert!(matches!(
+            download_error(&harness, None).await,
+            AppStoreError::AuthenticationFailed(_)
+        ));
+
+        let harness = Harness::new(true).await;
+        mount_delisted(&harness).await;
+        harness
+            .mount(REDOWNLOAD_PATH, plist_body(LICENSE_NOT_FOUND))
+            .await;
+        harness.mount(ENT_DOWNLOAD_PATH, success("7")).await;
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, None)
+            .await
+            .expect("ent/download fallback");
+    }
+
+    #[tokio::test]
+    async fn delisted_apps_without_a_license_report_no_license() {
+        let harness = Harness::new(true).await;
+        mount_delisted(&harness).await;
+        harness
+            .mount(REDOWNLOAD_PATH, plist_body(LICENSE_NOT_FOUND))
+            .await;
+        harness
+            .mount(ENT_DOWNLOAD_PATH, ResponseTemplate::new(500))
+            .await;
+        assert!(matches!(
+            download_error(&harness, None).await,
+            AppStoreError::NoLicense(APP_ID)
+        ));
+
+        let harness = Harness::new(false).await;
+        mount_delisted(&harness).await;
+        harness
+            .mount(REDOWNLOAD_PATH, plist_body(LICENSE_NOT_FOUND))
+            .await;
+        assert!(matches!(
+            download_error(&harness, None).await,
+            AppStoreError::NoLicense(APP_ID)
+        ));
+    }
+
+    #[tokio::test]
+    async fn delisted_apps_report_both_failed_fallbacks() {
+        let harness = Harness::new(true).await;
+        mount_delisted(&harness).await;
+        harness.mount(REDOWNLOAD_PATH, item_without_url()).await;
+        harness
+            .mount(ENT_DOWNLOAD_PATH, ResponseTemplate::new(500))
+            .await;
+        let error = download_error(&harness, None).await;
+        assert!(
+            matches!(&error, AppStoreError::DownloadFailed(m)
+                if m.contains("has no offer") && m.contains("redownload response has no package URL")),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_ent_download_endpoints() {
+        let mut harness = Harness::new(true).await;
+        harness.bag.volume_store_download_product = Some("https://evil.example/ent".into());
+        mount_delisted(&harness).await;
+        harness
+            .mount(REDOWNLOAD_PATH, plist_body(LICENSE_NOT_FOUND))
+            .await;
+        assert!(matches!(
+            download_error(&harness, None).await,
+            AppStoreError::Unexpected(m) if m == "invalid download endpoint in bag"
+        ));
+    }
+
+    #[tokio::test]
+    async fn pins_the_latest_version_on_redownload() {
+        let harness = Harness::new(false).await;
+        mount_get(
+            &harness,
+            PLATFORM_LOOKUP_PATH,
+            json(r#"{"results":{"42":{"offers":[{"version":{"externalId":123456789}}]}}}"#),
+        )
+        .await;
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+        harness.mount(REDOWNLOAD_PATH, success(VERSION)).await;
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, None)
+            .await
+            .expect("download");
+        let requests = harness.commerce_requests().await;
+        assert_eq!(
+            body(&requests[1]).get("appExtVrsId"),
+            Some(&plist::Value::from(VERSION))
+        );
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_ios_catalog_for_the_latest_version() {
+        let harness = Harness::new(false).await;
+        mount_get(
+            &harness,
+            PLATFORM_LOOKUP_PATH,
+            json(r#"{"results":{"42":{"offers":[]}}}"#),
+        )
+        .await;
+        mount_get(
+            &harness,
+            CATALOG_PATH,
+            json(
+                r#"{"data":[{"id":"42","type":"apps","attributes":{"deviceFamilies":["iphone"],"platformAttributes":{"ios":{"externalVersionId":88}}}}]}"#,
+            ),
+        )
+        .await;
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+        harness.mount(REDOWNLOAD_PATH, success("88")).await;
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, None)
+            .await
+            .expect("download");
+        let requests = harness.commerce_requests().await;
+        assert_eq!(
+            body(&requests[1]).get("appExtVrsId"),
+            Some(&plist::Value::from("88"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_failed_version_lookups() {
+        for (platform, catalog, expected) in [
+            (
+                ResponseTemplate::new(500).set_body_string("{}"),
+                ResponseTemplate::new(404),
+                "platform version lookup request failed (HTTP 500)",
+            ),
+            (
+                json("not json"),
+                ResponseTemplate::new(404),
+                "failed to unmarshal json",
+            ),
+            (
+                json(r#"{"results":{}}"#),
+                ResponseTemplate::new(500).set_body_string("{}"),
+                "iOS catalog lookup returned HTTP 500",
+            ),
+        ] {
+            let harness = Harness::new(false).await;
+            mount_get(&harness, PLATFORM_LOOKUP_PATH, platform).await;
+            mount_get(&harness, CATALOG_PATH, catalog).await;
+            harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+            let message = download_error(&harness, None).await.to_string();
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_empty_volume_answers_without_a_redownload_endpoint() {
+        let mut harness = Harness::new(false).await;
+        harness.bag.redownload_product = None;
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::Unexpected(m) if m == "invalid download response"
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_an_invalid_update_endpoint() {
+        let mut harness = Harness::new(false).await;
+        harness.bag.update_product = Some("https://evil.example/up".into());
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+        harness
+            .mount(REDOWNLOAD_PATH, ResponseTemplate::new(500))
+            .await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::Unexpected(m) if m == "invalid download endpoint in bag"
+        ));
+    }
+
+    #[tokio::test]
+    async fn validates_update_product_answers() {
+        for (update, expected) in [
+            (
+                plist_body("<key>failureType</key><string>2059</string>"),
+                "received error: 2059",
+            ),
+            (
+                plist_body("<key>customerMessage</key><string>Nope</string>"),
+                "received update error: Nope",
+            ),
+            (
+                ResponseTemplate::new(201).set_body_string(
+                    r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict></dict></plist>"#,
+                ),
+                "received unexpected update status code: 201",
+            ),
+            (
+                plist_body("<key>songList</key><array></array>"),
+                "update response must contain exactly one item",
+            ),
+            (
+                success("999"),
+                "update response does not match the requested app or version",
+            ),
+        ] {
+            let harness = Harness::new(false).await;
+            harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+            harness
+                .mount(
+                    REDOWNLOAD_PATH,
+                    plist_body(
+                        "<key>customerMessage</key><string>This app is no longer available</string>",
+                    ),
+                )
+                .await;
+            harness.mount(UPDATE_PRODUCT_PATH, update).await;
+            let message = download_error(&harness, Some(VERSION)).await.to_string();
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_to_send_the_amd_proof_to_unknown_pods() {
+        let harness = Harness::new(false).await;
+        let mut account = account();
+        account.pod = "x".into();
+        let error = harness
+            .downloader()
+            .download(&account, APP_ID, GUID, Some(VERSION))
+            .await
+            .expect_err("pod");
+        assert!(matches!(error, AppStoreError::Unexpected(m) if m.contains("not allowlisted")));
+    }
+
+    #[tokio::test]
+    async fn skips_ent_download_without_a_numeric_dsid() {
+        let harness = Harness::new(true).await;
+        harness.mount(VOLUME_STORE_PATH, success(VERSION)).await;
+        let mut account = account();
+        account.directory_services_id = "not-a-dsid".into();
+        harness
+            .downloader()
+            .download(&account, APP_ID, GUID, Some(VERSION))
+            .await
+            .expect("volume store download");
+        let requests = harness.commerce_requests().await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].url.path(), VOLUME_STORE_PATH);
+    }
+
+    #[tokio::test]
+    async fn skips_ent_download_when_kbsync_generation_is_empty() {
+        let harness = Harness::new(true).await;
+        harness.mount(VOLUME_STORE_PATH, success(VERSION)).await;
+        let downloader = NativeDownloader::new(
+            &harness.client,
+            &harness.bag,
+            &harness.storefronts,
+            &harness.cache,
+            |_| Ok(Vec::new()),
+            || Ok(("amd-otp".to_string(), "amd-mid".to_string())),
+        )
+        .with_origin(harness.server.uri());
+        downloader
+            .download(&account(), APP_ID, GUID, Some(VERSION))
+            .await
+            .expect("volume store download");
+        assert_eq!(harness.commerce_requests().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reuses_a_cached_kbsync_that_still_works() {
+        let harness = Harness::new(true).await;
+        harness.cache.store(DSID, GUID, "Y2FjaGVk");
+        harness.mount(ENT_DOWNLOAD_PATH, success(VERSION)).await;
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, Some(VERSION))
+            .await
+            .expect("download");
+        assert_eq!(harness.generated.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn falls_back_when_ent_download_has_no_package_url() {
+        let harness = Harness::new(true).await;
+        harness.mount(ENT_DOWNLOAD_PATH, item_without_url()).await;
+        harness.mount(VOLUME_STORE_PATH, success(VERSION)).await;
+        harness
+            .downloader()
+            .download(&account(), APP_ID, GUID, Some(VERSION))
+            .await
+            .expect("download");
+        assert_eq!(harness.cache.cached(DSID, GUID), None);
+    }
+
+    #[tokio::test]
+    async fn reports_rate_limits_redirects_and_unreachable_stores() {
+        let harness = Harness::new(false).await;
+        harness
+            .mount(
+                VOLUME_STORE_PATH,
+                ResponseTemplate::new(429).set_body_string(" slow down "),
+            )
+            .await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::NetworkError(m) if m == "rate limited by Apple (HTTP 429): slow down"
+        ));
+
+        let harness = Harness::new(false).await;
+        harness
+            .mount(VOLUME_STORE_PATH, ResponseTemplate::new(302))
+            .await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::Unexpected(m) if m == "invalid download response"
+        ));
+
+        let harness = Harness::new(false).await;
+        let error = harness
+            .downloader()
+            .with_origin("http://127.0.0.1:1".into())
+            .download(&account(), APP_ID, GUID, Some(VERSION))
+            .await
+            .expect_err("unreachable");
+        assert!(
+            matches!(error, AppStoreError::NetworkError(m) if m.starts_with("send Store commerce request:"))
+        );
+    }
+
+    #[tokio::test]
+    async fn leaves_versions_unlabelled_when_the_catalog_lookup_fails() {
+        let harness = Harness::new(false).await;
+        harness.mount(VOLUME_STORE_PATH, success(VERSION)).await;
+        mount_get(
+            &harness,
+            "/lookup",
+            ResponseTemplate::new(500).set_body_string("{}"),
+        )
+        .await;
+        let versions = harness
+            .downloader()
+            .list_versions(&account(), APP_ID, GUID)
+            .await
+            .expect("versions");
+        assert!(versions.iter().all(|v| v.version_string.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn rewrites_only_parseable_urls_to_the_test_origin() {
+        let harness = Harness::new(false).await;
+        let downloader = NativeDownloader::new(
+            &harness.client,
+            &harness.bag,
+            &harness.storefronts,
+            &harness.cache,
+            |_| Ok(Vec::new()),
+            || Ok((String::new(), String::new())),
+        );
+        assert_eq!(downloader.wire_url(UPDATE_URL), UPDATE_URL);
+        let rerouted = downloader.with_origin("http://origin".into());
+        assert_eq!(rerouted.wire_url("not a url"), "not a url");
+        assert_eq!(
+            rerouted.wire_url(&format!("{UPDATE_URL}?guid=A")),
+            "http://origin/up/updateProduct?guid=A"
+        );
+    }
+
+    #[test]
+    fn rejects_unparseable_commerce_urls_and_non_object_bodies() {
+        assert!(!is_store_amd_commerce_url("not a url"));
+        let mut body = Value::Null;
+        normalize_failure(&mut body);
+        assert_eq!(body, Value::Null);
+    }
+
+    #[test]
+    fn rejects_catalog_entries_without_ios_metadata_or_version() {
+        let entry = |families: Value, version: Value| {
+            serde_json::json!({"data": [{"id": "42", "type": "apps", "attributes": {
+                "deviceFamilies": families,
+                "platformAttributes": {"ios": {"externalVersionId": version}}}}]})
+        };
+        let message = |body: Value| {
+            catalog_version_id(&body, 42)
+                .expect_err("catalog")
+                .to_string()
+        };
+        assert!(
+            message(entry(serde_json::json!(["mac"]), serde_json::json!(88)))
+                .contains("returned no metadata for the requested platform")
+        );
+        assert!(
+            message(entry(serde_json::json!(["iphone"]), serde_json::json!(0)))
+                .contains("returned no valid external version id")
+        );
     }
 
     #[test]

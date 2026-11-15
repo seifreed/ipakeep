@@ -575,6 +575,56 @@ mod tests {
         assert!(decode_store_plist(b"").is_err());
     }
     #[test]
+    fn rejects_non_https_sap_endpoints() {
+        let xml = bag_xml(AUTH, "200").replace(SETUP, "http://fpinit.example.com/setup");
+        assert!(matches!(
+            parse(&xml),
+            Err(AppStoreError::Unexpected(m)) if m.starts_with("invalid SAP setup endpoint")
+        ));
+    }
+
+    #[test]
+    fn accepts_only_native_authentication_paths_on_the_auth_host() {
+        let native = "https://auth.itunes.apple.com/auth/v1/native/fast";
+        assert_eq!(
+            validate_authentication_endpoint(native)
+                .expect("native")
+                .as_str(),
+            native
+        );
+        assert!(validate_authentication_endpoint("https://auth.itunes.apple.com/auth/v2").is_err());
+    }
+
+    #[test]
+    fn decodes_binary_store_plists() {
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert("status".into(), plist::Value::Integer(0.into()));
+        let mut binary = Vec::new();
+        plist::to_writer_binary(&mut binary, &dictionary).expect("binary plist");
+        assert_eq!(decode_store_plist(&binary).expect("decode"), dictionary);
+    }
+
+    #[test]
+    fn encodes_arrays_reals_and_data_and_skips_dates() {
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert(
+            "list".into(),
+            plist::Value::Array(vec![plist::Value::from("a"), plist::Value::Real(1.5)]),
+        );
+        dictionary.insert("blob".into(), plist::Value::Data(b"hi".to_vec()));
+        dictionary.insert(
+            "when".into(),
+            plist::Value::Date(std::time::SystemTime::UNIX_EPOCH.into()),
+        );
+        let encoded = String::from_utf8(encode_request_plist(&dictionary)).expect("utf8");
+        assert!(encoded.ends_with(
+            "<plist version=\"1.0\"><dict><key>list</key><array><string>a</string>\
+             <real>1.5</real></array><key>blob</key><data>aGk=</data><key>when</key>\
+             </dict></plist>"
+        ));
+    }
+
+    #[test]
     fn encodes_request_plists_in_the_wire_layout() {
         let mut nested = plist::Dictionary::new();
         nested.insert("free".into(), plist::Value::from("always"));

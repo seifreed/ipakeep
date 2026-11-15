@@ -489,6 +489,63 @@ pub(super) mod tests {
         assert!(parse_available_storefronts(&available_plist(&[]).into_bytes()).is_err());
     }
 
+    #[test]
+    fn default_resolver_targets_apple() {
+        let resolver = StorefrontResolver::new(reqwest::Client::new());
+        assert_eq!(resolver.available_url, AVAILABLE_STOREFRONTS_URL);
+        assert_eq!(resolver.genre_url, STOREFRONT_GENRE_URL);
+    }
+
+    #[test]
+    fn rejects_undecodable_tables_and_empty_ranges() {
+        assert!(matches!(
+            parse_available_storefronts(b"not a plist"),
+            Err(AppStoreError::Unexpected(m)) if m.starts_with("failed to decode available storefronts")
+        ));
+        assert!(missing_identifiers(&HashMap::new()).is_err());
+    }
+
+    #[tokio::test]
+    async fn ignores_genre_pages_for_another_store_front() {
+        let server = MockServer::start().await;
+        mount_available(&server, &[(143_441, "US")]).await;
+        Mock::given(path(GENRE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_string(genre_page("1", "DE")))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            resolver(&server).country_code("143442").await,
+            Err(AppStoreError::Unexpected(m)) if m.contains("143442")
+        ));
+    }
+
+    #[tokio::test]
+    async fn reports_genre_page_failures() {
+        let server = MockServer::start().await;
+        mount_available(&server, &[(143_441, "US")]).await;
+        Mock::given(path(GENRE_PATH))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        assert!(matches!(
+            resolver(&server).country_code("143442").await,
+            Err(AppStoreError::NetworkError(m)) if m.contains("HTTP 500")
+        ));
+    }
+
+    #[tokio::test]
+    async fn reports_unreachable_storefront_endpoints() {
+        let resolver = StorefrontResolver::with_urls(
+            reqwest::Client::new(),
+            "http://127.0.0.1:1/available",
+            "http://127.0.0.1:1/genre",
+        );
+        assert!(matches!(
+            resolver.country_code("143441").await,
+            Err(AppStoreError::NetworkError(m)) if m.starts_with("available storefronts request failed:")
+        ));
+    }
+
     #[tokio::test]
     async fn reports_available_table_failures() {
         let server = MockServer::start().await;

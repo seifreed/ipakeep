@@ -193,4 +193,36 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn responses_without_cookies_leave_the_jar_untouched() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(STORE_COOKIES_FILE);
+        let cookies = PersistentCookies::load(path.clone());
+
+        cookies.set_cookies(&mut std::iter::empty(), &apple_url());
+
+        assert!(cookies.cookies(&apple_url()).is_none());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn unwritable_jar_keeps_cookies_in_memory_and_reports_save_errors() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let blocker = directory.path().join("file");
+        std::fs::write(&blocker, b"x").expect("blocker file");
+        let cookies = PersistentCookies::load(blocker.join(STORE_COOKIES_FILE));
+
+        set(&cookies, "itspod=48; Path=/");
+
+        assert_eq!(
+            cookies.cookies(&apple_url()).expect("cookie header"),
+            "itspod=48"
+        );
+        let error = cookies.save().expect_err("parent is a file");
+        assert!(matches!(
+            error,
+            AppStoreError::Unexpected(message) if message.starts_with("save Store cookies: ")
+        ));
+    }
 }

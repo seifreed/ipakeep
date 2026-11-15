@@ -644,7 +644,8 @@ async fn send_with_retries(
     at_pod: bool,
 ) -> Result<AuthResponse, AppStoreError> {
     let mut outcomes = Vec::new();
-    for attempt in 1..=MAX_REQUEST_ATTEMPTS {
+    let mut attempt = 1;
+    loop {
         let failure = match send_once(context, url, body).await? {
             Ok(response) => return Ok(response),
             Err(failure) => failure,
@@ -662,10 +663,8 @@ async fn send_with_retries(
             return Err(exhausted(&outcomes, &failure.error, at_pod));
         }
         tokio::time::sleep(retry_delay(attempt, failure.retry_after.as_deref())?).await;
+        attempt += 1;
     }
-    Err(AppStoreError::AuthenticationFailed(
-        "authentication request failed".into(),
-    ))
 }
 
 fn exhausted(outcomes: &[String], error: &AppStoreError, at_pod: bool) -> AppStoreError {
@@ -1208,6 +1207,324 @@ mod tests {
             Some("dev")
         );
         assert_eq!(header_of(&requests[2], "X-Mme-Device-Id"), None);
+    }
+
+    fn action(name: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .insert_header(HEADER_AMD_ACTION, name)
+            .set_body_string(plist_body(""))
+    }
+
+    async fn failure_message(harness: &Harness) -> String {
+        harness
+            .login(None, HashMap::new())
+            .await
+            .expect_err("sign-in failure")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn rejects_repeated_or_unknown_machine_actions() {
+        let harness = Harness::new().await;
+        harness.respond(AUTH_PATH, action("RP"), 2).await;
+        assert!(
+            failure_message(&harness)
+                .await
+                .contains("apple requested an authentication machine action: RP")
+        );
+        let harness = Harness::new().await;
+        harness.respond(AUTH_PATH, action("SP"), 2).await;
+        let error = harness
+            .login_with(None, HashMap::new(), |_| async { Ok(HashMap::new()) })
+            .await
+            .expect_err("second SP");
+        assert!(error.to_string().contains("machine action: SP"));
+    }
+
+    #[tokio::test]
+    async fn gives_up_after_too_many_redirects() {
+        let harness = Harness::new().await;
+        let back = format!("{}{AUTH_PATH}", harness.server.uri());
+        harness
+            .respond(
+                AUTH_PATH,
+                ResponseTemplate::new(302).insert_header("Location", back.as_str()),
+                u64::MAX,
+            )
+            .await;
+        assert!(
+            failure_message(&harness)
+                .await
+                .contains("too many authentication redirects (HTTP 302)")
+        );
+        assert_eq!(harness.requests().await.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn rejects_unusable_redirects() {
+        for (response, expected) in [
+            (
+                ResponseTemplate::new(303),
+                "failed to retrieve redirect location (HTTP 303) [destination: invalid URL]",
+            ),
+            (
+                ResponseTemplate::new(303).insert_header("Location", "/pod"),
+                "unsupported authentication redirect status (HTTP 303)",
+            ),
+            (
+                ResponseTemplate::new(302).insert_header("Location", "http://[::1"),
+                "invalid authentication redirect location (HTTP 302) [destination: invalid URL]",
+            ),
+            (
+                ResponseTemplate::new(302),
+                "authentication redirect is missing Location",
+            ),
+        ] {
+            let harness = Harness::new().await;
+            harness.respond(AUTH_PATH, response, 1).await;
+            let message = failure_message(&harness).await;
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn surfaces_dialogs_and_unusable_success_responses() {
+        for (body, expected) in [
+            (
+                "<key>dialog</key><dict><key>message</key><string>Locked.</string></dict>",
+                "Locked.",
+            ),
+            (
+                "<key>status</key><integer>0</integer>",
+                "apple returned no usable authentication response (HTTP 200)",
+            ),
+            (
+                "<key>failureType</key><string>9999</string>",
+                "something went wrong",
+            ),
+            (
+                "<key>failureType</key><string>9999</string>\
+                 <key>customerMessage</key><string>Custom failure</string>",
+                "Custom failure",
+            ),
+        ] {
+            let harness = Harness::new().await;
+            harness
+                .respond(
+                    AUTH_PATH,
+                    ResponseTemplate::new(200).set_body_string(plist_body(body)),
+                    1,
+                )
+                .await;
+            let message = failure_message(&harness).await;
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    fn dialog(entries: &str, extra: &str) -> Option<String> {
+        let body = plist_body(&format!("<key>dialog</key><dict>{entries}</dict>{extra}"));
+        dialog_error(&decode_store_plist(body.as_bytes()).expect("dialog"))
+    }
+
+    #[test]
+    fn formats_partial_dialogs() {
+        assert_eq!(dialog("", ""), None);
+        assert_eq!(
+            dialog("<key>okButtonString</key><string>OK</string>", ""),
+            None
+        );
+        assert_eq!(
+            dialog(
+                "<key>okButtonString</key><string>OK</string>",
+                "<key>customerMessage</key><string>Fallback</string>"
+            )
+            .as_deref(),
+            Some("Fallback")
+        );
+        assert_eq!(
+            dialog(
+                "<key>okButtonAction</key><dict><key>kind</key><string>OpenURL</string>\
+                 <key>url</key><string>https://support.apple.com/x</string></dict>",
+                ""
+            )
+            .as_deref(),
+            Some(
+                "Apple requires action before sign-in can continue (Continue: https://support.apple.com/x)"
+            )
+        );
+        assert_eq!(
+            dialog(
+                "<key>okButtonAction</key><dict><key>url</key><string>https://support.apple.com/x</string></dict>",
+                ""
+            ),
+            None
+        );
+    }
+
+    fn response_with(headers: &[(&'static str, &'static str)]) -> AuthResponse {
+        let mut map = HeaderMap::new();
+        for (name, value) in headers {
+            map.append(*name, value.parse().expect("header value"));
+        }
+        AuthResponse {
+            status: StatusCode::OK,
+            headers: map,
+            body: plist::Dictionary::new(),
+        }
+    }
+
+    #[test]
+    fn falls_back_to_header_and_cookie_dsids() {
+        let dsid = |headers: &[(&'static str, &'static str)]| {
+            account_from(&response_with(headers), EMAIL, Vec::new())
+                .map(|account| account.directory_services_id)
+        };
+        assert_eq!(
+            dsid(&[(HEADER_STORE_FRONT, "143441-1,29"), ("X-Dsid", "11")]).ok(),
+            Some("11".into())
+        );
+        assert_eq!(
+            dsid(&[
+                (HEADER_REQUEST_STORE_FRONT, "143441-1,29"),
+                ("Set-Cookie", "other=1"),
+                ("Set-Cookie", "mz_at0-22=x; Path=/"),
+            ])
+            .ok(),
+            Some("22".into())
+        );
+        assert!(matches!(
+            dsid(&[(HEADER_STORE_FRONT, "143441-1,29")]),
+            Err(AppStoreError::AuthenticationFailed(m)) if m.contains("directory services identifier")
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reports_exhausted_retries_at_the_pod_and_rate_limits() {
+        let harness = Harness::new().await;
+        let pod = format!("{}/pod42/authenticate", harness.server.uri());
+        harness
+            .respond(
+                AUTH_PATH,
+                ResponseTemplate::new(302).insert_header("Location", pod.as_str()),
+                1,
+            )
+            .await;
+        harness
+            .respond(
+                "/pod42/authenticate",
+                ResponseTemplate::new(429).insert_header("Retry-After", "1"),
+                3,
+            )
+            .await;
+        let message = failure_message(&harness).await;
+        assert!(message.contains("sign-in at Store pod: authentication request failed after 3 attempts (HTTP 429, HTTP 429, HTTP 429)"), "{message}");
+        assert!(message.contains("apple rate limited authentication"));
+        assert!(message.contains("rate limited by Apple"));
+    }
+
+    async fn login_at(client: &reqwest::Client, endpoint: &str) -> Result<Account, AppStoreError> {
+        let mut sign = |_: &[u8]| Ok(Vec::new());
+        let mut context = LoginContext {
+            client,
+            endpoint,
+            guid: GUID,
+            sign: &mut sign,
+            machine_headers: HashMap::new(),
+            storefront_hint: None,
+            validate_redirect: permissive,
+        };
+        let credentials = Credentials {
+            email: EMAIL,
+            password: PASSWORD,
+            auth_code: None,
+        };
+        login(&mut context, credentials, |_| async { Ok(HashMap::new()) }).await
+    }
+
+    /// Answers every connection with `reply`, then closes it (with a TCP
+    /// reset when `reset` is set).
+    async fn raw_server(reply: &'static [u8], reset: bool) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![0; 64 * 1024];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(reply).await;
+                if reset {
+                    let _ = stream.set_zero_linger();
+                }
+            }
+        });
+        format!("http://{address}{AUTH_PATH}")
+    }
+
+    fn plain_client() -> reqwest::Client {
+        crate::infrastructure::http::client_builder()
+            .build()
+            .expect("client")
+    }
+
+    #[tokio::test]
+    async fn refused_connections_fail_without_retrying() {
+        let error = login_at(&plain_client(), "http://127.0.0.1:1/authenticate")
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(error, AppStoreError::NetworkError(m) if m.starts_with("authentication request failed"))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_connection_resets() {
+        let endpoint = raw_server(b"", true).await;
+        let error = login_at(&plain_client(), &endpoint)
+            .await
+            .expect_err("reset");
+        assert!(
+            error
+                .to_string()
+                .contains("after 3 attempts (transport error, transport error, transport error)"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_truncated_bodies() {
+        let endpoint =
+            raw_server(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc", false).await;
+        let error = login_at(&plain_client(), &endpoint)
+            .await
+            .expect_err("truncated");
+        assert!(
+            error.to_string().contains("authentication request failed"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_timeouts() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
+        let client = crate::infrastructure::http::client_builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .expect("client");
+        let error = login_at(&client, &format!("{}{AUTH_PATH}", server.uri()))
+            .await
+            .expect_err("timeout");
+        assert!(
+            error
+                .to_string()
+                .contains("after 3 attempts (transport error"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -51,7 +51,11 @@ impl KbsyncCache {
     /// Returns [`AppStoreError::NetworkError`] when the platform has no user
     /// config directory.
     pub fn in_config_directory() -> Result<Self, AppStoreError> {
-        let directory = dirs::config_dir().ok_or_else(|| {
+        Self::in_directory(dirs::config_dir())
+    }
+
+    fn in_directory(config_directory: Option<PathBuf>) -> Result<Self, AppStoreError> {
+        let directory = config_directory.ok_or_else(|| {
             AppStoreError::NetworkError("cannot find user config directory".into())
         })?;
         Ok(Self::new(
@@ -226,6 +230,41 @@ mod tests {
         std::fs::write(&blocker, b"x").expect("write");
         let cache = KbsyncCache::new(blocker.join("kbsync-v1.json"));
         cache.store(7, GUID, BLOB);
+        assert_eq!(cache.cached(7, GUID).as_deref(), Some(BLOB));
+    }
+
+    #[test]
+    fn lives_in_the_ipakeep_config_directory() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let cache = KbsyncCache::in_directory(Some(directory.path().to_path_buf())).expect("cache");
+        assert_eq!(
+            cache.path,
+            directory.path().join("ipakeep").join("kbsync-v1.json")
+        );
+        assert!(KbsyncCache::in_config_directory().is_ok());
+        assert!(matches!(
+            KbsyncCache::in_directory(None),
+            Err(AppStoreError::NetworkError(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_working_when_the_rejected_file_cannot_be_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let cache = cache_in(&directory);
+        cache.store(7, GUID, BLOB);
+        let parent = directory.path().join("ipakeep");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500))
+            .expect("read-only directory");
+
+        cache.invalidate(7, GUID, BLOB);
+        let file_kept = parent.join("kbsync-v1.json").exists();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
+            .expect("restore directory");
+
+        assert!(file_kept);
         assert_eq!(cache.cached(7, GUID).as_deref(), Some(BLOB));
     }
 }

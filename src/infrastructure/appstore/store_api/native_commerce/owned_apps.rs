@@ -490,12 +490,16 @@ fn absorb(target: &mut PurchaseRecord, record: PurchaseRecord) {
 
 /// Newest first; records without a date last; stable for ties.
 fn sort_by_purchase_date(records: &mut [PurchaseRecord]) {
-    records.sort_by(|left, right| match (left.purchased, right.purchased) {
+    records.sort_by(newest_first);
+}
+
+fn newest_first(left: &PurchaseRecord, right: &PurchaseRecord) -> std::cmp::Ordering {
+    match (left.purchased, right.purchased) {
         (Some(left), Some(right)) => right.cmp(&left),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
-    });
+    }
 }
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -774,6 +778,123 @@ mod tests {
             .expect_err("401");
         assert!(
             matches!(error, AppStoreError::AuthenticationFailed(message) if message.contains("HTTP 401"))
+        );
+    }
+
+    async fn mount_bodies(server: &MockServer, update: Vec<u8>, items: Vec<u8>) {
+        let routes = [
+            (
+                "/login".to_string(),
+                daap::tag(b"mlog", &daap::uint32(b"mlid", SESSION)),
+            ),
+            ("/update".to_string(), update),
+            (format!("/databases/{REVISION}/items"), items),
+        ];
+        for (route, body) in routes {
+            Mock::given(method("POST"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(body))
+                .mount(server)
+                .await;
+        }
+    }
+
+    async fn unexpected_message(update: Vec<u8>, items: Vec<u8>) -> String {
+        let server = MockServer::start().await;
+        mount_bodies(&server, update, items).await;
+        match run(&server, &Arc::new(Mutex::new(Vec::new())), 0).await {
+            Err(AppStoreError::Unexpected(message)) => message,
+            other => panic!("expected an unexpected-response error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reports_malformed_daap_responses() {
+        let update = daap::tag(b"mupd", &daap::uint32(b"musr", REVISION));
+        let truncated = b"mupd\0\0\0\x10".to_vec();
+        assert!(
+            unexpected_message(truncated.clone(), Vec::new())
+                .await
+                .starts_with("failed to parse purchase history update response")
+        );
+        assert!(
+            unexpected_message(daap::tag(b"mupd", &[]), Vec::new())
+                .await
+                .contains("did not contain a valid revision")
+        );
+        assert!(
+            unexpected_message(daap::tag(b"mupd", &daap::tag(b"musr", &[0, 1])), Vec::new())
+                .await
+                .starts_with("failed to parse purchase history update response")
+        );
+        let bad_item = daap::tag(b"mlit", &daap::tag(b"asdp", &[1, 2, 3]));
+        assert!(
+            unexpected_message(update.clone(), listing(&[bad_item]))
+                .await
+                .starts_with("failed to parse purchase history items response")
+        );
+        assert!(
+            unexpected_message(update, truncated)
+                .await
+                .starts_with("failed to parse purchase history items response")
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_unexpected_http_statuses() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let error = run(&server, &Arc::new(Mutex::new(Vec::new())), 0)
+            .await
+            .expect_err("500");
+        assert!(
+            matches!(error, AppStoreError::Unexpected(message) if message.ends_with("request returned HTTP 500"))
+        );
+    }
+
+    #[test]
+    fn clock_reports_the_current_utc_time() {
+        let clock = DaapClock::now_utc();
+        assert!(clock.unix_seconds > NOW);
+        assert_eq!(clock.utc_offset_minutes, 0);
+        assert_eq!(clock.time_zone, "Local");
+    }
+
+    #[test]
+    fn falls_back_to_the_item_name_and_validates_app_ids() {
+        let item = [
+            daap::uint32(b"aeSI", 7),
+            daap::string(b"minm", "Fallback"),
+            daap::string(b"minm", "Ignored"),
+        ]
+        .concat();
+        assert_eq!(parse_purchase(&item).expect("parse").name, "Fallback");
+        let length = parse_purchase(&daap::tag(b"aeSI", &[0, 1])).expect_err("length");
+        assert!(length.to_string().contains("invalid integer length 2"));
+        let wide = parse_purchase(&daap::tag(b"aeSI", &u64::MAX.to_be_bytes())).expect_err("wide");
+        assert!(wide.to_string().contains("integer exceeds int64"));
+    }
+
+    #[test]
+    fn sorts_undated_records_after_dated_ones() {
+        let record = |id, purchased| PurchaseRecord {
+            id,
+            purchased,
+            ..PurchaseRecord::default()
+        };
+        let mut records = vec![record(1, None), record(2, Some(10))];
+        sort_by_purchase_date(&mut records);
+        assert_eq!(records.iter().map(|r| r.id).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!(
+            newest_first(&record(1, None), &record(2, Some(10))),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            newest_first(&record(2, Some(10)), &record(1, None)),
+            std::cmp::Ordering::Less
         );
     }
 
