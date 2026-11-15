@@ -147,8 +147,10 @@ where
         }
     }
 
-    #[cfg(test)]
-    fn with_origin(mut self, origin: String) -> Self {
+    /// Route every Store request to `origin` (tests/proxies), keeping the
+    /// Apple URL for endpoint validation.
+    #[must_use]
+    pub fn with_origin(mut self, origin: String) -> Self {
         self.origin = Some(origin);
         self
     }

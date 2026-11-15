@@ -47,8 +47,10 @@ impl StorefrontResolver {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn with_urls(client: reqwest::Client, available_url: &str, genre_url: &str) -> Self {
+    /// Resolver against custom `availableStoreFronts` and genre page URLs
+    /// (tests/proxies). `client` must not follow redirects.
+    #[must_use]
+    pub fn with_urls(client: reqwest::Client, available_url: &str, genre_url: &str) -> Self {
         Self {
             client,
             available_url: available_url.to_string(),
