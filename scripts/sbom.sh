@@ -10,6 +10,7 @@ go_bom="$tmp/modern-anisette.cdx.json"
 go_binary="$tmp/ipakeep-anisette-helper"
 go_toolchain="go$(awk '$1 == "go" { print $2; exit }' "$root/tools/modern-anisette/go.mod")"
 go_binary_hash="$tmp/go-binary.sha256"
+xz_license_file="$tmp/xz-LICENSE"
 go_hashes="$tmp/go-module-hashes.tsv"
 go_licenses="$tmp/go-module-licenses.tsv"
 go_graph="$tmp/go-module-graph.txt"
@@ -40,6 +41,8 @@ mkdir -p "$(dirname "$out")"
 syft "file:$go_binary" -o cyclonedx-json > "$go_bom"
 hash_file "$go_binary" > "$go_binary_hash"
 (cd "$root/tools/modern-anisette" && GOTOOLCHAIN="$go_toolchain" go mod graph) > "$go_graph"
+xz_module_dir="$(cd "$root/tools/modern-anisette" && GOTOOLCHAIN="$go_toolchain" go list -m -f '{{.Dir}}' github.com/xi2/xz)"
+cp "$xz_module_dir/LICENSE" "$xz_license_file"
 
 # Go's h1 checksums are base64-encoded SHA-256 hashes of module file trees.
 : > "$go_hashes"
@@ -62,6 +65,7 @@ jq \
     --arg go_binary_hash "$go_binary_hash" \
     --arg contact_email "mriverolopez@gmail.com" \
     --slurpfile go_bom "$go_bom" \
+    --rawfile xz_license "$xz_license_file" \
     --rawfile go_hashes "$go_hashes" \
     --rawfile go_licenses "$go_licenses" \
     --rawfile go_graph "$go_graph" \
@@ -124,7 +128,12 @@ jq \
                 url: .url
               }}
             elif .id == "XZ" then
-              {license: {name: "Public domain dedication", url: .url}}
+              {expression: "LicenseRef-XZ-Public-Domain",
+                expressionDetails: [{
+                  licenseIdentifier: "LicenseRef-XZ-Public-Domain",
+                  url: .url,
+                  text: {content: $xz_license}
+                }]}
             else
               {license: {id: .id, url: .url}}
             end
@@ -139,6 +148,7 @@ jq \
       if (.purl // "") | startswith("pkg:golang/") then
         . as $component
         | .name as $name
+        | [go_license_rows($name)[] | .[2] | select(startswith("http"))] | unique as $license_urls
         | ([go_license_rows($name)[] | .[2]
             | try capture("^https?://github\\.com/(?<repo>[^/]+/[^/]+)/blob/").repo catch empty
             | "https://github.com/" + .]
@@ -149,6 +159,7 @@ jq \
         | $component
         | .externalReferences = ((.externalReferences // [])
             + ($vcs_urls | map({type: "vcs", url: .}))
+            + ($license_urls | map({type: "license", url: .}))
             + [{type: "website", url: (if $name == "stdlib" then "https://pkg.go.dev/std" else "https://pkg.go.dev/" + $name end)}]
             | unique_by([.type, .url]))
       else . end;

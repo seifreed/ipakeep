@@ -3,7 +3,7 @@
   "specVersion": "1.7",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T08:47:14.000000000Z",
+    "timestamp": "2026-11-15T08:53:20.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -172,11 +172,11 @@
       "hashes": [
         {
           "alg": "SHA-1",
-          "content": "943b1a5d88c54c83ec39411150c7e32284a4e230"
+          "content": "09acaf3716e7ee67042c497bea7b5b190b52a5be"
         },
         {
           "alg": "SHA-256",
-          "content": "e6e62312132cad31e75adca38c9ad2a1cd23557442b9faa4c28d74f4fc6d151b"
+          "content": "7f22d0e693af5ef3076012e55e3653ad8d28bbb04b06d635349469c59e486a2d"
         }
       ],
       "supplier": {
@@ -12125,6 +12125,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/1Password/connect-sdk-go/blob/c154b387248b/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/1Password/connect-sdk-go"
         },
@@ -12212,6 +12216,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/1password/onepassword-sdk-go/blob/v0.4.1-beta.1/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/1password/onepassword-sdk-go"
         },
@@ -12294,6 +12302,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/VividCortex/ewma/blob/v1.2.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/VividCortex/ewma"
@@ -12378,6 +12390,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/acarl005/stripansi/blob/5a71ef0e047d/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/acarl005/stripansi"
         },
@@ -12460,6 +12476,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/apex/log/blob/v1.9.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/apex/log"
@@ -12554,6 +12574,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/blacktop/go-dwarf/blob/v1.0.14/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/blacktop/go-dwarf"
         },
@@ -12646,6 +12670,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/blacktop/go-macho/blob/v1.1.282/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/blacktop/go-macho"
@@ -12740,6 +12768,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/blacktop/go-plist/blob/v1.0.2/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/blacktop/go-plist"
         },
@@ -12833,6 +12865,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/byteness/go-keychain/blob/8e49817e8af4/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/byteness/go-keychain"
         },
@@ -12916,6 +12952,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/byteness/keyring/blob/v1.9.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/byteness/keyring"
         },
@@ -12998,6 +13038,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/byteness/percent/blob/v0.2.2/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/byteness/percent"
@@ -13086,6 +13130,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/deploymenttheory/go-macos-pkg/blob/v0.3.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/deploymenttheory/go-macos-pkg"
         },
@@ -13173,6 +13221,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/dustin/go-humanize/blob/v1.1.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/dustin/go-humanize"
         },
@@ -13255,6 +13307,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/dvsekhvalnov/jose2go/blob/v1.8.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/dvsekhvalnov/jose2go"
@@ -13343,6 +13399,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/dylibso/observe-sdk/blob/9145d8ad07e1/go/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/dylibso/observe-sdk"
         },
@@ -13425,6 +13485,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/ebitengine/purego/blob/v0.10.2/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/ebitengine/purego"
@@ -13513,6 +13577,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/extism/go-sdk/blob/v1.7.1/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/extism/go-sdk"
         },
@@ -13595,6 +13663,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/fatih/color/blob/v1.19.0/LICENSE.md"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/fatih/color"
@@ -13687,6 +13759,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/go-compressions/lzfse/blob/v0.3.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/go-compressions/lzfse"
         },
@@ -13769,6 +13845,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/gobwas/glob/blob/v0.2.3/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/gobwas/glob"
@@ -13863,6 +13943,14 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/hashicorp/golang-lru/blob/v2.0.7/LICENSE"
+        },
+        {
+          "type": "license",
+          "url": "https://github.com/hashicorp/golang-lru/blob/v2.0.7/simplelru/LICENSE_list"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/hashicorp/golang-lru"
         },
@@ -13952,6 +14040,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/ianlancetaylor/demangle/blob/96ee0021ea0f/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/ianlancetaylor/demangle"
         },
@@ -14034,6 +14126,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/juju/go4/blob/40d72ab9641a/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/juju/go4"
@@ -14121,6 +14217,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/juju/persistent-cookiejar/blob/v1.0.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/juju/persistent-cookiejar"
@@ -14216,6 +14316,18 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/klauspost/compress/blob/v1.20.2/LICENSE"
+        },
+        {
+          "type": "license",
+          "url": "https://github.com/klauspost/compress/blob/v1.20.2/internal/snapref/LICENSE"
+        },
+        {
+          "type": "license",
+          "url": "https://github.com/klauspost/compress/blob/v1.20.2/zstd/internal/xxhash/LICENSE.txt"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/klauspost/compress"
@@ -14316,6 +14428,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/majd/go-apfs/blob/v1.0.29/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/majd/go-apfs"
         },
@@ -14339,12 +14455,12 @@
       }
     },
     {
-      "bom-ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+      "bom-ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd?package-id=9e8078a3ff7a1782",
       "type": "library",
       "name": "github.com/majd/ipatool/v2/ipakeep-anisette-helper",
-      "version": "v0.0.0-20261115082715-19c0c35c4375",
-      "cpe": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep-anisette-helper:v0.0.0-20261115082715-19c0c35c4375:*:*:*:*:*:*:*",
-      "purl": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375",
+      "version": "v0.0.0-20261115084828-665efdce2afd",
+      "cpe": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep-anisette-helper:v0.0.0-20261115084828-665efdce2afd:*:*:*:*:*:*:*",
+      "purl": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd",
       "properties": [
         {
           "name": "syft:package:foundBy",
@@ -14364,7 +14480,7 @@
         },
         {
           "name": "syft:cpe23",
-          "value": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep_anisette_helper:v0.0.0-20261115082715-19c0c35c4375:*:*:*:*:*:*:*"
+          "value": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep_anisette_helper:v0.0.0-20261115084828-665efdce2afd:*:*:*:*:*:*:*"
         },
         {
           "name": "syft:location:0:path",
@@ -14386,7 +14502,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "e6e62312132cad31e75adca38c9ad2a1cd23557442b9faa4c28d74f4fc6d151b"
+          "content": "7f22d0e693af5ef3076012e55e3653ad8d28bbb04b06d635349469c59e486a2d"
         }
       ],
       "licenses": [
@@ -14476,6 +14592,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/majd/ipatool/blob/v2.8.1/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/majd/ipatool"
         },
@@ -14562,6 +14682,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/mattn/go-colorable/blob/v0.1.14/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/mattn/go-colorable"
@@ -14650,6 +14774,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/mattn/go-isatty"
         },
@@ -14737,6 +14865,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/mattn/go-runewidth/blob/v0.0.16/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/mattn/go-runewidth"
         },
@@ -14819,6 +14951,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/mitchellh/colorstring/blob/d06e56a500db/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/mitchellh/colorstring"
@@ -14907,6 +15043,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/noamcohen97/touchid-go/blob/v0.3.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/noamcohen97/touchid-go"
         },
@@ -14994,6 +15134,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/opentracing/opentracing-go/blob/v1.2.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/opentracing/opentracing-go"
         },
@@ -15076,6 +15220,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/pkg/errors/blob/v0.9.1/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/pkg/errors"
@@ -15160,6 +15308,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/rivo/uniseg/blob/v0.4.7/LICENSE.txt"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/rivo/uniseg"
         },
@@ -15242,6 +15394,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/rs/zerolog/blob/v1.28.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/rs/zerolog"
@@ -15326,6 +15482,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/schollz/progressbar/blob/v3.19.1/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/schollz/progressbar"
         },
@@ -15409,6 +15569,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/tetratelabs/wabin/blob/f6f874872834/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/tetratelabs/wabin"
         },
@@ -15491,6 +15655,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/tetratelabs/wazero/blob/v1.11.0/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/tetratelabs/wazero"
@@ -15579,6 +15747,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/uber/jaeger-client-go/blob/v2.30.0/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/uber/jaeger-client-go"
         },
@@ -15666,6 +15838,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/uber/jaeger-lib/blob/v2.4.1/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/uber/jaeger-lib"
         },
@@ -15748,6 +15924,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/ulikunitz/xz/blob/v0.5.17/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/ulikunitz/xz"
@@ -15832,6 +16012,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/vbauerster/mpb/blob/v7.5.3/UNLICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/vbauerster/mpb"
         },
@@ -15907,13 +16091,23 @@
       ],
       "licenses": [
         {
-          "license": {
-            "name": "Public domain dedication",
-            "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE"
-          }
+          "expression": "LicenseRef-XZ-Public-Domain",
+          "expressionDetails": [
+            {
+              "licenseIdentifier": "LicenseRef-XZ-Public-Domain",
+              "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE",
+              "text": {
+                "content": "Licensing of github.com/xi2/xz\n==============================\n\n    This Go package is a modified version of\n\n        XZ Embedded  <http://tukaani.org/xz/embedded.html>\n\n    The contents of the testdata directory are modified versions of\n    the test files from\n\n        XZ Utils  <http://tukaani.org/xz/>\n\n    All the files in this package have been written by Michael Cross,\n    Lasse Collin and/or Igor PavLov. All these files have been put\n    into the public domain. You can do whatever you want with these\n    files.\n\n    This software is provided \"as is\", without any warranty.\n"
+              }
+            }
+          ]
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/xi2/xz"
@@ -15929,10 +16123,16 @@
       "evidence": {
         "licenses": [
           {
-            "license": {
-              "name": "Public domain dedication",
-              "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE"
-            }
+            "expression": "LicenseRef-XZ-Public-Domain",
+            "expressionDetails": [
+              {
+                "licenseIdentifier": "LicenseRef-XZ-Public-Domain",
+                "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE",
+                "text": {
+                  "content": "Licensing of github.com/xi2/xz\n==============================\n\n    This Go package is a modified version of\n\n        XZ Embedded  <http://tukaani.org/xz/embedded.html>\n\n    The contents of the testdata directory are modified versions of\n    the test files from\n\n        XZ Utils  <http://tukaani.org/xz/>\n\n    All the files in this package have been written by Michael Cross,\n    Lasse Collin and/or Igor PavLov. All these files have been put\n    into the public domain. You can do whatever you want with these\n    files.\n\n    This software is provided \"as is\", without any warranty.\n"
+                }
+              }
+            ]
           }
         ]
       }
@@ -15997,6 +16197,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/open-telemetry/opentelemetry-proto-go/blob/otlp/v1.9.0/otlp/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/open-telemetry/opentelemetry-proto-go"
@@ -16079,6 +16283,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/uber-go/atomic/blob/v1.11.0/LICENSE.txt"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/uber-go/atomic"
@@ -16167,6 +16375,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://cs.opensource.google/go/x/crypto/+/v0.59.0:LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://go.googlesource.com/crypto"
         },
@@ -16254,6 +16466,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://cs.opensource.google/go/x/net/+/v0.62.0:LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://go.googlesource.com/net"
         },
@@ -16336,6 +16552,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://cs.opensource.google/go/x/sys/+/v0.50.0:LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://go.googlesource.com/sys"
@@ -16420,6 +16640,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://cs.opensource.google/go/x/term/+/v0.48.0:LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://go.googlesource.com/term"
         },
@@ -16502,6 +16726,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://cs.opensource.google/go/x/text/+/v0.44.0:LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://go.googlesource.com/text"
@@ -16586,6 +16814,10 @@
       ],
       "externalReferences": [
         {
+          "type": "license",
+          "url": "https://github.com/protocolbuffers/protobuf-go/blob/v1.36.11/LICENSE"
+        },
+        {
           "type": "vcs",
           "url": "https://github.com/protocolbuffers/protobuf-go"
         },
@@ -16667,6 +16899,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/go-errgo/errgo/blob/v1.0.1/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/go-errgo/errgo"
@@ -16750,6 +16986,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/go-retry/retry/blob/v1.0.3/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/go-retry/retry"
@@ -16839,6 +17079,10 @@
         }
       ],
       "externalReferences": [
+        {
+          "type": "license",
+          "url": "https://github.com/DHowett/go-plist.git/blob/v1.0.1/LICENSE"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/DHowett/go-plist.git"
@@ -16932,7 +17176,7 @@
     {
       "ref": "pkg:cargo/ipakeep@0.1.1",
       "dependsOn": [
-        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd?package-id=9e8078a3ff7a1782",
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
@@ -17065,7 +17309,7 @@
       ]
     },
     {
-      "ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+      "ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd?package-id=9e8078a3ff7a1782",
       "dependsOn": [
         "pkg:golang/github.com/1password/connect-sdk-go@v1.5.4-0.20250417152128-c154b387248b?package-id=056d879be41c9906",
         "pkg:golang/github.com/1password/onepassword-sdk-go@v0.4.1-beta.1?package-id=4b98598bfceb0e95",
@@ -19018,7 +19262,7 @@
         "/components",
         "/dependencies"
       ],
-      "timestamp": "2026-11-15T08:47:14.000000000Z",
+      "timestamp": "2026-11-15T08:53:20.000000000Z",
       "attributedTo": "pkg:cargo/ipakeep@0.1.1",
       "note": "Rust dependency inventory derived from Cargo.lock."
     },
@@ -19028,8 +19272,8 @@
         "/components",
         "/dependencies"
       ],
-      "timestamp": "2026-11-15T08:47:14.000000000Z",
-      "attributedTo": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+      "timestamp": "2026-11-15T08:53:20.000000000Z",
+      "attributedTo": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd?package-id=9e8078a3ff7a1782",
       "note": "Go helper dependency inventory derived from tools/modern-anisette/go.mod and go.sum."
     }
   ],
@@ -19038,7 +19282,7 @@
       "aggregate": "complete",
       "dependencies": [
         "pkg:cargo/ipakeep@0.1.1",
-        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115084828-665efdce2afd?package-id=9e8078a3ff7a1782",
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",

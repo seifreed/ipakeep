@@ -112,11 +112,20 @@ jobs:
       # yamllint disable rule:line-length
       - uses: sbom-tool/sbom-tools-action@c73f5ccd0e22e0797e1647d8abd57ba59e407472
         # yamllint enable rule:line-length
+        name: Comprehensive SBOM assessment
         with:
           version: 0.4.0
           command: quality
           profile: comprehensive
           args: sbom/ipakeep.cdx.json --metrics --recommendations --min-score 85
+
+      - name: Standard SBOM grade gate
+        uses: sbom-tool/sbom-tools-action@c73f5ccd0e22e0797e1647d8abd57ba59e407472
+        with:
+          version: 0.4.0
+          command: quality
+          profile: standard
+          args: sbom/ipakeep.cdx.json --min-score 90
 
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
