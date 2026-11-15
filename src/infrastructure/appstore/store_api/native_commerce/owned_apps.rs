@@ -259,6 +259,9 @@ async fn send(
                 base64::engine::general_purpose::STANDARD.encode(signature),
             )
             .body(body);
+    } else {
+        // Apple answers a body-less POST without Content-Length with HTTP 411.
+        request = request.header(reqwest::header::CONTENT_LENGTH, "0");
     }
     let label = step.label();
     let response = request
@@ -741,6 +744,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/login"))
+            .and(wiremock::matchers::header("content-length", "0"))
             .and(body_bytes(Vec::<u8>::new()))
             .respond_with(
                 ResponseTemplate::new(200)
