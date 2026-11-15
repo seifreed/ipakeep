@@ -3,7 +3,7 @@
   "specVersion": "1.7",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T13:41:23.000000000Z",
+    "timestamp": "2026-11-15T13:43:02.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -124,7 +124,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "97fba63d901c34d201190fed38f429ac7ba32ad89fc50f0a39fd2695d3bcefb1"
+          "content": "6fb26dc1fe5bc3e1e1000034cef566d4e1147da37736166810f1c3397eb46fcd"
         }
       ],
       "evidence": {
@@ -7178,42 +7178,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#object@0.37.3",
-      "name": "object",
-      "version": "0.37.3",
-      "description": "A unified interface for reading and writing object file formats.",
-      "scope": "required",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
-        }
-      ],
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "purl": "pkg:cargo/object@0.37.3",
-      "externalReferences": [
-        {
-          "type": "vcs",
-          "url": "https://github.com/gimli-rs/object"
-        }
-      ],
-      "supplier": {
-        "name": "gimli-rs"
-      },
-      "evidence": {
-        "licenses": [
-          {
-            "expression": "Apache-2.0 OR MIT"
-          }
-        ]
-      }
-    },
-    {
-      "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
       "name": "once_cell",
       "version": "1.21.4",
@@ -14242,7 +14206,6 @@
         "registry+https://github.com/rust-lang/crates.io-index#mac_address@1.1.8",
         "registry+https://github.com/rust-lang/crates.io-index#md5@0.8.0",
         "registry+https://github.com/rust-lang/crates.io-index#num-bigint@0.4.6",
-        "registry+https://github.com/rust-lang/crates.io-index#object@0.37.3",
         "registry+https://github.com/rust-lang/crates.io-index#p256@0.14.0",
         "registry+https://github.com/rust-lang/crates.io-index#pbkdf2@0.12.2",
         "registry+https://github.com/rust-lang/crates.io-index#plist@1.10.3",
@@ -15317,12 +15280,6 @@
       "ref": "registry+https://github.com/rust-lang/crates.io-index#num-traits@0.2.19",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1"
-      ]
-    },
-    {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#object@0.37.3",
-      "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.1"
       ]
     },
     {
@@ -16413,7 +16370,7 @@
         "/components",
         "/dependencies"
       ],
-      "timestamp": "2026-11-15T13:41:23.000000000Z",
+      "timestamp": "2026-11-15T13:43:02.000000000Z",
       "attributedTo": "pkg:cargo/ipakeep@0.1.1",
       "note": "Rust dependency inventory derived from Cargo.lock."
     }
@@ -16441,7 +16398,6 @@
         "registry+https://github.com/rust-lang/crates.io-index#mac_address@1.1.8",
         "registry+https://github.com/rust-lang/crates.io-index#md5@0.8.0",
         "registry+https://github.com/rust-lang/crates.io-index#num-bigint@0.4.6",
-        "registry+https://github.com/rust-lang/crates.io-index#object@0.37.3",
         "registry+https://github.com/rust-lang/crates.io-index#p256@0.14.0",
         "registry+https://github.com/rust-lang/crates.io-index#pbkdf2@0.12.2",
         "registry+https://github.com/rust-lang/crates.io-index#plist@1.10.3",

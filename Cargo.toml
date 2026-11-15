@@ -69,7 +69,6 @@ sha2 = "0.10"
 pbkdf2 = "0.12"
 
 # Native Apple SAP/ADI (port of ipatool's emulated Store stack)
-object = { version = "0.37", default-features = false, features = ["read", "std"] }
 lzfse_rust = "0.2"
 p256 = { version = "0.14", features = ["ecdh", "pem", "pkcs8"] }
 ctr = "0.9"
