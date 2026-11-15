@@ -365,6 +365,16 @@ enum XattrValue {
     Stream { object_id: u64, size: u64 },
 }
 
+impl XattrValue {
+    /// The data-stream object and size of a non-embedded attribute.
+    fn stream(&self) -> Option<(u64, u64)> {
+        match self {
+            Self::Stream { object_id, size } => Some((*object_id, *size)),
+            Self::Embedded(_) => None,
+        }
+    }
+}
+
 /// The file-system records the extractor understands.
 enum Record {
     Inode { private_id: u64, size: u64 },
@@ -592,11 +602,15 @@ impl<R: ReadAt> Container<R> {
         if field::<4>(&volume, CONTAINER_MAGIC_OFFSET)? != *VOLUME_MAGIC {
             return Err(malformed("volume superblock has an invalid magic"));
         }
+        let xid = object_transaction(&volume)?;
+        let omap = le_u64(&volume, VOLUME_OMAP_OFFSET)?;
+        let root_tree = le_u64(&volume, VOLUME_ROOT_TREE_OFFSET)?;
+        let extent_tree = le_u64(&volume, VOLUME_EXTENT_TREE_OFFSET)?;
         Ok(VolumeInfo {
-            xid: object_transaction(&volume)?,
-            omap: le_u64(&volume, VOLUME_OMAP_OFFSET)?,
-            root_tree: le_u64(&volume, VOLUME_ROOT_TREE_OFFSET)?,
-            extent_tree: le_u64(&volume, VOLUME_EXTENT_TREE_OFFSET)?,
+            xid,
+            omap,
+            root_tree,
+            extent_tree,
         })
     }
 
@@ -697,10 +711,9 @@ impl<R: ReadAt> ApfsExtractor<R> {
                 Record::Xattr { name, value } if name == DECMPFS_XATTR => {
                     compression = Some(decmpfs_header(&value)?);
                 }
-                Record::Xattr {
-                    name,
-                    value: XattrValue::Stream { object_id, size },
-                } if name == RESOURCE_FORK_XATTR => resource = Some((object_id, size)),
+                Record::Xattr { name, value } if name == RESOURCE_FORK_XATTR => {
+                    resource = value.stream().or(resource);
+                }
                 _ => {}
             }
         }
@@ -740,18 +753,15 @@ impl<R: ReadAt> ApfsExtractor<R> {
 
     fn resolve_path(&self, path: &str) -> Result<Vec<Record>> {
         let mut object_id = ROOT_DIRECTORY_ID;
-        for name in path.trim_matches('/').split('/') {
+        for component in path.trim_matches('/').split('/') {
             object_id = self
                 .records_for(object_id)?
                 .into_iter()
                 .find_map(|record| match record {
-                    Record::DirectoryEntry {
-                        name: entry,
-                        file_id,
-                    } if entry == name => Some(file_id),
+                    Record::DirectoryEntry { name, file_id } if name == component => Some(file_id),
                     _ => None,
                 })
-                .ok_or_else(|| ApfsError::NotFound(name.to_owned()))?;
+                .ok_or_else(|| ApfsError::NotFound(component.to_owned()))?;
         }
         self.records_for(object_id)
     }
@@ -928,12 +938,10 @@ impl<R: ReadAt> ApfsExtractor<R> {
         let name = Path::new(path)
             .file_name()
             .ok_or_else(|| malformed(format!("path {path:?} has no file name")))?;
-        let output_path = destination.join(name);
-        let result = write_output(&output_path, &SectionReader::new(&file, offset, size));
-        if result.is_err() {
-            let _ = fs::remove_file(&output_path);
-        }
-        result
+        write_output(
+            &destination.join(name),
+            &SectionReader::new(&file, offset, size),
+        )
     }
 }
 
@@ -970,12 +978,25 @@ fn create_output(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-fn write_output(path: &Path, source: &impl ReadAt) -> Result<()> {
-    let output_error = |source| ApfsError::Output {
+fn output_error(path: &Path, source: io::Error) -> ApfsError {
+    ApfsError::Output {
         path: path.to_path_buf(),
         source,
-    };
-    let mut output = create_output(path).map_err(output_error)?;
+    }
+}
+
+/// Creates `path` exclusively and fills it from `source`; a partially
+/// written file is removed, a pre-existing one is left untouched.
+fn write_output(path: &Path, source: &impl ReadAt) -> Result<()> {
+    let mut output = create_output(path).map_err(|error| output_error(path, error))?;
+    let result = copy_output(&mut output, path, source);
+    if result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    result
+}
+
+fn copy_output(output: &mut File, path: &Path, source: &impl ReadAt) -> Result<()> {
     let mut buffer = vec![0u8; EXTRACT_CHUNK_SIZE];
     let mut offset = 0u64;
     while offset < source.size() {
@@ -986,10 +1007,12 @@ fn write_output(path: &Path, source: &impl ReadAt) -> Result<()> {
                 context: format!("file data at {offset}"),
                 source,
             })?;
-        output.write_all(&buffer[..wanted]).map_err(output_error)?;
+        output
+            .write_all(&buffer[..wanted])
+            .map_err(|error| output_error(path, error))?;
         offset += wanted as u64;
     }
-    output.sync_all().map_err(output_error)
+    output.sync_all().map_err(|error| output_error(path, error))
 }
 
 fn read_header(source: &impl ReadAt, buffer: &mut [u8], offset: u64) -> Result<()> {
@@ -1160,13 +1183,11 @@ impl<R: ReadAt> ReadAt for ExtentReader<'_, R> {
             let index = self
                 .extents
                 .partition_point(|extent| extent.logical + extent.length <= position);
-            let Some(extent) = self
+            let extent = self
                 .extents
                 .get(index)
                 .filter(|extent| position >= extent.logical)
-            else {
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            };
+                .ok_or(io::ErrorKind::UnexpectedEof)?;
             let available = (extent.logical + extent.length - position).min(self.size - position);
             let count = (buf.len() - written).min(usize::try_from(available).unwrap_or(usize::MAX));
             let physical = extent.physical * BLOCK_SIZE_U64 + position - extent.logical;
@@ -1260,12 +1281,11 @@ impl<'a, R: ReadAt> DecmpfsReader<'a, R> {
 
     fn decode_block(&self, index: u64) -> Result<Vec<u8>> {
         let slot = to_usize(index)?;
-        let (Some(&start), Some(&end)) = (self.offsets.get(slot), self.offsets.get(slot + 1))
-        else {
-            return Err(malformed(format!(
-                "compressed block {index} is out of range"
-            )));
-        };
+        let range = self
+            .offsets
+            .get(slot..=slot + 1)
+            .ok_or_else(|| malformed(format!("compressed block {index} is out of range")))?;
+        let (start, end) = (range[0], range[1]);
         let mut compressed = vec![0u8; to_usize(end - start)?];
         read_resource(&self.source, &mut compressed, start)?;
         let expected = DECMPFS_BLOCK_SIZE.min(self.output_size - index * DECMPFS_BLOCK_SIZE);
@@ -1367,6 +1387,1233 @@ fn decompress_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::collections::BTreeMap;
+
+    const TEST_XID: u64 = 7;
+    const STALE_XID: u64 = 5;
+    const NEWER_XID: u64 = 9;
+    const OLDER_XID: u64 = 2;
+    const CHECKPOINT_BASE: u64 = 1;
+    const CHECKPOINT_BLOCKS: u32 = 4;
+    const STALE_CHECKPOINT: u64 = 1;
+    const CHECKPOINT_MAP_BLOCK: u64 = 2;
+    const LATEST_CHECKPOINT: u64 = 3;
+    const CORRUPT_CHECKPOINT: u64 = 4;
+    const CONTAINER_OMAP: u64 = 10;
+    const CONTAINER_OMAP_TREE: u64 = 11;
+    const VOLUME_BLOCK: u64 = 12;
+    const VOLUME_OMAP: u64 = 13;
+    const VOLUME_OMAP_TREE: u64 = 14;
+    const FIRST_NODE_BLOCK: u64 = 20;
+    const FIRST_DATA_BLOCK: u64 = 200;
+    const VOLUME_OID: u64 = 1026;
+    const FS_ROOT_OID: u64 = 1028;
+    const FORK_OID_BIAS: u64 = 0x1000;
+    const OBJECT_TYPE_CHECKPOINT_MAP: u32 = 0x0c;
+    const RECORD_SIBLING_LINK: u8 = 5;
+    const INODE_FIELD_NAME: u8 = 4;
+    const XATTR_STREAM: u16 = 0x0001;
+    const XATTR_STREAM_VALUE_SIZE: usize = 4 + 40;
+    const DECMPFS_MAGIC: &[u8; 4] = b"fpmc";
+    const DECMPFS_UNSUPPORTED: u32 = 4;
+    const RECORDS_PER_LEAF: usize = 10;
+    const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+    const LZVN_LITERAL: u8 = 0xe0;
+    const LZVN_MAX_LITERAL: usize = 271;
+    const LZVN_LARGE_BIAS: usize = 16;
+    const LZBITMAP_MAX_CHUNK: usize = 0x8000;
+    const LZBITMAP_CHUNK_HEADER: usize = 6;
+    const ROOT: u64 = ROOT_DIRECTORY_ID;
+
+    fn put_u16(block: &mut [u8], at: usize, value: usize) {
+        let value = u16::try_from(value).expect("u16 field");
+        block[at..at + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(block: &mut [u8], at: usize, value: u32) {
+        block[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u64(block: &mut [u8], at: usize, value: u64) {
+        block[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn u32_of(value: usize) -> u32 {
+        u32::try_from(value).expect("u32")
+    }
+
+    fn sealed(mut block: Vec<u8>) -> Vec<u8> {
+        let checksum = fletcher64(&block);
+        put_u64(&mut block, 0, checksum);
+        block
+    }
+
+    fn object(oid: u64, xid: u64, kind: u32) -> Vec<u8> {
+        let mut block = vec![0u8; BLOCK_SIZE];
+        put_u64(&mut block, 8, oid);
+        put_u64(&mut block, 16, xid);
+        put_u32(&mut block, 24, kind);
+        block
+    }
+
+    fn container_superblock(xid: u64, omap: u64) -> Vec<u8> {
+        let mut block = object(1, xid, OBJECT_TYPE_CONTAINER);
+        block[32..36].copy_from_slice(CONTAINER_MAGIC);
+        put_u32(&mut block, 36, u32_of(BLOCK_SIZE));
+        put_u32(&mut block, 104, CHECKPOINT_BLOCKS);
+        put_u64(&mut block, 112, CHECKPOINT_BASE);
+        put_u64(&mut block, 160, omap);
+        put_u64(&mut block, 184, VOLUME_OID);
+        sealed(block)
+    }
+
+    fn volume_superblock(extent_tree: u64) -> Vec<u8> {
+        let mut block = object(VOLUME_OID, TEST_XID, OBJECT_TYPE_VOLUME);
+        block[32..36].copy_from_slice(VOLUME_MAGIC);
+        put_u64(&mut block, 128, VOLUME_OMAP);
+        put_u64(&mut block, 136, FS_ROOT_OID);
+        put_u64(&mut block, 1032, extent_tree);
+        sealed(block)
+    }
+
+    fn omap_object(address: u64, tree: u64) -> Vec<u8> {
+        let mut block = object(address, TEST_XID, OBJECT_TYPE_OMAP);
+        put_u64(&mut block, 48, tree);
+        sealed(block)
+    }
+
+    type KeyValue = (Vec<u8>, Option<Vec<u8>>);
+
+    /// One B-tree node before encoding.
+    struct TreeNode {
+        flags: u16,
+        entries: Vec<KeyValue>,
+    }
+
+    impl TreeNode {
+        fn new(flags: u16, entries: Vec<KeyValue>) -> Self {
+            Self { flags, entries }
+        }
+
+        fn encode(&self, oid: u64) -> Vec<u8> {
+            let fixed = self.flags & NODE_FIXED_KV != 0;
+            let root = self.flags & NODE_ROOT != 0;
+            let toc_size = if fixed { 4 } else { 8 };
+            let kind = if root {
+                OBJECT_TYPE_BTREE
+            } else {
+                OBJECT_TYPE_BTREE_NODE
+            };
+            let mut block = object(oid, TEST_XID, kind);
+            put_u16(&mut block, 32, usize::from(self.flags));
+            put_u16(&mut block, 34, usize::from(self.flags & NODE_LEAF == 0));
+            put_u32(&mut block, 36, u32_of(self.entries.len()));
+            let table_length = toc_size * self.entries.len();
+            put_u16(&mut block, 42, table_length);
+            let value_end = if root {
+                BLOCK_SIZE - BTREE_INFO_SIZE
+            } else {
+                BLOCK_SIZE
+            };
+            let (mut key_offset, mut value_offset) = (0, 0);
+            for (index, (key, value)) in self.entries.iter().enumerate() {
+                let key_at = NODE_HEADER_SIZE + table_length + key_offset;
+                block[key_at..key_at + key.len()].copy_from_slice(key);
+                let value_field = value
+                    .as_ref()
+                    .map_or(usize::from(NO_VALUE_OFFSET), |value| {
+                        value_offset += value.len();
+                        block[value_end - value_offset..][..value.len()].copy_from_slice(value);
+                        value_offset
+                    });
+                let toc = NODE_HEADER_SIZE + index * toc_size;
+                put_u16(&mut block, toc, key_offset);
+                if fixed {
+                    put_u16(&mut block, toc + 2, value_field);
+                } else {
+                    put_u16(&mut block, toc + 2, key.len());
+                    put_u16(&mut block, toc + 4, value_field);
+                    put_u16(&mut block, toc + 6, value.as_ref().map_or(0, Vec::len));
+                }
+                key_offset += key.len();
+            }
+            sealed(block)
+        }
+    }
+
+    fn headerless(mut block: Vec<u8>) -> Vec<u8> {
+        block[..OBJECT_HEADER_SIZE].fill(0);
+        block[OBJECT_HEADER_SIZE] |= u8::try_from(NODE_NO_HEADER).expect("flag");
+        block
+    }
+
+    fn omap_key(oid: u64, xid: u64) -> Vec<u8> {
+        [oid.to_le_bytes(), xid.to_le_bytes()].concat()
+    }
+
+    fn omap_value(address: u64) -> Vec<u8> {
+        [[0u8; 8], address.to_le_bytes()].concat()
+    }
+
+    fn omap_leaf(entries: &[(u64, u64, u64)], flags: u16) -> TreeNode {
+        let entries = entries
+            .iter()
+            .map(|&(oid, xid, address)| (omap_key(oid, xid), Some(omap_value(address))))
+            .collect();
+        TreeNode::new(flags | NODE_LEAF | NODE_FIXED_KV, entries)
+    }
+
+    /// A raw container image assembled block by block.
+    #[derive(Default)]
+    struct Image {
+        blocks: BTreeMap<u64, Vec<u8>>,
+    }
+
+    impl Image {
+        fn put(&mut self, address: u64, bytes: &[u8]) {
+            for (index, chunk) in bytes.chunks(BLOCK_SIZE).enumerate() {
+                let mut block = chunk.to_vec();
+                block.resize(BLOCK_SIZE, 0);
+                self.blocks.insert(address + index as u64, block);
+            }
+        }
+
+        fn edit(&mut self, address: u64, change: impl FnOnce(&mut Vec<u8>)) {
+            let block = self.blocks.get_mut(&address).expect("block");
+            change(block);
+            let resealed = sealed(std::mem::take(block));
+            *block = resealed;
+        }
+
+        fn bytes(&self) -> Vec<u8> {
+            let end = self.blocks.keys().last().map_or(0, |last| last + 1);
+            let mut image = vec![0u8; usize::try_from(end).expect("size") * BLOCK_SIZE];
+            for (address, block) in &self.blocks {
+                let start = usize::try_from(*address).expect("address") * BLOCK_SIZE;
+                image[start..start + BLOCK_SIZE].copy_from_slice(block);
+            }
+            image
+        }
+
+        fn open(&self) -> Result<ApfsExtractor<Vec<u8>>> {
+            ApfsExtractor::open(self.bytes())
+        }
+
+        /// Replaces the volume object map with a two-level tree mapping
+        /// `entries` (`oid`, `xid`, `address`), stored from `first_block`.
+        fn set_volume_omap(&mut self, mut entries: Vec<(u64, u64, u64)>, first_block: u64) {
+            entries.sort_unstable();
+            let half = entries.len().div_ceil(2);
+            let mut index = Vec::new();
+            for (slot, chunk) in entries.chunks(half).enumerate() {
+                let address = first_block + slot as u64;
+                self.put(address, &omap_leaf(chunk, 0).encode(address));
+                let value = Some(address.to_le_bytes().to_vec());
+                index.push((omap_key(chunk[0].0, chunk[0].1), value));
+            }
+            let root = TreeNode::new(NODE_ROOT | NODE_FIXED_KV, index);
+            self.put(VOLUME_OMAP_TREE, &root.encode(VOLUME_OMAP_TREE));
+        }
+    }
+
+    fn record_key(oid: u64, kind: u8) -> Vec<u8> {
+        ((u64::from(kind) << RECORD_TYPE_SHIFT) | oid)
+            .to_le_bytes()
+            .to_vec()
+    }
+
+    fn named_key(oid: u64, kind: u8, name: &str, length_field: u32) -> Vec<u8> {
+        let mut key = record_key(oid, kind);
+        if kind == RECORD_XATTR {
+            put_u16_vec(&mut key, usize::try_from(length_field).expect("length"));
+        } else {
+            key.extend_from_slice(&length_field.to_le_bytes());
+        }
+        key.extend_from_slice(name.as_bytes());
+        key.push(0);
+        key
+    }
+
+    fn put_u16_vec(out: &mut Vec<u8>, value: usize) {
+        out.extend_from_slice(&u16::try_from(value).expect("u16").to_le_bytes());
+    }
+
+    fn directory_record(parent: u64, name: &str, file_id: u64) -> (Vec<u8>, Vec<u8>) {
+        let key = named_key(parent, RECORD_DIRECTORY_ENTRY, name, u32_of(name.len() + 1));
+        let mut value = file_id.to_le_bytes().to_vec();
+        value.resize(18, 0);
+        (key, value)
+    }
+
+    fn inode_record(oid: u64, size: u64, stream: bool) -> (Vec<u8>, Vec<u8>) {
+        let mut value = vec![0u8; INODE_VALUE_SIZE];
+        put_u64(&mut value, 8, oid);
+        put_u64(&mut value, 84, if stream { 0 } else { size });
+        if stream {
+            let name = b"file\0\0\0\0";
+            let mut blob = Vec::new();
+            for word in [2, 48, 0, 5, usize::from(INODE_FIELD_DATA_STREAM), 40] {
+                put_u16_vec(&mut blob, word);
+            }
+            blob[4] = INODE_FIELD_NAME;
+            blob[8] = INODE_FIELD_DATA_STREAM;
+            blob.extend_from_slice(name);
+            blob.extend_from_slice(&size.to_le_bytes());
+            blob.resize(blob.len() + 32, 0);
+            value.extend(blob);
+        }
+        (record_key(oid, RECORD_INODE), value)
+    }
+
+    fn extent_record(oid: u64, logical: u64, length: u64, physical: u64) -> (Vec<u8>, Vec<u8>) {
+        let key = [
+            record_key(oid, RECORD_FILE_EXTENT),
+            logical.to_le_bytes().to_vec(),
+        ]
+        .concat();
+        let value = [length, physical, 0].map(u64::to_le_bytes).concat();
+        (key, value)
+    }
+
+    fn xattr_key(oid: u64, name: &str) -> Vec<u8> {
+        named_key(oid, RECORD_XATTR, name, u32_of(name.len() + 1))
+    }
+
+    fn embedded_xattr(oid: u64, name: &str, data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut value = Vec::new();
+        put_u16_vec(&mut value, usize::from(XATTR_EMBEDDED));
+        put_u16_vec(&mut value, data.len());
+        value.extend_from_slice(data);
+        (xattr_key(oid, name), value)
+    }
+
+    fn stream_xattr(oid: u64, name: &str, object_id: u64, size: u64) -> (Vec<u8>, Vec<u8>) {
+        let mut value = vec![0u8; XATTR_STREAM_VALUE_SIZE];
+        put_u16(&mut value, 0, usize::from(XATTR_STREAM));
+        put_u16(&mut value, 2, XATTR_STREAM_VALUE_SIZE - 4);
+        put_u64(&mut value, 4, object_id);
+        put_u64(&mut value, 12, size);
+        (xattr_key(oid, name), value)
+    }
+
+    fn decmpfs(method: u32, size: u64) -> Vec<u8> {
+        let mut header = DECMPFS_MAGIC.to_vec();
+        header.extend_from_slice(&method.to_le_bytes());
+        header.extend_from_slice(&size.to_le_bytes());
+        header
+    }
+
+    fn resource_fork(blocks: &[Vec<u8>]) -> Vec<u8> {
+        let table = (blocks.len() + 1) * 4;
+        let mut fork = Vec::new();
+        let mut offset = table;
+        fork.extend_from_slice(&u32_of(offset).to_le_bytes());
+        for block in blocks {
+            offset += block.len();
+            fork.extend_from_slice(&u32_of(offset).to_le_bytes());
+        }
+        for block in blocks {
+            fork.extend_from_slice(block);
+        }
+        fork
+    }
+
+    fn lzvn_literals(plain: &[u8]) -> Vec<u8> {
+        let mut stream = Vec::new();
+        for chunk in plain.chunks(LZVN_MAX_LITERAL) {
+            if chunk.len() < LZVN_LARGE_BIAS {
+                stream.push(LZVN_LITERAL | u8::try_from(chunk.len()).expect("nibble"));
+            } else {
+                let operand = u8::try_from(chunk.len() - LZVN_LARGE_BIAS).expect("operand");
+                stream.extend_from_slice(&[LZVN_LITERAL, operand]);
+            }
+            stream.extend_from_slice(chunk);
+        }
+        stream.push(DECMPFS_LZVN_STORED);
+        stream
+    }
+
+    fn lzvn_zeros(count: usize) -> Vec<u8> {
+        let mut stream = vec![0xe1, 0x00, 0x38, 0x01];
+        let mut remaining = count - 11;
+        while remaining > 0 {
+            let chunk = remaining.clamp(LZVN_LARGE_BIAS, LZVN_MAX_LITERAL);
+            let operand = u8::try_from(chunk - LZVN_LARGE_BIAS).expect("operand");
+            stream.extend_from_slice(&[0xf0, operand]);
+            remaining -= chunk;
+        }
+        stream.push(DECMPFS_LZVN_STORED);
+        stream
+    }
+
+    fn lzbitmap_stored(plain: &[u8]) -> Vec<u8> {
+        let mut stream = b"ZBM\x09".to_vec();
+        for chunk in plain.chunks(LZBITMAP_MAX_CHUNK) {
+            let length = (chunk.len() + LZBITMAP_CHUNK_HEADER).to_le_bytes();
+            stream.extend_from_slice(&length[..3]);
+            stream.extend_from_slice(&chunk.len().to_le_bytes()[..3]);
+            stream.extend_from_slice(chunk);
+        }
+        stream.extend_from_slice(&[6, 0, 0, 0, 0, 0]);
+        stream
+    }
+
+    fn lzfse(plain: &[u8]) -> Vec<u8> {
+        let mut stream = Vec::new();
+        lzfse_rust::encode_bytes(plain, &mut stream).expect("encode");
+        stream
+    }
+
+    fn pattern(length: usize, seed: usize) -> Vec<u8> {
+        (0..length)
+            .map(|index| ((index * 31 + seed) % 251).to_le_bytes()[0])
+            .collect()
+    }
+
+    fn universal_binary() -> Vec<u8> {
+        let mut data = vec![0u8; 8200];
+        data[..8].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2]);
+        let arches = [
+            [CPU_TYPE_X86_64, 3, 4096, 8, 12],
+            [CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64E, 8192, 8, 14],
+        ];
+        for (index, arch) in arches.iter().enumerate() {
+            for (field, word) in arch.iter().enumerate() {
+                let at = 8 + index * 20 + field * 4;
+                data[at..at + 4].copy_from_slice(&word.to_be_bytes());
+            }
+        }
+        data[4096..4104].copy_from_slice(b"x86slice");
+        data[8192..8200].copy_from_slice(b"arm64e!!");
+        data
+    }
+
+    /// The file-system records and data of one synthetic volume.
+    struct Volume {
+        records: Vec<(Vec<u8>, Vec<u8>)>,
+        data: Vec<(u64, Vec<u8>)>,
+        physical: Vec<KeyValue>,
+        next_block: u64,
+        hashed: bool,
+    }
+
+    impl Volume {
+        fn new() -> Self {
+            Self {
+                records: Vec::new(),
+                data: Vec::new(),
+                physical: Vec::new(),
+                next_block: FIRST_DATA_BLOCK,
+                hashed: false,
+            }
+        }
+
+        fn store(&mut self, bytes: &[u8]) -> u64 {
+            let block = self.next_block;
+            self.next_block += (bytes.len() as u64).div_ceil(BLOCK_SIZE_U64).max(1);
+            self.data.push((block, bytes.to_vec()));
+            block
+        }
+
+        fn link(&mut self, parent: u64, name: &str, oid: u64) {
+            self.records.push(directory_record(parent, name, oid));
+        }
+
+        fn directory(&mut self, parent: u64, name: &str, oid: u64) {
+            self.link(parent, name, oid);
+            self.records.push(inode_record(oid, 0, false));
+        }
+
+        fn plain(&mut self, parent: u64, name: &str, oid: u64, bytes: &[u8]) {
+            self.link(parent, name, oid);
+            self.records
+                .push(inode_record(oid, bytes.len() as u64, true));
+            if !bytes.is_empty() {
+                let block = self.store(bytes);
+                self.records
+                    .push(extent_record(oid, 0, bytes.len() as u64, block));
+            }
+        }
+
+        fn compressed(&mut self, parent: u64, name: &str, oid: u64, method: u32, size: u64) {
+            self.link(parent, name, oid);
+            self.records.push(inode_record(oid, 0, false));
+            let header = decmpfs(method, size);
+            self.records
+                .push(embedded_xattr(oid, DECMPFS_XATTR, &header));
+        }
+
+        fn fork(&mut self, oid: u64, fork: &[u8]) {
+            let fork_oid = oid + FORK_OID_BIAS;
+            let size = fork.len() as u64;
+            self.records
+                .push(stream_xattr(oid, RESOURCE_FORK_XATTR, fork_oid, size));
+            let block = self.store(fork);
+            self.records.push(extent_record(fork_oid, 0, size, block));
+        }
+
+        fn compressed_file(
+            &mut self,
+            name: &str,
+            oid: u64,
+            method: u32,
+            size: usize,
+            blocks: &[Vec<u8>],
+        ) {
+            self.compressed(ROOT, name, oid, method, size as u64);
+            self.fork(oid, &resource_fork(blocks));
+        }
+
+        fn sorted_records(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+            let mut records = self.records.clone();
+            records.sort_by_key(|(key, _)| {
+                let header = u64::from_le_bytes(key[..8].try_into().expect("header"));
+                (
+                    header & RECORD_ID_MASK,
+                    header >> RECORD_TYPE_SHIFT,
+                    key.clone(),
+                )
+            });
+            records
+        }
+
+        fn image(&self) -> Image {
+            let mut image = Image::default();
+            image.put(0, &container_superblock(1, CONTAINER_OMAP));
+            image.put(STALE_CHECKPOINT, &container_superblock(STALE_XID, 0));
+            let map = sealed(object(
+                CHECKPOINT_MAP_BLOCK,
+                TEST_XID,
+                OBJECT_TYPE_CHECKPOINT_MAP,
+            ));
+            image.put(CHECKPOINT_MAP_BLOCK, &map);
+            let latest = container_superblock(TEST_XID, CONTAINER_OMAP);
+            image.put(LATEST_CHECKPOINT, &latest);
+            image.put(CORRUPT_CHECKPOINT, &vec![0xaa; BLOCK_SIZE]);
+            image.put(
+                CONTAINER_OMAP,
+                &omap_object(CONTAINER_OMAP, CONTAINER_OMAP_TREE),
+            );
+            let container_tree = omap_leaf(&[(VOLUME_OID, TEST_XID, VOLUME_BLOCK)], NODE_ROOT);
+            image.put(
+                CONTAINER_OMAP_TREE,
+                &container_tree.encode(CONTAINER_OMAP_TREE),
+            );
+            image.put(VOLUME_OMAP, &omap_object(VOLUME_OMAP, VOLUME_OMAP_TREE));
+            for (block, bytes) in &self.data {
+                image.put(*block, bytes);
+            }
+            let mut next = FIRST_NODE_BLOCK;
+            let omap = self.put_filesystem(&mut image, &mut next);
+            image.set_volume_omap(omap, next);
+            let extent_tree = self.put_extent_tree(&mut image, next + 2);
+            image.put(VOLUME_BLOCK, &volume_superblock(extent_tree));
+            image
+        }
+
+        /// Writes the file-system tree and returns its object-map entries.
+        fn put_filesystem(&self, image: &mut Image, next: &mut u64) -> Vec<(u64, u64, u64)> {
+            let root_block = *next;
+            let mut omap = vec![
+                (FS_ROOT_OID, OLDER_XID, 0),
+                (FS_ROOT_OID, STALE_XID, root_block),
+                (FS_ROOT_OID, NEWER_XID, 0),
+            ];
+            let mut index = Vec::new();
+            for (slot, chunk) in self.sorted_records().chunks(RECORDS_PER_LEAF).enumerate() {
+                *next += 1;
+                let child = slot as u64 + 1;
+                let entries = chunk
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                    .collect();
+                let mut leaf = TreeNode::new(NODE_LEAF, entries).encode(FS_ROOT_OID + child);
+                let mut value = child.to_le_bytes().to_vec();
+                if self.hashed {
+                    leaf = headerless(leaf);
+                    value.extend_from_slice(&Sha256::digest(&leaf));
+                } else {
+                    value = (FS_ROOT_OID + child).to_le_bytes().to_vec();
+                }
+                image.put(*next, &leaf);
+                omap.push((FS_ROOT_OID + child, TEST_XID, *next));
+                index.push((chunk[0].0.clone(), Some(value)));
+            }
+            let flags = NODE_ROOT | if self.hashed { NODE_HASHED } else { 0 };
+            image.put(root_block, &TreeNode::new(flags, index).encode(FS_ROOT_OID));
+            *next += 1;
+            omap
+        }
+
+        fn put_extent_tree(&self, image: &mut Image, first_block: u64) -> u64 {
+            if self.physical.is_empty() {
+                return 0;
+            }
+            let mut physical = self.physical.clone();
+            physical.sort_by_key(|(key, _)| (le_u64(key, 0).ok(), le_u64(key, 8).ok()));
+            let half = physical.len().div_ceil(2);
+            let mut index = Vec::new();
+            for (slot, chunk) in physical.chunks(half).enumerate() {
+                let address = first_block + 1 + slot as u64;
+                image.put(
+                    address,
+                    &TreeNode::new(NODE_LEAF, chunk.to_vec()).encode(address),
+                );
+                index.push((chunk[0].0.clone(), Some(address.to_le_bytes().to_vec())));
+            }
+            image.put(
+                first_block,
+                &TreeNode::new(NODE_ROOT, index).encode(first_block),
+            );
+            first_block
+        }
+    }
+
+    const LZVN_PLAIN: usize = 65_536 + 100;
+    const LZFSE_PLAIN: usize = 70_000;
+    const LZBITMAP_PLAIN: usize = 40_000;
+    const BIG_BLOCKS: usize = DECMPFS_CACHE_BLOCKS + 1;
+    const BLOCK: usize = 65_536;
+
+    fn standard_volume() -> Volume {
+        let mut volume = Volume::new();
+        volume.plain(ROOT, "plain.txt", 16, b"hello apfs");
+        volume
+            .records
+            .push((record_key(16, RECORD_SIBLING_LINK), vec![0; 10]));
+        volume.link(ROOT, "..", 16);
+        volume.directory(ROOT, "dir", 17);
+        volume.plain(17, "nested.icxs", 18, &universal_binary());
+        volume.plain(ROOT, "fat", 19, &universal_binary());
+        volume.plain(ROOT, "empty", 25, &[]);
+        let lzvn = pattern(LZVN_PLAIN, 1);
+        let lzvn_blocks = [
+            [&[DECMPFS_LZVN_STORED][..], &lzvn[..BLOCK]].concat(),
+            lzvn_literals(&lzvn[BLOCK..]),
+        ];
+        volume.compressed_file("lzvn", 20, DECMPFS_LZVN, LZVN_PLAIN, &lzvn_blocks);
+        let lzfse_plain = pattern(LZFSE_PLAIN, 2);
+        let lzfse_blocks = [
+            lzfse(&lzfse_plain[..BLOCK]),
+            [&[0xcc][..], &lzfse_plain[BLOCK..]].concat(),
+        ];
+        volume.compressed_file("lzfse", 21, DECMPFS_LZFSE, LZFSE_PLAIN, &lzfse_blocks);
+        let bitmap = pattern(LZBITMAP_PLAIN, 3);
+        let bitmap_blocks = [lzbitmap_stored(&bitmap)];
+        volume.compressed_file(
+            "lzbitmap",
+            22,
+            DECMPFS_LZBITMAP,
+            LZBITMAP_PLAIN,
+            &bitmap_blocks,
+        );
+        let big_blocks = vec![lzvn_zeros(BLOCK); BIG_BLOCKS];
+        volume.compressed_file("big", 23, DECMPFS_LZVN, BIG_BLOCKS * BLOCK, &big_blocks);
+        add_broken_files(&mut volume);
+        volume
+    }
+
+    fn add_broken_files(volume: &mut Volume) {
+        volume.link(ROOT, "no-inode", 30);
+        volume.compressed(ROOT, "bad-method", 31, DECMPFS_UNSUPPORTED, 4);
+        volume.compressed(ROOT, "no-fork", 32, DECMPFS_LZVN, 4);
+        volume.link(ROOT, "stream-header", 33);
+        volume.records.push(inode_record(33, 0, false));
+        volume
+            .records
+            .push(stream_xattr(33, DECMPFS_XATTR, 0x9999, 16));
+        volume.link(ROOT, "short-header", 34);
+        volume.records.push(inode_record(34, 0, false));
+        volume
+            .records
+            .push(embedded_xattr(34, DECMPFS_XATTR, &[0; 8]));
+        let stored = [vec![DECMPFS_LZVN_STORED], vec![0; BLOCK]].concat();
+        let corrupt = [stored, vec![0xe3, 1]];
+        volume.compressed_file("corrupt", 35, DECMPFS_LZVN, BLOCK + 2, &corrupt);
+        volume.compressed_file("short-block", 36, DECMPFS_LZVN, 4, &[vec![0x06, 1]]);
+        volume.compressed(ROOT, "bad-index", 37, DECMPFS_LZVN, 4);
+        volume.fork(37, &[12, 0, 0, 0, 12, 0, 0, 0, 0x06, 1, 2, 3, 4]);
+        volume.compressed(ROOT, "embedded-fork", 47, DECMPFS_LZVN, 4);
+        let embedded = embedded_xattr(47, RESOURCE_FORK_XATTR, &[0; 8]);
+        volume.records.push(embedded);
+        volume.compressed(ROOT, "tiny-fork", 38, DECMPFS_LZVN, 4);
+        volume.fork(38, &[8, 0, 0, 0]);
+        volume.plain(ROOT, "sparse", 39, &[]);
+        let inode = inode_record(39, 100, false);
+        volume.records.retain(|(key, _)| *key != inode.0);
+        volume.records.push(inode);
+        volume.plain(ROOT, "fat-header", 40, &[0xca, 0xfe, 0xba, 0xbe, 0]);
+        volume.plain(ROOT, "fat-count", 41, &[0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0]);
+        add_malformed_records(volume);
+    }
+
+    fn add_malformed_records(volume: &mut Volume) {
+        volume.link(ROOT, "bad-fields", 42);
+        let (key, mut value) = inode_record(42, 0, false);
+        value.extend_from_slice(&[3, 0, 0, 0]);
+        volume.records.push((key, value));
+        volume.directory(ROOT, "broken", 43);
+        let mut name = directory_record(43, "x", 44).0;
+        name.truncate(name.len() - 2);
+        volume.records.push((name, 44u64.to_le_bytes().to_vec()));
+        volume.link(ROOT, "bad-xattr-name", 45);
+        volume.records.push(inode_record(45, 0, false));
+        let (mut key, value) = embedded_xattr(45, "n", b"x");
+        key.truncate(key.len() - 1);
+        volume.records.push((key, value));
+        volume.link(ROOT, "bad-xattr-data", 46);
+        volume.records.push(inode_record(46, 0, false));
+        let (key, mut value) = embedded_xattr(46, "n", b"xyz");
+        value.truncate(value.len() - 1);
+        volume.records.push((key, value));
+    }
+
+    fn standard_image() -> Image {
+        standard_volume().image()
+    }
+
+    fn open_standard() -> ApfsExtractor<Vec<u8>> {
+        standard_image().open().expect("open synthetic container")
+    }
+
+    fn read_file<R: ReadAt>(extractor: &ApfsExtractor<R>, path: &str) -> Result<Vec<u8>> {
+        let file = extractor.open_file(path)?;
+        let mut data = vec![0u8; usize::try_from(file.size()).expect("size")];
+        file.read_exact_at(&mut data, 0)
+            .map_err(|source| ApfsError::Read {
+                context: path.to_owned(),
+                source,
+            })?;
+        Ok(data)
+    }
+
+    fn scratch_directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("ipakeep-apfs-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        directory
+    }
+
+    #[test]
+    fn reads_plain_and_compressed_files_from_synthetic_container() {
+        let extractor = open_standard();
+        assert_eq!(
+            read_file(&extractor, "/plain.txt").expect("plain"),
+            b"hello apfs"
+        );
+        assert_eq!(
+            read_file(&extractor, "dir/nested.icxs").expect("nested"),
+            universal_binary()
+        );
+        assert_eq!(
+            read_file(&extractor, "/lzvn").expect("lzvn"),
+            pattern(LZVN_PLAIN, 1)
+        );
+        assert_eq!(
+            read_file(&extractor, "/lzfse").expect("lzfse"),
+            pattern(LZFSE_PLAIN, 2)
+        );
+        assert_eq!(
+            read_file(&extractor, "/lzbitmap").expect("lzbitmap"),
+            pattern(LZBITMAP_PLAIN, 3)
+        );
+        assert_eq!(
+            read_file(&extractor, "/empty").expect("empty"),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn extracts_files_thinning_all_but_icxs_images() {
+        let image = standard_image().bytes();
+        let destination = scratch_directory("extract");
+        let paths = ["/plain.txt", "/dir/nested.icxs", "/fat", "/lzfse", "/empty"];
+        extract_apfs_files(image, &paths, &destination).expect("extract");
+        let read = |name: &str| fs::read(destination.join(name)).expect("output");
+        assert_eq!(read("plain.txt"), b"hello apfs");
+        assert_eq!(read("nested.icxs"), universal_binary());
+        assert_eq!(read("fat"), b"arm64e!!");
+        assert_eq!(read("lzfse"), pattern(LZFSE_PLAIN, 2));
+        assert_eq!(read("empty"), Vec::<u8>::new());
+        fs::remove_dir_all(&destination).expect("cleanup");
+    }
+
+    #[test]
+    fn extraction_keeps_existing_outputs_and_removes_partial_ones() {
+        let extractor = open_standard();
+        let destination = scratch_directory("partial");
+        create_destination(&destination).expect("destination");
+        fs::write(destination.join("plain.txt"), b"keep").expect("seed");
+        let existing = extractor.extract_file("/plain.txt", &destination, false);
+        assert!(matches!(existing, Err(ApfsError::Output { .. })));
+        assert_eq!(
+            fs::read(destination.join("plain.txt")).expect("kept"),
+            b"keep"
+        );
+        let corrupt = extractor.extract_file("/corrupt", &destination, true);
+        assert!(
+            matches!(corrupt, Err(ApfsError::Read { .. })),
+            "{corrupt:?}"
+        );
+        assert!(!destination.join("corrupt").exists());
+        let nameless = extractor.extract_file("/..", &destination, false);
+        assert!(matches!(nameless, Err(ApfsError::Malformed(_))));
+        fs::remove_dir_all(&destination).expect("cleanup");
+    }
+
+    #[test]
+    fn extraction_reports_unusable_destinations() {
+        let blocker = scratch_directory("blocker");
+        fs::write(&blocker, b"file").expect("blocker");
+        let result = extract_apfs_files(standard_image().bytes(), &["/plain.txt"], &blocker);
+        assert!(matches!(result, Err(ApfsError::Output { .. })));
+        fs::remove_file(&blocker).expect("cleanup");
+    }
+
+    #[test]
+    fn decoded_blocks_are_cached_with_a_bounded_size() {
+        let extractor = open_standard();
+        let ApfsFile::Compressed(reader) = extractor.open_file("/big").expect("big") else {
+            panic!("big is compressed");
+        };
+        let mut chunk = vec![1u8; BLOCK];
+        for index in 0..BIG_BLOCKS as u64 {
+            reader
+                .read_exact_at(&mut chunk, index * BLOCK as u64)
+                .expect("read");
+            assert!(chunk.iter().all(|&byte| byte == 0));
+        }
+        reader.read_exact_at(&mut chunk[..8], 0).expect("cached");
+        let cache = reader.cache.lock().expect("cache");
+        assert_eq!(cache.blocks.len(), DECMPFS_CACHE_BLOCKS);
+        assert_eq!(cache.order.len(), DECMPFS_CACHE_BLOCKS);
+    }
+
+    fn file_error(path: &str) -> String {
+        match read_file(&open_standard(), path) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("{path} unexpectedly decoded"),
+        }
+    }
+
+    #[test]
+    fn rejects_files_with_unusable_metadata() {
+        let cases = [
+            ("/missing", "path component \"missing\" was not found"),
+            ("/no-inode", "file has no inode record"),
+            ("/bad-method", "compression type 4"),
+            ("/no-fork", "compressed file has no resource fork"),
+            ("/embedded-fork", "compressed file has no resource fork"),
+            ("/stream-header", "decmpfs header stored in a data stream"),
+            ("/short-header", "decmpfs header is truncated"),
+            (
+                "/short-block",
+                "decompressed block 0 has size 1, expected 4",
+            ),
+            ("/bad-index", "compression index has size 12, expected 8"),
+            ("/tiny-fork", "compressed resource fork is too small"),
+            ("/sparse", "file extents cover 0 bytes, expected 100"),
+            ("/bad-fields", "inode field header is truncated"),
+            ("/broken/x", "directory entry name is truncated"),
+            ("/bad-xattr-name", "xattr name is truncated"),
+            ("/bad-xattr-data", "xattr data is truncated"),
+            ("/corrupt", "decode compressed block 1"),
+        ];
+        for (path, expected) in cases {
+            let error = file_error(path);
+            assert!(error.contains(expected), "{path}: {error}");
+        }
+    }
+
+    #[test]
+    fn arm64e_range_rejects_malformed_universal_headers() {
+        let extractor = open_standard();
+        for path in ["/fat-header", "/fat-count"] {
+            let file = extractor.open_file(path).expect("open");
+            assert!(matches!(arm64e_range(&file), Err(ApfsError::Malformed(_))));
+        }
+        let corrupt = extractor.open_file("/corrupt").expect("open");
+        assert!(matches!(arm64e_range(&corrupt), Ok((0, _))));
+        let short = extractor.open_file("/short-block").expect("open");
+        assert!(matches!(arm64e_range(&short), Err(ApfsError::Read { .. })));
+    }
+
+    fn open_error(image: &Image) -> ApfsError {
+        match image.open() {
+            Err(error) => error,
+            Ok(_) => panic!("container unexpectedly opened"),
+        }
+    }
+
+    fn assert_open_error(image: &Image, expected: &str) {
+        let error = open_error(image).to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    #[test]
+    fn rejects_unusable_container_superblocks() {
+        assert_open_error(&Image::default(), "image is too small");
+        let mut image = standard_image();
+        image.edit(0, |block| put_u32(block, 36, 8192));
+        assert_open_error(&image, "non-4096-byte block size");
+        let mut image = standard_image();
+        image.edit(0, |block| put_u32(block, 104, CHECKPOINT_BLOCKS | 1 << 31));
+        assert_open_error(&image, "non-contiguous checkpoint descriptor area");
+        let mut image = standard_image();
+        image.edit(0, |block| {
+            put_u64(block, 112, CHECKPOINT_MAP_BLOCK);
+            put_u32(block, 104, 1);
+        });
+        assert_open_error(&image, "checkpoint area has no valid container superblock");
+        let mut image = standard_image();
+        image.edit(0, |block| put_u64(block, 112, 1 << 40));
+        assert!(matches!(open_error(&image), ApfsError::Read { .. }));
+        let mut image = standard_image();
+        image.edit(0, |block| put_u32(block, 24, OBJECT_TYPE_OMAP));
+        assert_open_error(&image, "is not a container superblock");
+    }
+
+    #[test]
+    fn rejects_unusable_volume_superblocks_and_object_maps() {
+        let mut image = standard_image();
+        image.edit(VOLUME_BLOCK, |block| block[32] = b'X');
+        assert_open_error(&image, "volume superblock has an invalid magic");
+        let mut image = standard_image();
+        image.blocks.get_mut(&VOLUME_BLOCK).expect("volume")[100] ^= 1;
+        assert!(matches!(
+            open_error(&image),
+            ApfsError::Checksum(VOLUME_BLOCK)
+        ));
+        let mut image = standard_image();
+        image.edit(LATEST_CHECKPOINT, |block| put_u64(block, 160, VOLUME_BLOCK));
+        assert_open_error(&image, "is not a object map");
+        let mut image = standard_image();
+        image.edit(CONTAINER_OMAP, |block| put_u64(block, 48, VOLUME_BLOCK));
+        assert_open_error(&image, "is not a tree node");
+    }
+
+    fn with_container_omap(node: &TreeNode) -> Image {
+        let mut image = standard_image();
+        image.put(CONTAINER_OMAP_TREE, &node.encode(CONTAINER_OMAP_TREE));
+        image
+    }
+
+    #[test]
+    fn object_map_lookups_reject_missing_or_malformed_entries() {
+        let missing = "is not in the object map";
+        let above = omap_leaf(&[(VOLUME_OID + 1, TEST_XID, VOLUME_BLOCK)], NODE_ROOT);
+        assert_open_error(&with_container_omap(&above), missing);
+        let below = omap_leaf(&[(VOLUME_OID - 1, TEST_XID, VOLUME_BLOCK)], NODE_ROOT);
+        assert_open_error(&with_container_omap(&below), missing);
+        let empty = TreeNode::new(NODE_ROOT | NODE_LEAF | NODE_FIXED_KV, Vec::new());
+        assert_open_error(&with_container_omap(&empty), "object map node is empty");
+        let valueless = TreeNode::new(
+            NODE_ROOT | NODE_LEAF | NODE_FIXED_KV,
+            vec![(omap_key(VOLUME_OID, TEST_XID), None)],
+        );
+        assert_open_error(
+            &with_container_omap(&valueless),
+            "object map entry has no value",
+        );
+        let looping = TreeNode::new(
+            NODE_ROOT | NODE_FIXED_KV,
+            vec![(
+                omap_key(0, 0),
+                Some(CONTAINER_OMAP_TREE.to_le_bytes().to_vec()),
+            )],
+        );
+        assert_open_error(
+            &with_container_omap(&looping),
+            "object map exceeds maximum depth",
+        );
+        let overflowing = omap_leaf(&[(VOLUME_OID, TEST_XID, u64::MAX)], NODE_ROOT);
+        assert_open_error(&with_container_omap(&overflowing), "overflows");
+    }
+
+    fn hashed_volume() -> Volume {
+        let mut volume = Volume::new();
+        volume.hashed = true;
+        for index in 0..3u64 {
+            let name = format!("file{index}");
+            volume.plain(ROOT, &name, 16 + index, name.as_bytes());
+        }
+        volume
+    }
+
+    #[test]
+    fn reads_sealed_volumes_with_hashed_headerless_nodes() {
+        let extractor = hashed_volume().image().open().expect("open sealed");
+        for index in 0..3 {
+            let name = format!("file{index}");
+            assert_eq!(read_file(&extractor, &name).expect("read"), name.as_bytes());
+        }
+    }
+
+    #[test]
+    fn sealed_volumes_reject_tampered_children() {
+        let mut image = hashed_volume().image();
+        let leaf = image.blocks.get_mut(&(FIRST_NODE_BLOCK + 1)).expect("leaf");
+        leaf[BLOCK_SIZE - 1] ^= 1;
+        let extractor = image.open().expect("open sealed");
+        let error = read_file(&extractor, "file0").expect_err("tampered");
+        assert!(matches!(error, ApfsError::Hash(oid) if oid == FS_ROOT_OID + 1));
+    }
+
+    #[test]
+    fn filesystem_tree_rejects_valueless_children_and_deep_chains() {
+        let mut image = standard_image();
+        let root_block = FIRST_NODE_BLOCK;
+        let key = record_key(0, 0);
+        let root = TreeNode::new(NODE_ROOT, vec![(key, None)]);
+        image.put(root_block, &root.encode(FS_ROOT_OID));
+        let extractor = image.open().expect("open");
+        let error = read_file(&extractor, "plain.txt").expect_err("valueless");
+        assert!(
+            error.to_string().contains("invalid child reference"),
+            "{error}"
+        );
+
+        let mut image = standard_image();
+        let chain = MAXIMUM_TREE_DEPTH as u64 + 2;
+        let mut omap = Vec::new();
+        for level in 0..chain {
+            let (oid, block) = (FS_ROOT_OID + level, 3000 + level);
+            let child = (oid + 1).to_le_bytes().to_vec();
+            let flags = if level == 0 { NODE_ROOT } else { 0 };
+            let node = TreeNode::new(flags, vec![(record_key(0, 0), Some(child))]);
+            image.put(block, &node.encode(oid));
+            omap.push((oid, TEST_XID, block));
+        }
+        image.set_volume_omap(omap, 4000);
+        let extractor = image.open().expect("open");
+        let error = read_file(&extractor, "plain.txt").expect_err("deep");
+        assert!(
+            error
+                .to_string()
+                .contains("filesystem tree exceeds maximum depth")
+        );
+    }
+
+    fn physical_key(oid: u64, logical: u64) -> Vec<u8> {
+        omap_key(oid, logical)
+    }
+
+    fn physical_value(length: u64, block: u64) -> Vec<u8> {
+        [length, block].map(u64::to_le_bytes).concat()
+    }
+
+    fn extent_tree_volume() -> Volume {
+        let mut volume = Volume::new();
+        volume.link(ROOT, "split", 16);
+        let split_size = BLOCK_SIZE_U64 + 100;
+        volume.records.push(inode_record(16, split_size, true));
+        volume.link(ROOT, "valueless", 17);
+        volume.records.push(inode_record(17, 10, true));
+        let one = volume.store(&pattern(BLOCK_SIZE, 4));
+        let two = volume.store(&pattern(100, 5));
+        volume.physical = vec![
+            (physical_key(9, 0), Some(physical_value(1, one))),
+            (
+                physical_key(16, BLOCK_SIZE_U64),
+                Some(physical_value(100, two)),
+            ),
+            (
+                physical_key(16, 0),
+                Some(physical_value(BLOCK_SIZE_U64, one)),
+            ),
+            (physical_key(17, 0), None),
+            (physical_key(30, 0), Some(physical_value(1, one))),
+        ];
+        volume
+    }
+
+    #[test]
+    fn reads_extents_from_the_physical_extent_tree() {
+        let extractor = extent_tree_volume().image().open().expect("open");
+        let expected = [pattern(BLOCK_SIZE, 4), pattern(100, 5)].concat();
+        assert_eq!(read_file(&extractor, "split").expect("split"), expected);
+        let error = read_file(&extractor, "valueless").expect_err("valueless");
+        assert!(error.to_string().contains("invalid or sparse"), "{error}");
+    }
+
+    fn extent_tree_error(root: &TreeNode, extra: &[(u64, Vec<u8>)]) -> String {
+        let mut image = extent_tree_volume().image();
+        let address = 5000;
+        image.put(address, &root.encode(address));
+        for (block, bytes) in extra {
+            image.put(*block, bytes);
+        }
+        image.edit(VOLUME_BLOCK, |block| put_u64(block, 1032, address));
+        let extractor = image.open().expect("open");
+        read_file(&extractor, "split")
+            .expect_err("extent tree")
+            .to_string()
+    }
+
+    #[test]
+    fn physical_extent_tree_rejects_valueless_children_and_deep_chains() {
+        let valueless = TreeNode::new(NODE_ROOT, vec![(physical_key(0, 0), None)]);
+        let error = extent_tree_error(&valueless, &[]);
+        assert!(error.contains("extent index has no child"), "{error}");
+        let mut chain = Vec::new();
+        for level in 1..=MAXIMUM_TREE_DEPTH as u64 + 2 {
+            let child = Some((5000 + level + 1).to_le_bytes().to_vec());
+            let node = TreeNode::new(0, vec![(physical_key(0, 0), child)]);
+            chain.push((5000 + level, node.encode(5000 + level)));
+        }
+        let root = TreeNode::new(
+            NODE_ROOT,
+            vec![(physical_key(0, 0), Some(5001u64.to_le_bytes().to_vec()))],
+        );
+        let error = extent_tree_error(&root, &chain);
+        assert!(
+            error.contains("physical extent tree exceeds maximum depth"),
+            "{error}"
+        );
+    }
+
+    /// A device of `u64::MAX` zero bytes.
+    struct Endless;
+
+    impl ReadAt for Endless {
+        fn read_at(&self, buf: &mut [u8], _offset: u64) -> io::Result<usize> {
+            buf.fill(0);
+            Ok(buf.len())
+        }
+
+        fn size(&self) -> u64 {
+            u64::MAX
+        }
+    }
+
+    /// A device whose reads always fail.
+    struct Failing;
+
+    impl ReadAt for Failing {
+        fn read_at(&self, _buf: &mut [u8], _offset: u64) -> io::Result<usize> {
+            Err(io::Error::other("device failure"))
+        }
+
+        fn size(&self) -> u64 {
+            BLOCK_SIZE_U64
+        }
+    }
+
+    #[test]
+    fn device_read_failures_are_reported() {
+        assert!(matches!(
+            ApfsExtractor::open(Failing),
+            Err(ApfsError::Read { .. })
+        ));
+        let source = ExtentReader::new(&Failing, vec![extent(0, 0, 16)], 16).expect("source");
+        let error = DecmpfsReader::new(source, 4, DECMPFS_LZVN)
+            .err()
+            .expect("failing fork");
+        assert!(
+            error.to_string().contains("compressed resource fork"),
+            "{error}"
+        );
+    }
+
+    fn extent(logical: u64, physical: u64, length: u64) -> Extent {
+        Extent {
+            logical,
+            physical,
+            length,
+        }
+    }
+
+    #[test]
+    fn extent_reader_validates_extents_against_the_device() {
+        let half = 1u64 << 63;
+        let overflowing = vec![extent(0, 0, half), extent(half, 0, half)];
+        let error = ExtentReader::new(&Endless, overflowing, 1)
+            .err()
+            .expect("overflow");
+        assert!(error.to_string().contains("length overflows"));
+        let huge_block = vec![extent(0, u64::MAX / BLOCK_SIZE_U64 + 1, 1)];
+        assert!(ExtentReader::new(&Endless, huge_block, 1).is_err());
+        assert!(ExtentReader::new(&Endless, Vec::new(), u64::MAX).is_err());
+        let device = vec![0u8; BLOCK_SIZE];
+        let beyond = vec![extent(0, 1, 1)];
+        let error = ExtentReader::new(&device, beyond, 1).err().expect("beyond");
+        assert!(
+            error
+                .to_string()
+                .contains("exceeds the Apple filesystem image")
+        );
+        let unchecked = ExtentReader {
+            device: &device,
+            extents: Vec::new(),
+            size: 4,
+        };
+        let mut buffer = [0u8; 4];
+        let error = unchecked.read_at(&mut buffer, 0).expect_err("uncovered");
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn decmpfs_reader_guards_its_block_table_and_cache() {
+        let fork = resource_fork(&[vec![DECMPFS_LZVN_STORED, 7, 7]]);
+        let mut device = fork.clone();
+        device.resize(BLOCK_SIZE, 0);
+        let extents = vec![extent(0, 0, fork.len() as u64)];
+        let source = ExtentReader::new(&device, extents, fork.len() as u64).expect("source");
+        let oversized = ExtentReader::new(&device, Vec::new(), 0).expect("empty source");
+        assert!(DecmpfsReader::new(oversized, u64::MAX, DECMPFS_LZVN).is_err());
+        let reader = DecmpfsReader::new(source, 2, DECMPFS_LZVN).expect("reader");
+        assert!(matches!(
+            reader.decode_block(1),
+            Err(ApfsError::Malformed(_))
+        ));
+        let mut data = [0u8; 2];
+        reader.read_exact_at(&mut data, 0).expect("read");
+        assert_eq!(data, [7, 7]);
+        reader
+            .cache
+            .lock()
+            .expect("cache")
+            .blocks
+            .insert(0, vec![7]);
+        let error = reader
+            .read_at(&mut data, 0)
+            .expect_err("short cached block");
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        let poisoned = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _guard = reader.cache.lock();
+                    panic!("poison the decmpfs cache");
+                })
+                .join()
+        });
+        assert!(poisoned.is_err());
+        assert!(reader.read_at(&mut data, 0).is_err());
+    }
+
+    #[test]
+    fn decompresses_codec_blocks_by_method() {
+        let plain = pattern(300, 6);
+        let lzvn = decompress_block(&lzvn_literals(&plain), DECMPFS_LZVN, 300).expect("lzvn");
+        assert_eq!(lzvn, plain);
+        let lzfse = decompress_block(&lzfse(&plain), DECMPFS_LZFSE, 300).expect("lzfse");
+        assert_eq!(lzfse, plain);
+        let bitmap = decompress_block(&lzbitmap_stored(&plain), DECMPFS_LZBITMAP, 300);
+        assert_eq!(bitmap.expect("lzbitmap"), plain);
+        assert_eq!(
+            decompress_block(&[], DECMPFS_LZVN, 0).expect("empty"),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn parses_other_record_types_as_ignored() {
+        assert!(matches!(
+            parse_record(RECORD_SIBLING_LINK, &[0; 8], &[]),
+            Ok(Record::Other)
+        ));
+    }
 
     const REPLAY_MAGIC: &[u8; 8] = b"APFSREC1";
     const REPLAY_ENV: &str = "IPAKEEP_APFS_REPLAY";

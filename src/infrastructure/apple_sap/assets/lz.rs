@@ -552,6 +552,288 @@ mod tests {
         assert!(decompress_lzbitmap(&stream[..stream.len() / 2]).is_err());
     }
 
+    fn lzvn_error(stream: &[u8], limit: usize) -> &'static str {
+        match decompress_lzvn(stream, limit) {
+            Err(LzError::Lzvn(reason)) => reason,
+            other => panic!("expected an LZVN error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lzvn_skips_nops_and_stops_at_end_of_input() {
+        let stream = [LZVN_NOP_A, 0xE2, b'h', b'i', LZVN_NOP_B];
+        assert_eq!(decompress_lzvn(&stream, 8).expect("decode"), b"hi".to_vec());
+    }
+
+    #[test]
+    fn lzvn_decodes_medium_large_and_previous_distance_opcodes() {
+        let stream = [
+            0xE2,
+            b'a',
+            b'b', // two literals
+            0xA0,
+            0x08,
+            0x00, // med_d: no literal, match 3 at distance 2
+            0x07,
+            0x02,
+            0x00, // lrg_d: no literal, match 3 at distance 2
+            0x06 | 0x40,
+            b'z', // pre_d: one literal, match 3 at the previous distance
+            LZVN_END_OF_STREAM,
+        ];
+        assert_eq!(
+            decompress_lzvn(&stream, 32).expect("decode"),
+            b"ababababzbzb".to_vec()
+        );
+    }
+
+    #[test]
+    fn lzvn_rejects_truncated_operands() {
+        assert_eq!(lzvn_error(&[0xA0, 0x00], 8), "truncated med_d opcode");
+        assert_eq!(lzvn_error(&[0x07, 0x01], 8), "truncated lrg_d opcode");
+        assert_eq!(lzvn_error(&[0x01], 8), "truncated sml_d opcode");
+        assert_eq!(lzvn_error(&[LZVN_LARGE_MATCH], 8), "truncated lrg_m opcode");
+        assert_eq!(lzvn_error(&[0xE3, b'a'], 8), "literal overflow");
+    }
+
+    #[test]
+    fn lzvn_rejects_invalid_distances() {
+        assert_eq!(lzvn_error(&[0x1E], 8), "pre_d without prior distance");
+        assert_eq!(lzvn_error(&[0x00, 0x00], 8), "zero match distance");
+        assert_eq!(
+            lzvn_error(&[0xE1, b'a', 0x00, 0x02], 8),
+            "invalid match distance"
+        );
+        assert_eq!(lzvn_error(&[0xE1, b'a', 0x38, 0x01], 4), "match overflow");
+    }
+
+    /// Layout of one compressed LZBITMAP chunk: the 15-byte header, the
+    /// literal, period, inline-bitmap and nibble areas, then the 17-byte
+    /// bitmap table.
+    #[derive(Default)]
+    struct Chunk {
+        decompressed: usize,
+        literals: Vec<u8>,
+        periods: Vec<u8>,
+        inline: Vec<u8>,
+        nibbles: Vec<u8>,
+        table: [u8; LZBITMAP_BITMAP_BYTES],
+    }
+
+    fn put_u24(out: &mut Vec<u8>, value: usize) {
+        out.extend_from_slice(&u32::try_from(value).expect("u24").to_le_bytes()[..3]);
+    }
+
+    impl Chunk {
+        fn encode(&self) -> Vec<u8> {
+            let periods = LZBITMAP_COMPRESSED_HEADER + self.literals.len();
+            let inline = periods + self.periods.len();
+            let nibbles = inline + self.inline.len();
+            let length = nibbles + self.nibbles.len() + LZBITMAP_BITMAP_BYTES;
+            self.encode_with_offsets(length, [periods, inline, nibbles])
+        }
+
+        fn encode_with_offsets(&self, length: usize, offsets: [usize; 3]) -> Vec<u8> {
+            let mut out = Vec::new();
+            put_u24(&mut out, length);
+            put_u24(&mut out, self.decompressed);
+            for offset in offsets {
+                put_u24(&mut out, offset);
+            }
+            for area in [&self.literals, &self.periods, &self.inline, &self.nibbles] {
+                out.extend_from_slice(area);
+            }
+            out.extend_from_slice(&self.table);
+            out.resize(length, 0);
+            out
+        }
+    }
+
+    fn lzbitmap_stream(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let mut stream = LZBITMAP_MAGIC.to_vec();
+        for chunk in chunks {
+            stream.extend_from_slice(chunk);
+        }
+        stream.extend_from_slice(&[6, 0, 0, 0, 0, 0]);
+        stream
+    }
+
+    fn lzbitmap_error(chunks: &[Vec<u8>]) -> &'static str {
+        match decompress_lzbitmap(&lzbitmap_stream(chunks)) {
+            Err(LzError::Lzbitmap(reason)) => reason,
+            other => panic!("expected an LZBITMAP error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lzbitmap_decodes_inline_table_and_repeated_bitmaps() {
+        let mut table = [0u8; LZBITMAP_BITMAP_BYTES];
+        table[0] = 0xFF;
+        let chunk = Chunk {
+            decompressed: 48,
+            literals: b"abcdefghXY".to_vec(),
+            periods: vec![2],
+            inline: vec![0b0000_0011],
+            nibbles: vec![0x13, 0xF4, 0x00],
+            table,
+        };
+        let decoded = decompress_lzbitmap(&lzbitmap_stream(&[chunk.encode()])).expect("decode");
+        let mut expected = b"abcdefghXY".to_vec();
+        while expected.len() < 48 {
+            expected.push(expected[expected.len() - 2]);
+        }
+        assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn lzbitmap_rejects_malformed_chunk_headers() {
+        assert_eq!(
+            lzbitmap_error(&[vec![200, 0, 0]]),
+            "chunk length outside the stream"
+        );
+        assert_eq!(
+            decompress_lzbitmap(b"ZBM\x09\x06\x00")
+                .map_err(|error| error.to_string())
+                .err(),
+            Some("lzbitmap: truncated chunk header".to_owned())
+        );
+        assert_eq!(
+            lzbitmap_error(&[vec![6, 0, 0, 0x01, 0x80, 0x00]]),
+            "chunk decompresses over the limit"
+        );
+        assert_eq!(
+            lzbitmap_error(&[vec![8, 0, 0, 1, 0, 0, 0, 0]]),
+            "compressed chunk has no header"
+        );
+        let chunk = Chunk {
+            decompressed: 1,
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[chunk.encode_with_offsets(40, [40, 0, 0])]),
+            "metadata offset outside the chunk"
+        );
+        assert_eq!(
+            lzbitmap_error(&[chunk.encode_with_offsets(16, [0, 0, 0])]),
+            "chunk too short to hold its bitmaps"
+        );
+    }
+
+    #[test]
+    fn lzbitmap_rejects_bitmaps_with_three_period_bytes() {
+        let mut table = [0u8; LZBITMAP_BITMAP_BYTES];
+        table[1] = 0b11;
+        let chunk = Chunk {
+            decompressed: 1,
+            table,
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[chunk.encode()]),
+            "bitmap wants too many period bytes"
+        );
+    }
+
+    #[test]
+    fn lzbitmap_rejects_metadata_running_past_the_chunk() {
+        let mut table = [0u8; LZBITMAP_BITMAP_BYTES];
+        table[LZBITMAP_BITMAP_BYTES - 1] = 0xFF;
+        let inline = Chunk {
+            decompressed: 16,
+            literals: vec![1; 8],
+            nibbles: vec![0x00],
+            table,
+            ..Chunk::default()
+        };
+        let length = inline.encode().len();
+        let nibbles = LZBITMAP_COMPRESSED_HEADER + 8;
+        assert_eq!(
+            lzbitmap_error(&[inline.encode_with_offsets(length, [0, length - 1, nibbles])]),
+            "inline bitmaps run past the chunk"
+        );
+        let periods = Chunk {
+            decompressed: 4,
+            nibbles: vec![0x02],
+            ..Chunk::default()
+        };
+        let length = periods.encode().len();
+        let nibbles = LZBITMAP_COMPRESSED_HEADER;
+        assert_eq!(
+            lzbitmap_error(&[periods.encode_with_offsets(length, [length - 1, 0, nibbles])]),
+            "periods run past the chunk"
+        );
+        let mut table = [0u8; LZBITMAP_BITMAP_BYTES];
+        table[0] = 0xFF;
+        table[LZBITMAP_BITMAP_BYTES - 1] = 0x33;
+        let numbers = Chunk {
+            decompressed: 24,
+            table,
+            ..Chunk::default()
+        };
+        let length = numbers.encode().len();
+        assert_eq!(
+            lzbitmap_error(&[numbers.encode_with_offsets(length, [0, 0, length - 1])]),
+            "bitmap numbers run past the chunk"
+        );
+    }
+
+    #[test]
+    fn lzbitmap_rejects_bad_bitmap_numbers_and_periods() {
+        let marker = Chunk {
+            decompressed: 4,
+            nibbles: vec![0x0F],
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[marker.encode()]),
+            "0xf is a repetition marker, not a bitmap"
+        );
+        let zero_period = Chunk {
+            decompressed: 4,
+            periods: vec![0],
+            inline: vec![0],
+            nibbles: vec![0x01],
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[zero_period.encode()]),
+            "zero repetition period"
+        );
+        let before_output = Chunk {
+            decompressed: 4,
+            inline: vec![0],
+            nibbles: vec![0x00],
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[before_output.encode()]),
+            "period reaches before the output"
+        );
+        let endless = Chunk {
+            decompressed: 0x8000,
+            nibbles: [vec![0xF3], vec![0xFF; 1200]].concat(),
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[endless.encode()]),
+            "repetition count over the limit"
+        );
+    }
+
+    #[test]
+    fn lzbitmap_rejects_literals_running_past_the_chunk() {
+        let chunk = Chunk {
+            decompressed: 64,
+            inline: vec![0xFF; 8],
+            nibbles: vec![0; 4],
+            ..Chunk::default()
+        };
+        assert_eq!(
+            lzbitmap_error(&[chunk.encode()]),
+            "literals run past the chunk"
+        );
+    }
+
     #[test]
     fn lzfse_decodes_go_encoder_vectors() {
         let text = decompress_lzfse(&fixture("text.lzfse")).expect("text");

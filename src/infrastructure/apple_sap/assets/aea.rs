@@ -41,6 +41,7 @@ const AEA_SHA256_CHECKSUM: u8 = 2;
 const AEA_DECODED_SEGMENT_CACHE_COUNT: usize = 64;
 const MAX_AEA_AUTH_DATA_SIZE: u32 = 1 << 20;
 const MAX_FCS_KEY_SIZE: usize = 64 << 10;
+const FCS_KEY: &str = "download Apple FCS key";
 
 const AEA_HEADER_SIZE: usize = 12;
 const MAC_SIZE: usize = 32;
@@ -163,17 +164,6 @@ pub enum AeaError {
         /// Description of the inconsistency.
         reason: &'static str,
     },
-    /// Indexed segments decode to more than the declared output.
-    #[error("AEA segment data exceeds the declared output size")]
-    OutputOverflow,
-    /// Indexed segments decode to a different size than declared.
-    #[error("AEA segment data has size {actual}, expected {expected}")]
-    OutputSizeMismatch {
-        /// Sum of the indexed segment sizes.
-        actual: u64,
-        /// Declared output size.
-        expected: u64,
-    },
     /// A read touched a segment that was never indexed.
     #[error("AEA segment {0} is missing")]
     MissingSegment(u64),
@@ -268,8 +258,21 @@ impl<R: ReadAt> AeaReader<R> {
     /// Fails on malformed headers, key download or unwrap failures and
     /// authentication failures of the root or any cluster header.
     pub fn open(source: R, http: &BlockingHttp) -> Result<Self, AeaError> {
+        let download = |url: &str| http.get_limited(url, MAX_FCS_KEY_SIZE, FCS_KEY);
+        Self::open_downloading(source, download)
+    }
+
+    /// Opens `source`, fetching the FCS key PEM through `download` once its
+    /// URL has been validated as Apple's WKMS host.
+    ///
+    /// # Errors
+    /// See [`AeaReader::open`].
+    pub fn open_downloading(
+        source: R,
+        download: impl FnOnce(&str) -> Result<Vec<u8>, HttpRangeError>,
+    ) -> Result<Self, AeaError> {
         Self::open_keyed(source, |metadata| {
-            let pem = fetch_fcs_key(http, metadata)?;
+            let pem = download(fcs_key_url(metadata)?.as_str())?;
             unwrap_symmetric_key(&pem, metadata)
         })
     }
@@ -347,12 +350,6 @@ impl<R: ReadAt> AeaReader<R> {
             cluster_mac = header.next_mac;
             cluster += 1;
         }
-        if output_size != root.file_size {
-            return Err(AeaError::OutputSizeMismatch {
-                actual: output_size,
-                expected: root.file_size,
-            });
-        }
         Ok(())
     }
 
@@ -416,9 +413,6 @@ impl<R: ReadAt> AeaReader<R> {
             });
             data_offset += u64::from(segment.compressed_size);
             *output_size += u64::from(segment.decompressed_size);
-            if *output_size > root.file_size {
-                return Err(AeaError::OutputOverflow);
-            }
         }
         Ok(data_offset)
     }
@@ -675,20 +669,21 @@ pub fn parse_metadata(data: &[u8]) -> Result<AeaMetadata, AeaError> {
     Ok(metadata)
 }
 
-/// Validates the FCS key URL in `metadata` and downloads its PEM body.
+/// Returns the FCS key URL named by `metadata`.
 ///
 /// # Errors
-/// Fails when the URL is missing or not Apple's WKMS host, or on HTTP errors.
-pub fn fetch_fcs_key(http: &BlockingHttp, metadata: &AeaMetadata) -> Result<Vec<u8>, AeaError> {
+/// Fails when the URL is missing or not an `https` URL on Apple's WKMS host.
+pub fn fcs_key_url(metadata: &AeaMetadata) -> Result<reqwest::Url, AeaError> {
     let raw = metadata
         .get(FCS_KEY_URL_FIELD)
         .ok_or(AeaError::MissingMetadata("an FCS key URL"))?;
     let text = String::from_utf8_lossy(raw).into_owned();
-    let url = reqwest::Url::parse(&text).map_err(|_| AeaError::InvalidKeyUrl(text.clone()))?;
-    if url.scheme() != FCS_KEY_SCHEME || url.host_str() != Some(FCS_KEY_HOST) {
-        return Err(AeaError::InvalidKeyUrl(text));
+    match reqwest::Url::parse(&text) {
+        Ok(url) if url.scheme() == FCS_KEY_SCHEME && url.host_str() == Some(FCS_KEY_HOST) => {
+            Ok(url)
+        }
+        _ => Err(AeaError::InvalidKeyUrl(text)),
     }
-    Ok(http.get_limited(url.as_str(), MAX_FCS_KEY_SIZE, "download Apple FCS key")?)
 }
 
 #[derive(Deserialize)]
@@ -840,17 +835,16 @@ fn indexed_info(label: &[u8], index: u32) -> Vec<u8> {
 
 /// HMAC-SHA256 over `salt || data || le64(len(salt))`, compared in constant time.
 fn verify_mac(key: &[u8], data: &[u8], salt: &[&[u8]], expected: &[u8]) -> bool {
-    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(key) else {
-        return false;
-    };
-    let mut salt_length = 0_u64;
-    for part in salt {
-        mac.update(part);
-        salt_length += part.len() as u64;
-    }
-    mac.update(data);
-    mac.update(&salt_length.to_le_bytes());
-    mac.verify_slice(expected).is_ok()
+    <HmacSha256 as Mac>::new_from_slice(key).is_ok_and(|mut mac| {
+        let mut salt_length = 0_u64;
+        for part in salt {
+            mac.update(part);
+            salt_length += part.len() as u64;
+        }
+        mac.update(data);
+        mac.update(&salt_length.to_le_bytes());
+        mac.verify_slice(expected).is_ok()
+    })
 }
 
 fn apply_ctr(data: &mut [u8], key: &HeaderKey) {
@@ -1168,6 +1162,386 @@ pub(crate) mod tests {
             sha256_hex(&straddle),
             golden["straddle_sha256"].as_str().unwrap()
         );
+    }
+
+    const TEST_SYMMETRIC_KEY: [u8; 32] = [0x42; 32];
+    const TEST_MAIN_SALT: [u8; MAIN_SALT_SIZE] = [0x11; MAIN_SALT_SIZE];
+
+    /// One segment as written: header sizes and checksum plus the bytes
+    /// stored (before encryption) in the cluster's data area.
+    #[derive(Clone)]
+    struct SegmentSpec {
+        decompressed: u32,
+        compressed: u32,
+        checksum: [u8; 32],
+        stored: Vec<u8>,
+    }
+
+    fn stored_segment(plain: &[u8]) -> SegmentSpec {
+        let size = u32::try_from(plain.len()).unwrap();
+        SegmentSpec {
+            decompressed: size,
+            compressed: size,
+            checksum: Sha256::digest(plain).into(),
+            stored: plain.to_vec(),
+        }
+    }
+
+    fn compressed_segment(plain: &[u8]) -> SegmentSpec {
+        let mut stored = Vec::new();
+        lzfse_rust::encode_bytes(plain, &mut stored).unwrap();
+        SegmentSpec {
+            compressed: u32::try_from(stored.len()).unwrap(),
+            stored,
+            ..stored_segment(plain)
+        }
+    }
+
+    /// Encoder for synthetic AEA1 profile-1 archives (the inverse of
+    /// [`AeaReader`]), with every header field overridable.
+    struct ArchiveSpec {
+        profile: u32,
+        auth_data: Vec<u8>,
+        file_size: u64,
+        encrypted_size: Option<u64>,
+        segment_size: u32,
+        segments_per_cluster: u32,
+        compression: u8,
+        checksum: u8,
+        clusters: Vec<Vec<SegmentSpec>>,
+    }
+
+    impl ArchiveSpec {
+        fn new(segment_size: u32, segments_per_cluster: u32, plain: &[u8]) -> Self {
+            let segments: Vec<SegmentSpec> = plain
+                .chunks(segment_size as usize)
+                .map(stored_segment)
+                .collect();
+            Self {
+                profile: AEA_SYMMETRIC_PROFILE,
+                auth_data: record("purpose", "test"),
+                file_size: plain.len() as u64,
+                encrypted_size: None,
+                segment_size,
+                segments_per_cluster,
+                compression: AEA_LZFSE_COMPRESSION,
+                checksum: AEA_SHA256_CHECKSUM,
+                clusters: segments
+                    .chunks(segments_per_cluster as usize)
+                    .map(<[SegmentSpec]>::to_vec)
+                    .collect(),
+            }
+        }
+
+        fn main_key(&self) -> Vec<u8> {
+            let info = indexed_info(AEA_MAIN_KEY_INFO, self.profile);
+            derive_key(&TEST_SYMMETRIC_KEY, Some(&TEST_MAIN_SALT), &info, 32).unwrap()
+        }
+
+        fn cluster(&self, main_key: &[u8], index: u32, next_mac: Mac32) -> (Vec<u8>, Mac32) {
+            let key = cluster_key(main_key, index).unwrap();
+            let header_key = derive_header_key(&key, AEA_CLUSTER_HEADER_KEY_INFO).unwrap();
+            let per_cluster = self.segments_per_cluster as usize;
+            let mut headers = vec![0; SEGMENT_HEADER_SIZE * per_cluster];
+            let mut trailer = next_mac.to_vec();
+            trailer.resize(MAC_SIZE * (per_cluster + 1), 0);
+            let mut data = Vec::new();
+            for (slot, segment) in self.clusters[index as usize].iter().enumerate() {
+                let info = indexed_info(AEA_SEGMENT_KEY_INFO, u32::try_from(slot).unwrap());
+                let segment_key = derive_header_key(&key, &info).unwrap();
+                let mut encrypted = segment.stored.clone();
+                apply_ctr(&mut encrypted, &segment_key);
+                let header = &mut headers[slot * SEGMENT_HEADER_SIZE..][..SEGMENT_HEADER_SIZE];
+                header[..4].copy_from_slice(&segment.decompressed.to_le_bytes());
+                header[4..8].copy_from_slice(&segment.compressed.to_le_bytes());
+                header[8..].copy_from_slice(&segment.checksum);
+                let mac = compute_mac(&segment_key.mac, &encrypted, &[]);
+                trailer[MAC_SIZE * (slot + 1)..][..MAC_SIZE].copy_from_slice(&mac);
+                data.extend(encrypted);
+            }
+            apply_ctr(&mut headers, &header_key);
+            let mac = compute_mac(&header_key.mac, &headers, &[&trailer]);
+            (([headers, trailer, data]).concat(), mac)
+        }
+
+        fn root(&self, main_key: &[u8], cluster_mac: Mac32, encrypted_size: u64) -> Vec<u8> {
+            let root_key = derive_header_key(main_key, AEA_ROOT_KEY_INFO).unwrap();
+            let mut data = [0u8; ROOT_DATA_SIZE];
+            data[..8].copy_from_slice(&self.file_size.to_le_bytes());
+            data[8..16].copy_from_slice(&encrypted_size.to_le_bytes());
+            data[16..20].copy_from_slice(&self.segment_size.to_le_bytes());
+            data[20..24].copy_from_slice(&self.segments_per_cluster.to_le_bytes());
+            data[24] = self.compression;
+            data[25] = self.checksum;
+            apply_ctr(&mut data, &root_key);
+            let mac = compute_mac(&root_key.mac, &data, &[&cluster_mac, &self.auth_data]);
+            [&mac[..], &data, &cluster_mac].concat()
+        }
+
+        fn encode(&self) -> Vec<u8> {
+            let main_key = self.main_key();
+            let mut next_mac = [0u8; MAC_SIZE];
+            let mut clusters = Vec::new();
+            for index in (0..self.clusters.len()).rev() {
+                let (bytes, mac) = self.cluster(&main_key, u32::try_from(index).unwrap(), next_mac);
+                clusters.insert(0, bytes);
+                next_mac = mac;
+            }
+            let mut prologue = AEA_MAGIC.to_vec();
+            prologue.extend_from_slice(&self.profile.to_le_bytes());
+            let auth_length = u32::try_from(self.auth_data.len()).unwrap();
+            prologue.extend_from_slice(&auth_length.to_le_bytes());
+            prologue.extend_from_slice(&self.auth_data);
+            prologue.extend_from_slice(&TEST_MAIN_SALT);
+            let clusters = clusters.concat();
+            let total = (prologue.len() + ENCRYPTED_ROOT_SIZE + clusters.len()) as u64;
+            let root = self.root(&main_key, next_mac, self.encrypted_size.unwrap_or(total));
+            [prologue, root, clusters].concat()
+        }
+
+        fn open(&self) -> Result<AeaReader<Vec<u8>>, AeaError> {
+            AeaReader::open_with_symmetric_key(self.encode(), &TEST_SYMMETRIC_KEY)
+        }
+    }
+
+    fn compute_mac(key: &[u8], data: &[u8], salt: &[&[u8]]) -> Mac32 {
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(key).unwrap();
+        for part in salt {
+            mac.update(part);
+        }
+        mac.update(data);
+        let salt_length: usize = salt.iter().map(|part| part.len()).sum();
+        mac.update(&(salt_length as u64).to_le_bytes());
+        mac.finalize().into_bytes().into()
+    }
+
+    fn pattern(length: usize) -> Vec<u8> {
+        (0..length)
+            .map(|index| (index * 7 % 251).to_le_bytes()[0])
+            .collect()
+    }
+
+    fn read_all(reader: &AeaReader<Vec<u8>>) -> io::Result<Vec<u8>> {
+        let mut output = vec![0; usize::try_from(reader.size()).unwrap()];
+        reader.read_exact_at(&mut output, 0)?;
+        Ok(output)
+    }
+
+    #[test]
+    fn decodes_stored_and_compressed_segments_across_clusters() {
+        let plain = pattern(100);
+        let mut spec = ArchiveSpec::new(16, 3, &plain);
+        spec.clusters[0][1] = compressed_segment(&plain[16..32]);
+        let reader = spec.open().unwrap();
+        assert_eq!(reader.segment_size(), 16);
+        assert_eq!(read_all(&reader).unwrap(), plain);
+    }
+
+    #[test]
+    fn evicts_least_recent_segments_beyond_the_cache_bound() {
+        let plain = pattern(4 * (AEA_DECODED_SEGMENT_CACHE_COUNT + 2));
+        let reader = ArchiveSpec::new(4, 8, &plain).open().unwrap();
+        assert_eq!(read_all(&reader).unwrap(), plain);
+        assert_eq!(read_all(&reader).unwrap(), plain);
+        let cache = reader.lock_cache();
+        assert_eq!(cache.entries.len(), AEA_DECODED_SEGMENT_CACHE_COUNT);
+        assert_eq!(cache.order.len(), AEA_DECODED_SEGMENT_CACHE_COUNT);
+    }
+
+    fn open_error(spec: &ArchiveSpec) -> String {
+        spec.open().unwrap_err().to_string()
+    }
+
+    #[test]
+    fn rejects_invalid_root_headers() {
+        let plain = pattern(32);
+        let mut cases: Vec<(ArchiveSpec, &str)> = Vec::new();
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.file_size = 0;
+        cases.push((spec, "invalid AEA output size 0"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.encrypted_size = Some(1);
+        cases.push((spec, "AEA encrypted size is 1"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.segments_per_cluster = 0;
+        spec.clusters.clear();
+        cases.push((spec, "invalid segment layout"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.checksum = 1;
+        cases.push((spec, "unsupported AEA encoding"));
+        for (spec, expected) in cases {
+            let error = open_error(&spec);
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_prologues() {
+        let mut spec = ArchiveSpec::new(16, 2, &pattern(16));
+        spec.profile = 2;
+        assert!(matches!(spec.open(), Err(AeaError::UnsupportedProfile(2))));
+        let mut oversized = ArchiveSpec::new(16, 2, &pattern(16)).encode();
+        oversized[8..12].copy_from_slice(&(MAX_AEA_AUTH_DATA_SIZE + 1).to_le_bytes());
+        assert!(matches!(
+            AeaReader::open_with_symmetric_key(oversized, &TEST_SYMMETRIC_KEY),
+            Err(AeaError::AuthDataTooLarge(_))
+        ));
+        assert!(matches!(
+            parse_metadata(&[1, 2]),
+            Err(AeaError::InvalidMetadataRecordLength(0))
+        ));
+    }
+
+    #[test]
+    fn rejects_clusters_missing_from_the_image() {
+        let mut spec = ArchiveSpec::new(16, 2, &pattern(32));
+        spec.clusters.clear();
+        assert!(matches!(spec.open(), Err(AeaError::ClusterOutOfBounds)));
+    }
+
+    #[test]
+    fn rejects_inconsistent_segment_headers() {
+        let plain = pattern(32);
+        let mut cases: Vec<(ArchiveSpec, &str)> = Vec::new();
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.clusters[0][0].decompressed = 0;
+        cases.push((spec, "has compressed data without output"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.clusters[0][0].decompressed = 17;
+        cases.push((spec, "has invalid sizes"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.clusters[0][1].compressed = 1000;
+        cases.push((spec, "extends beyond the encrypted image"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.file_size = 24;
+        cases.push((spec, "extends beyond the declared output"));
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.clusters[0][0] = stored_segment(&plain[..8]);
+        spec.file_size = 16;
+        cases.push((spec, "is outside the declared output"));
+        for (spec, expected) in cases {
+            let error = open_error(&spec);
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn skips_empty_segment_slots() {
+        let plain = pattern(16);
+        let mut spec = ArchiveSpec::new(16, 2, &plain);
+        spec.clusters[0].push(SegmentSpec {
+            decompressed: 0,
+            compressed: 0,
+            checksum: [0; 32],
+            stored: Vec::new(),
+        });
+        assert_eq!(read_all(&spec.open().unwrap()).unwrap(), plain);
+    }
+
+    fn read_error(spec: &ArchiveSpec) -> String {
+        read_all(&spec.open().unwrap()).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn rejects_segments_failing_decoding_or_checksum() {
+        let plain = pattern(16);
+        let mut spec = ArchiveSpec::new(16, 1, &plain);
+        spec.clusters[0][0].checksum[0] ^= 1;
+        assert!(read_error(&spec).contains("failed checksum verification"));
+        let mut spec = ArchiveSpec::new(16, 1, &plain);
+        spec.clusters[0][0].stored = vec![0xee; 8];
+        spec.clusters[0][0].compressed = 8;
+        assert!(read_error(&spec).contains("decompress AEA cluster 0 segment 0"));
+        let mut spec = ArchiveSpec::new(16, 1, &plain);
+        spec.clusters[0][0] = compressed_segment(&plain[..12]);
+        spec.clusters[0][0].decompressed = 16;
+        assert!(read_error(&spec).contains("produced 12 bytes, expected 16"));
+    }
+
+    #[test]
+    fn validates_fcs_key_urls() {
+        let mut metadata = AeaMetadata::new();
+        assert!(matches!(
+            fcs_key_url(&metadata),
+            Err(AeaError::MissingMetadata(_))
+        ));
+        for url in [
+            "not a url",
+            "http://wkms-public.apple.com/key",
+            "https://example.com/key",
+        ] {
+            metadata.insert(FCS_KEY_URL_FIELD.to_vec(), url.as_bytes().to_vec());
+            assert!(matches!(
+                fcs_key_url(&metadata),
+                Err(AeaError::InvalidKeyUrl(_))
+            ));
+        }
+        let valid = "https://wkms-public.apple.com/fcs-keys/key";
+        metadata.insert(FCS_KEY_URL_FIELD.to_vec(), valid.as_bytes().to_vec());
+        assert_eq!(fcs_key_url(&metadata).unwrap().as_str(), valid);
+    }
+
+    #[test]
+    fn downloads_the_fcs_key_named_by_the_archive() {
+        let expected = fixture!("synthetic.out");
+        let reader = AeaReader::open_downloading(fixture!("synthetic.aea").to_vec(), |url| {
+            assert_eq!(url, "https://wkms-public.apple.com/fcs-keys/synthetic");
+            Ok(fixture!("synthetic_fcs_key.pem").to_vec())
+        })
+        .unwrap();
+        assert_eq!(read_all(&reader).unwrap(), expected);
+        let failed = AeaReader::open_downloading(fixture!("synthetic.aea").to_vec(), |_| {
+            Err(HttpRangeError::RuntimeUnavailable)
+        });
+        assert!(matches!(failed, Err(AeaError::Http(_))));
+    }
+
+    #[test]
+    fn open_refuses_archives_without_an_fcs_key_url() {
+        let http = BlockingHttp::new().unwrap();
+        let source = ArchiveSpec::new(16, 1, &pattern(16)).encode();
+        assert!(matches!(
+            AeaReader::open(source, &http),
+            Err(AeaError::MissingMetadata(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_fcs_keys_and_responses() {
+        let pem = fixture!("synthetic_fcs_key.pem");
+        let metadata = |response: &str| {
+            AeaMetadata::from([(FCS_RESPONSE_FIELD.to_vec(), response.as_bytes().to_vec())])
+        };
+        let valid = metadata(r#"{"enc-request":"","wrapped-key":""}"#);
+        assert!(matches!(
+            unwrap_symmetric_key(&[0xff, 0xfe], &valid),
+            Err(AeaError::InvalidPrivateKey(_))
+        ));
+        assert!(matches!(
+            unwrap_symmetric_key(b"not a pem", &valid),
+            Err(AeaError::InvalidPrivateKey(_))
+        ));
+        assert!(matches!(
+            unwrap_symmetric_key(pem, &AeaMetadata::new()),
+            Err(AeaError::MissingMetadata(_))
+        ));
+        for response in ["{", r#"{"enc-request":"!!"}"#] {
+            assert!(matches!(
+                unwrap_symmetric_key(pem, &metadata(response)),
+                Err(AeaError::InvalidFcsResponse(_))
+            ));
+        }
+        let short = metadata(r#"{"enc-request":"BAAA","wrapped-key":""}"#);
+        assert!(matches!(
+            unwrap_symmetric_key(pem, &short),
+            Err(AeaError::Hpke("invalid encapsulated key"))
+        ));
+        let off_curve = BASE64.encode([&[SEC1_UNCOMPRESSED_TAG][..], &[1; 64]].concat());
+        let off_curve = metadata(&format!(r#"{{"enc-request":"{off_curve}"}}"#));
+        assert!(matches!(
+            unwrap_symmetric_key(pem, &off_curve),
+            Err(AeaError::Hpke("invalid encapsulated key"))
+        ));
     }
 
     #[test]
