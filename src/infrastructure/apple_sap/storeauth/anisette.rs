@@ -495,6 +495,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_limited_stops_after_the_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; ANISETTE_LIMIT * 2]))
+            .mount(&server)
+            .await;
+        let response = reqwest::get(server.uri()).await.unwrap();
+
+        let body = read_limited(response, "read test body").await.unwrap();
+
+        assert!(body.len() > ANISETTE_LIMIT);
+    }
+
+    #[tokio::test]
     async fn surfaces_http_failures() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))

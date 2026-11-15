@@ -81,4 +81,11 @@ mod tests {
         ));
         assert!(plist::from_bytes::<plist::Value>(text.as_bytes()).is_ok());
     }
+
+    #[test]
+    fn escapes_whitespace_control_characters() {
+        let root = XmlValue::Dict(vec![("k", XmlValue::String("a\tb\nc\rd"))]);
+        let text = String::from_utf8(document(&root)).unwrap();
+        assert!(text.contains("<string>a&#x9;b&#xA;c&#xD;d</string>"));
+    }
 }

@@ -199,6 +199,7 @@ mod tests {
     #[test]
     fn rejects_failures_and_missing_fields() {
         assert!(parse_finish(403, &response(None)).is_err());
+        assert!(parse_finish(200, &vec![b' '; ANISETTE_LIMIT + 1]).is_err());
         assert!(parse_finish(200, b"<plist").is_err());
         let mut body = Vec::new();
         plist::to_writer_xml(

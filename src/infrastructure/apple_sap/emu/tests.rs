@@ -652,3 +652,47 @@ fn armv8_0_core_rejects_lse_without_soft_emulation() {
 
     assert_eq!(error.unicorn_code(), Some(uc_error::EXCEPTION));
 }
+
+#[test]
+fn exhausted_deadline_times_out_before_running() {
+    let program = [NOP];
+    let mut engine = engine_with(&program);
+
+    let error = engine
+        .run(CODE, end_of(&program), Duration::ZERO)
+        .expect_err("timeout");
+
+    assert!(matches!(error, EmuError::Timeout { timeout } if timeout == Duration::ZERO));
+}
+
+#[test]
+fn condition_flags_round_trip() {
+    let mut engine = engine_with(&[NOP]);
+    let carry_and_zero = 0x6000_0000;
+
+    engine
+        .reg_write(Register::Nzcv, carry_and_zero)
+        .expect("nzcv");
+
+    assert_eq!(engine.reg_read(Register::Nzcv).ok(), Some(carry_and_zero));
+}
+
+#[test]
+fn memory_fault_hook_reports_instruction_fetches() {
+    let mut engine = engine_with(&[NOP]);
+    let faults = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&faults);
+    engine
+        .add_memory_fault_hook(move |_, access, address, _| {
+            seen.borrow_mut().push((access, address));
+            Ok(false)
+        })
+        .expect("hook");
+
+    let error = engine
+        .run(UNMAPPED, UNMAPPED + INSTRUCTION_SIZE, TIMEOUT)
+        .expect_err("unmapped fetch");
+
+    assert_eq!(error.unicorn_code(), Some(uc_error::FETCH_UNMAPPED));
+    assert_eq!(*faults.borrow(), vec![(MemoryAccess::Fetch, UNMAPPED)]);
+}

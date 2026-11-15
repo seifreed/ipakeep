@@ -378,6 +378,23 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_write_an_oversized_state() {
+        let root = tempfile::tempdir().unwrap();
+        let store = StateStore::new(root.path().join(STATE_FILE_NAME));
+        let lock = store.lock().unwrap();
+        let state = AnisetteState {
+            identifier: vec![7; IDENTIFIER_SIZE],
+            provisioning: vec![1; MAX_STATE_SIZE],
+            routing_info: 1,
+        };
+        assert!(matches!(
+            store.write(&lock, &state),
+            Err(StoreAuthError::State("state exceeds the size limit"))
+        ));
+        assert!(!store.path().exists());
+    }
+
+    #[test]
     fn round_trips_through_a_private_file() {
         let root = tempfile::tempdir().unwrap();
         let store = StateStore::new(root.path().join("ipakeep").join(STATE_FILE_NAME));

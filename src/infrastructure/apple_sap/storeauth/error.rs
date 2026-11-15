@@ -71,3 +71,24 @@ impl From<StoreAuthError> for AppStoreError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_store_failures_to_domain_errors() {
+        assert!(matches!(
+            AppStoreError::from(StoreAuthError::StoreNotProvisioned),
+            AppStoreError::AuthenticationFailed(_)
+        ));
+        assert!(matches!(
+            AppStoreError::from(StoreAuthError::Protocol("HTTP 503".into())),
+            AppStoreError::NetworkError(message) if message == "HTTP 503"
+        ));
+        assert!(matches!(
+            AppStoreError::from(StoreAuthError::NoSapSession),
+            AppStoreError::Unexpected(message) if message == "no Apple SAP session is open"
+        ));
+    }
+}

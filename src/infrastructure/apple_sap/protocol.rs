@@ -288,4 +288,61 @@ mod tests {
         ));
         assert!(response_data(&ok(b"nope".to_vec()), SETUP_BUFFER_KEY).is_err());
     }
+
+    fn data_plist(key: &str, data: &[u8]) -> Vec<u8> {
+        format!(
+            "{XML_PLIST_HEADER}<plist version=\"1.0\"><dict><key>{key}</key>\
+             <data>{}</data></dict></plist>",
+            STANDARD.encode(data)
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn reqwest_transport_fetches_certificate_and_exchanges_setup() {
+        use wiremock::matchers::{body_bytes, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cert"))
+            .and(header("User-Agent", SETUP_USER_AGENT))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(data_plist(SETUP_CERTIFICATE_KEY, b"cert")),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/setup"))
+            .and(header("Content-Type", PLIST_CONTENT_TYPE))
+            .and(body_bytes(setup_envelope(b"hello")))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(data_plist(SETUP_BUFFER_KEY, b"reply")),
+            )
+            .mount(&server)
+            .await;
+        let transport = ReqwestTransport::new(reqwest::Client::new());
+
+        let certificate = fetch_certificate(&transport, &format!("{}/cert", server.uri()))
+            .await
+            .unwrap();
+        let reply = exchange_setup(&transport, &format!("{}/setup", server.uri()), b"hello")
+            .await
+            .unwrap();
+
+        assert_eq!(certificate, b"cert");
+        assert_eq!(reply, b"reply");
+    }
+
+    #[tokio::test]
+    async fn reqwest_transport_reports_connection_failures() {
+        let transport = ReqwestTransport::new(reqwest::Client::new());
+
+        let error = fetch_certificate(&transport, "http://127.0.0.1:1/cert")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProtocolError::Transport(_)));
+    }
 }
