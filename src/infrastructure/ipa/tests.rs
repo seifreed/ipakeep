@@ -6,7 +6,7 @@ fn test_ipa_bytes() -> Vec<u8> {
 
 fn test_ipa_bytes_with_manifest(manifest: Option<plist::Dictionary>) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default();
+    let options = zip::write::SimpleFileOptions::default().system(zip::System::Unix);
     write_info_plist(&mut writer, options);
 
     writer
@@ -182,6 +182,11 @@ fn patch_ipa_writes_sinf_inside_app_sc_info() {
         zip_entry(&patched, "Payload/Test.app/SC_Info/TestExec.sinf").expect("app sinf"),
         b"decoded-sinf"
     );
+    let mut archive = zip::ZipArchive::new(Cursor::new(patched)).expect("zip");
+    let sinf = archive
+        .by_name("Payload/Test.app/SC_Info/TestExec.sinf")
+        .expect("app sinf");
+    assert_eq!(sinf.unix_mode(), Some(0o100_000 | 0o644));
 }
 
 #[test]

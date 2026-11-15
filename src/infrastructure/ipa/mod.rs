@@ -188,6 +188,7 @@ pub(crate) fn entry_options<R: Read + ?Sized>(
     zip::write::SimpleFileOptions::default()
         .large_file(file.compressed_size().max(file.size()) > u32::MAX.into())
         .compression_method(file.compression())
+        .system(zip::System::Unix)
         .unix_permissions(file.unix_mode().unwrap_or(default_permissions))
         .last_modified_time(modified)
 }
@@ -195,6 +196,7 @@ pub(crate) fn entry_options<R: Read + ?Sized>(
 fn inserted_file_options() -> zip::write::SimpleFileOptions {
     zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
+        .system(zip::System::Unix)
         .unix_permissions(0o644)
 }
 

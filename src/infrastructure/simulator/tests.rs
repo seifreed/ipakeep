@@ -153,6 +153,7 @@ fn prepare_path_recurses_into_app_bundle() {
 }
 
 #[test]
+#[cfg(unix)] // drives /bin/sh, which Windows runners do not have
 fn command_helpers_report_output_exit_and_start_failures() {
     let output = command_output(command_with_args("/bin/sh", &["-c", "printf result"])).unwrap();
     assert_eq!(output, "result");
