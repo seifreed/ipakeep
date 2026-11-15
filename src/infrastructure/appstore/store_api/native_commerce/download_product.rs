@@ -7,19 +7,20 @@
 //! `appstore_lookup.go`. Requests go out directly instead of through the
 //! emulated `AppleMediaServices` session, carrying what upstream sends.
 //!
-//! Wire notes (no live capture yet):
-//! - Upstream hands the payload to `AMSURLRequestEncoder` with
-//!   `requestEncoding = 2`; in the pinned framework that is an XML property
-//!   list (`+[AMSData dataWithObject:encoding:error:]`, format 100). So every
-//!   body here is an XML plist, even for `ent/download`, whose Content-Type
-//!   upstream overrides to `application/x-www-form-urlencoded`.
+//! Wire notes (checked against a capture of upstream's AMS session):
+//! - Every body is an XML property list in the session's compact layout
+//!   (`bag::encode_request_plist`), even for `ent/download`, whose
+//!   Content-Type upstream overrides to `application/x-www-form-urlencoded`.
 //! - Dictionary keys are written sorted, as `CFPropertyList` does.
-//! - The AMS session may add headers of its own (locale, client versions);
-//!   only the headers upstream sets explicitly are sent.
+//! - Commerce POSTs carry the session's own headers
+//!   (`bag::AMS_SESSION_HEADERS`) and no `X-Apple-ActionSignature`; lookups
+//!   carry only the default user agent.
 //! - Session cookies come from the caller's client (`bag::store_client`).
 //! - Only the iOS (iPhone) platform is ported; ipakeep has no other.
 
-use super::bag::{STORE_USER_AGENT, StoreBag, decode_store_plist};
+use super::bag::{
+    AMS_SESSION_HEADERS, STORE_USER_AGENT, StoreBag, decode_store_plist, encode_request_plist,
+};
 use super::kbsync_cache::KbsyncCache;
 use super::storefront::{DEFAULT_USER_AGENT, StorefrontResolver};
 use crate::domain::entity::{Account, AppVersion, DownloadItem};
@@ -419,7 +420,7 @@ where
         let mut request = self
             .client
             .post(self.wire_url(&url))
-            .body(encode_body(body)?);
+            .body(encode_request_plist(body));
         for (name, value) in headers {
             request = request.header(name, value);
         }
@@ -446,7 +447,7 @@ where
         }
         let (amd, machine_id) = (self.amd)()?;
         let dsid = account.directory_services_id.clone();
-        Ok(vec![
+        Ok([
             ("Content-Type", content_type.to_string()),
             ("User-Agent", STORE_USER_AGENT.to_string()),
             ("iCloud-DSID", dsid.clone()),
@@ -455,7 +456,10 @@ where
             ("X-Token", account.password_token.clone()),
             ("X-Apple-AMD", amd),
             ("X-Apple-AMD-M", machine_id),
-        ])
+        ]
+        .into_iter()
+        .chain(AMS_SESSION_HEADERS.map(|(name, value)| (name, value.to_string())))
+        .collect())
     }
 
     async fn latest_version_id(&self, ticket: &Ticket<'_>) -> Result<String, VersionLookupError> {
@@ -813,19 +817,6 @@ fn sorted_dictionary(fields: BTreeMap<&str, plist::Value>) -> plist::Dictionary 
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect()
-}
-
-fn encode_body(body: &plist::Dictionary) -> Result<Vec<u8>, Failure> {
-    let mut bytes = Vec::new();
-    plist::Value::Dictionary(body.clone())
-        .to_writer_xml(&mut bytes)
-        .map_err(|error| {
-            failure(
-                None,
-                AppStoreError::Unexpected(format!("encode Store request: {error}")),
-            )
-        })?;
-    Ok(bytes)
 }
 
 async fn read_store_response(response: reqwest::Response) -> Attempt {
@@ -1317,6 +1308,18 @@ mod tests {
         assert_eq!(header(request, "x-apple-store-front"), "143441-1,29");
         assert_eq!(header(request, "x-apple-amd"), "amd-otp");
         assert_eq!(header(request, "x-apple-amd-m"), "amd-mid");
+        assert_eq!(header(request, "accept-language"), "en");
+        assert_eq!(
+            header(request, "x-apple-client-application"),
+            "me.majd.ipatool"
+        );
+        assert_eq!(header(request, "x-apple-tz"), "0");
+        assert!(request.headers.get("x-apple-actionsignature").is_none());
+        assert!(
+            request
+                .body
+                .starts_with(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+        );
     }
 
     #[tokio::test]
@@ -1349,6 +1352,10 @@ mod tests {
         .map(|(key, value)| (key.to_string(), value))
         .collect();
         assert_eq!(body(&requests[0]), expected);
+        assert!(
+            String::from_utf8_lossy(&requests[0].body)
+                .contains("<plist version=\"1.0\"><dict><key>creditDisplay</key><string/>")
+        );
         assert_eq!(items[0].url, "https://iosapps.itunes.apple.com/app.ipa");
         assert_eq!(items[0].sinfs[0].data, [1, 2, 3]);
         assert_eq!(harness.generated.get(), 1);

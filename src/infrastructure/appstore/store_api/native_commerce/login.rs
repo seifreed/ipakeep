@@ -4,7 +4,10 @@
 //! `appstore_login.go` and `appstore_login_storefront.go`, sending the
 //! request directly instead of through the emulated `AppleMediaServices`.
 
-use super::bag::{STORE_USER_AGENT, decode_store_plist, validate_authentication_endpoint};
+use super::bag::{
+    AMS_SESSION_HEADERS, STORE_USER_AGENT, decode_store_plist, encode_request_plist,
+    validate_authentication_endpoint,
+};
 use super::owned_apps::ActionSign;
 use crate::domain::entity::Account;
 use crate::domain::error::{AppStoreError, TwoFactorMethod};
@@ -38,6 +41,8 @@ const ACTION_RESET_PROVISIONING: &str = "RP";
 const ACTION_STORE_PROVISIONING: &str = "SP";
 const DSID_COOKIE_PREFIXES: [&str; 2] = ["mz_at0-", "mz_at_ssl-"];
 const HTTPS_PORT: u16 = 443;
+const CREDENTIAL_SOURCE_PASSWORD: i64 = 0;
+const NULL_STORE_FRONT: &str = "<null>";
 
 /// Apple ID credentials for one sign-in.
 #[derive(Debug, Clone, Copy)]
@@ -402,6 +407,7 @@ fn account_from(
     let headers = &response.headers;
     let store_front = header(headers, HEADER_STORE_FRONT)
         .or_else(|| header(headers, HEADER_REQUEST_STORE_FRONT))
+        .filter(|value| value != NULL_STORE_FRONT)
         .ok_or_else(|| {
             AppStoreError::AuthenticationFailed("failed to get storefront header".into())
         })?;
@@ -501,40 +507,49 @@ fn text(dict: &plist::Dictionary, key: &str) -> String {
     }
 }
 
-/// The authenticate plist body, keys in Core Foundation's sorted order.
+/// The authenticate plist body as the Store session sends it: upstream's
+/// fields plus the ones `AppleMediaServices` adds, keys in Core Foundation's
+/// sorted order.
 ///
 /// # Errors
 ///
-/// Returns [`AppStoreError::Unexpected`] when plist serialisation fails.
+/// Never fails today; the `Result` keeps the encoding seam stable.
 pub fn login_body(
     credentials: Credentials<'_>,
     auth_code: &str,
     guid: &str,
     attempt: u32,
 ) -> Result<Vec<u8>, AppStoreError> {
-    // ponytail: upstream replaces this dict with AMS'
-    // `_createAuthenticateRequestParametersForAccount:` output (keeping only
-    // `attempt`/`why`); AMS may add keys such as `createSession`. Verify on the wire.
     let text = |value: &str| plist::Value::String(value.to_string());
+    let password = format!("{}{}", credentials.password, auth_code.replace(' ', ""));
     let mut dict = plist::Dictionary::new();
     dict.insert("appleId".into(), text(credentials.email));
     dict.insert("attempt".into(), text(&attempt.to_string()));
+    dict.insert("createSession".into(), plist::Value::Boolean(true));
+    dict.insert(
+        "credentialSource".into(),
+        plist::Value::Integer(CREDENTIAL_SOURCE_PASSWORD.into()),
+    );
+    dict.insert("deviceOffersCheck".into(), text("true"));
     dict.insert("guid".into(), text(guid));
     dict.insert(
-        "password".into(),
-        text(&format!(
-            "{}{}",
-            credentials.password,
-            auth_code.replace(' ', "")
-        )),
+        "isSilentAuthentication".into(),
+        plist::Value::Boolean(false),
     );
+    dict.insert("password".into(), text(&password));
+    dict.insert("passwordSettings".into(), password_settings());
     dict.insert("rmp".into(), text("0"));
     dict.insert("why".into(), text("signIn"));
-    let mut body = Vec::new();
-    plist::Value::Dictionary(dict)
-        .to_writer_xml(&mut body)
-        .map_err(|error| AppStoreError::Unexpected(format!("encode login: {error}")))?;
-    Ok(body)
+    Ok(encode_request_plist(&dict))
+}
+
+/// Always ask for the password on free and paid purchases.
+fn password_settings() -> plist::Value {
+    let mut settings = plist::Dictionary::new();
+    for kind in ["free", "paid"] {
+        settings.insert(kind.into(), plist::Value::String("always".into()));
+    }
+    plist::Value::Dictionary(settings)
 }
 
 /// Strip whitespace and a matched bracketed-paste pair; require six ASCII digits.
@@ -700,6 +715,9 @@ async fn send_once(
         .post(url)
         .header("Content-Type", "application/x-apple-plist")
         .header("User-Agent", STORE_USER_AGENT);
+    for (key, value) in AMS_SESSION_HEADERS {
+        request = request.header(key, value);
+    }
     for (key, value) in request_machine_headers(&context.machine_headers) {
         request = request.header(key, value);
     }
@@ -720,9 +738,8 @@ async fn send_once(
     }
 }
 
-/// Upstream renames `X-Apple-I-MD`/`-M` to `X-Apple-AMD`/`-M` on the Store request.
-// ponytail: whether AMS adds further anisette headers (anisetteType 0 suggests
-// not) is unverified until the wire capture.
+/// Upstream renames `X-Apple-I-MD`/`-M` to `X-Apple-AMD`/`-M` on the Store
+/// request; every other anisette header goes out unchanged.
 fn request_machine_headers(headers: &HashMap<String, String>) -> Vec<(String, String)> {
     headers
         .iter()
@@ -1007,6 +1024,9 @@ mod tests {
             ("X-Apple-AMD", "md"),
             ("X-Apple-AMD-M", "mdm"),
             ("X-Apple-I-MD-RINFO", "17106176"),
+            ("Accept-Language", "en"),
+            ("X-Apple-Client-Application", "me.majd.ipatool"),
+            ("X-Apple-TZ", "0"),
         ] {
             assert_eq!(header_of(request, name).as_deref(), Some(value), "{name}");
         }
@@ -1015,7 +1035,40 @@ mod tests {
         let keys: Vec<&str> = body.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["appleId", "attempt", "guid", "password", "rmp", "why"]
+            [
+                "appleId",
+                "attempt",
+                "createSession",
+                "credentialSource",
+                "deviceOffersCheck",
+                "guid",
+                "isSilentAuthentication",
+                "password",
+                "passwordSettings",
+                "rmp",
+                "why"
+            ]
+        );
+        assert_eq!(
+            body.get("createSession"),
+            Some(&plist::Value::Boolean(true))
+        );
+        assert_eq!(field(&body, "credentialSource"), "0");
+        assert_eq!(field(&body, "deviceOffersCheck"), "true");
+        assert_eq!(
+            body.get("isSilentAuthentication"),
+            Some(&plist::Value::Boolean(false))
+        );
+        let settings = body
+            .get("passwordSettings")
+            .and_then(plist::Value::as_dictionary)
+            .expect("password settings");
+        assert_eq!(field(settings, "free"), "always");
+        assert_eq!(field(settings, "paid"), "always");
+        assert!(
+            request
+                .body
+                .starts_with(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist")
         );
         assert_eq!(field(&body, "why"), "signIn");
         assert_eq!(field(&body, "rmp"), "0");
@@ -1154,6 +1207,19 @@ mod tests {
             header_of(&requests[1], "X-Mme-Device-Id").as_deref(),
             Some("dev")
         );
+        assert_eq!(header_of(&requests[2], "X-Mme-Device-Id"), None);
+    }
+
+    #[test]
+    fn ignores_null_request_store_front() {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_REQUEST_STORE_FRONT, "<null>".parse().expect("value"));
+        let response = AuthResponse {
+            status: StatusCode::OK,
+            headers,
+            body: plist::Dictionary::new(),
+        };
+        assert!(account_from(&response, EMAIL, Vec::new()).is_err());
     }
 
     #[tokio::test(start_paused = true)]

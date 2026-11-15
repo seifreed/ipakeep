@@ -3,7 +3,7 @@
 //! Ported from ipatool `pkg/appstore/appstore_purchase.go` plus the 2034
 //! handling of the former `tools/modern-anisette/store.go` helper.
 
-use super::bag::{STORE_USER_AGENT, decode_store_plist};
+use super::bag::{AMS_SESSION_HEADERS, STORE_USER_AGENT, decode_store_plist, encode_request_plist};
 use crate::domain::entity::Account;
 use crate::domain::error::AppStoreError;
 use std::future::Future;
@@ -20,6 +20,14 @@ const FAILURE_LICENSE_EXISTS: &str = "5002";
 const MESSAGE_SUBSCRIPTION_REQUIRED: &str = "Subscription Required";
 const MESSAGE_PASSWORD_CHANGED: &str = "Your password has changed.";
 const PURCHASE_SUCCESS: &str = "purchaseSuccess";
+const UUID_LEN: usize = 16;
+const UUID_VERSION_BYTE: usize = 6;
+const UUID_VARIANT_BYTE: usize = 8;
+const UUID_GROUPS: [usize; 5] = [4, 2, 2, 2, 6];
+const UUID_LOW_NIBBLE: u8 = 0x0f;
+const UUID_VERSION_4: u8 = 0x40;
+const UUID_VARIANT_MASK: u8 = 0x3f;
+const UUID_VARIANT_RFC4122: u8 = 0x80;
 
 /// `https://p{pod}-buy.itunes.apple.com/.../buyProduct` (no prefix without a pod).
 #[must_use]
@@ -94,8 +102,8 @@ async fn attempt(
     app_id: i64,
     pricing: &str,
 ) -> Result<Attempt, AppStoreError> {
-    let body = purchase_body(context.guid, app_id, pricing)?;
-    let response = context
+    let body = purchase_body(context.guid, app_id, pricing, &correlation_key());
+    let mut request = context
         .client
         .post(context.url)
         .header("Content-Type", "application/x-apple-plist")
@@ -103,13 +111,13 @@ async fn attempt(
         .header("iCloud-DSID", &account.directory_services_id)
         .header("X-Dsid", &account.directory_services_id)
         .header("X-Apple-Store-Front", &account.store_front)
-        .header("X-Token", &account.password_token)
-        .body(body)
-        .send()
-        .await
-        .map_err(|error| {
-            AppStoreError::NetworkError(format!("purchase request failed: {error}"))
-        })?;
+        .header("X-Token", &account.password_token);
+    for (name, value) in AMS_SESSION_HEADERS {
+        request = request.header(name, value);
+    }
+    let response = request.body(body).send().await.map_err(|error| {
+        AppStoreError::NetworkError(format!("purchase request failed: {error}"))
+    })?;
     let status = response.status().as_u16();
     let data = response
         .bytes()
@@ -118,21 +126,19 @@ async fn attempt(
     classify(status, &decode_store_plist(&data)?, pricing)
 }
 
-/// The `buyProduct` plist upstream sends, keys in Core Foundation's sorted order.
-///
-/// # Errors
-///
-/// Returns [`AppStoreError::Unexpected`] when plist serialisation fails.
-pub fn purchase_body(guid: &str, app_id: i64, pricing: &str) -> Result<Vec<u8>, AppStoreError> {
-    // ponytail: upstream routes this dict through AMSPurchase's encoder, which
-    // may add keys or headers (it is only checked not to change price/adamId/
-    // pricing/productType). Verify against the wire capture.
+/// The `buyProduct` plist as the Store session sends it: upstream's fields
+/// plus `clientCorrelationKey` and `hasBeenAuthedForBuy` from `AMSPurchase`,
+/// keys in Core Foundation's sorted order.
+#[must_use]
+pub fn purchase_body(guid: &str, app_id: i64, pricing: &str, correlation_key: &str) -> Vec<u8> {
     let text = |value: &str| plist::Value::String(value.to_string());
     let mut dict = plist::Dictionary::new();
     dict.insert("appExtVrsId".into(), text("0"));
     dict.insert("buyWithoutAuthorization".into(), text("true"));
+    dict.insert("clientCorrelationKey".into(), text(correlation_key));
     dict.insert("guid".into(), text(guid));
     dict.insert("hasAskedToFulfillPreorder".into(), text("true"));
+    dict.insert("hasBeenAuthedForBuy".into(), plist::Value::Boolean(true));
     dict.insert("hasDoneAgeCheck".into(), text("true"));
     dict.insert("needDiv".into(), text("0"));
     dict.insert("origPage".into(), text(&format!("Software-{app_id}")));
@@ -141,11 +147,23 @@ pub fn purchase_body(guid: &str, app_id: i64, pricing: &str) -> Result<Vec<u8>, 
     dict.insert("pricingParameters".into(), text(pricing));
     dict.insert("productType".into(), text("C"));
     dict.insert("salableAdamId".into(), plist::Value::Integer(app_id.into()));
-    let mut body = Vec::new();
-    plist::Value::Dictionary(dict)
-        .to_writer_xml(&mut body)
-        .map_err(|error| AppStoreError::Unexpected(format!("encode purchase: {error}")))?;
-    Ok(body)
+    encode_request_plist(&dict)
+}
+
+/// A random version 4 UUID in uppercase, like `NSUUID().UUIDString`.
+fn correlation_key() -> String {
+    let mut bytes = [0u8; UUID_LEN];
+    rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
+    bytes[UUID_VERSION_BYTE] = (bytes[UUID_VERSION_BYTE] & UUID_LOW_NIBBLE) | UUID_VERSION_4;
+    bytes[UUID_VARIANT_BYTE] =
+        (bytes[UUID_VARIANT_BYTE] & UUID_VARIANT_MASK) | UUID_VARIANT_RFC4122;
+    let mut groups = Vec::with_capacity(UUID_GROUPS.len());
+    let mut offset = 0;
+    for size in UUID_GROUPS {
+        groups.push(hex::encode_upper(&bytes[offset..offset + size]));
+        offset += size;
+    }
+    groups.join("-")
 }
 
 fn classify(
@@ -332,11 +350,22 @@ mod tests {
             Some("143441-1,29")
         );
         assert_eq!(header("X-Token").as_deref(), Some("token"));
+        assert_eq!(header("Accept-Language").as_deref(), Some("en"));
+        assert_eq!(
+            header("X-Apple-Client-Application").as_deref(),
+            Some("me.majd.ipatool")
+        );
+        assert_eq!(header("X-Apple-TZ").as_deref(), Some("0"));
+        assert_eq!(header("X-Apple-ActionSignature"), None);
+        let sent = decode_store_plist(&request.body).expect("plist");
+        let key = sent
+            .get("clientCorrelationKey")
+            .and_then(plist::Value::as_string)
+            .expect("correlation key");
         assert_eq!(
             request.body,
-            purchase_body(GUID, APP, PRICING_APP_STORE).expect("body")
+            purchase_body(GUID, APP, PRICING_APP_STORE, key)
         );
-        let sent = decode_store_plist(&request.body).expect("plist");
         assert_eq!(
             sent.get("salableAdamId")
                 .and_then(plist::Value::as_signed_integer),
@@ -350,7 +379,22 @@ mod tests {
             sent.get("guid").and_then(plist::Value::as_string),
             Some(GUID)
         );
-        assert_eq!(sent.len(), 12);
+        assert_eq!(
+            sent.get("hasBeenAuthedForBuy"),
+            Some(&plist::Value::Boolean(true))
+        );
+        assert_eq!(sent.len(), 14);
+    }
+
+    #[test]
+    fn correlation_keys_are_uppercase_v4_uuids() {
+        let key = correlation_key();
+        let groups: Vec<usize> = key.split('-').map(str::len).collect();
+        assert_eq!(groups, [8, 4, 4, 4, 12]);
+        assert_eq!(key.as_bytes()[14], b'4');
+        assert!(matches!(key.as_bytes()[19], b'8' | b'9' | b'A' | b'B'));
+        assert_eq!(key, key.to_ascii_uppercase());
+        assert_ne!(key, correlation_key());
     }
 
     #[tokio::test]

@@ -47,8 +47,10 @@ pub struct DaapClock {
 
 impl DaapClock {
     /// The current time with a UTC offset of 0.
-    // ponytail: upstream sends Go's `time.Local.String()`, which is the literal
-    // "Local", plus the host offset; whether AMS rewrites these is unverified.
+    // ponytail: the wire carries the literal "Local" (Go's `time.Local.String()`)
+    // and the host offset in minutes (two digits in the capture, e.g. "60");
+    // reading the host offset needs `time`'s `local-offset` feature, so callers
+    // that know it set `utc_offset_minutes` themselves.
     #[must_use]
     pub fn now_utc() -> Self {
         let unix_seconds = std::time::SystemTime::now()
@@ -290,14 +292,14 @@ fn check_status(label: &str, status: u64, what: &str) -> Result<(), AppStoreErro
     }
 }
 
-/// Headers upstream sets on every DAAP request (`ownedAppsHeaders`).
+/// Headers every DAAP request carries on the wire: upstream's
+/// `ownedAppsHeaders` minus `Date`, which the Store session does not send.
 #[must_use]
 pub fn daap_headers(
     account: &Account,
     guid: &str,
     clock: &DaapClock,
 ) -> Vec<(&'static str, String)> {
-    let seconds = clock.unix_seconds;
     vec![
         ("Accept", "*/*".into()),
         ("Accept-Language", "en-us".into()),
@@ -307,10 +309,9 @@ pub fn daap_headers(
             "1.1/Configurator-2.0".into(),
         ),
         ("Client-DAAP-Version", "3.12".into()),
-        ("Date", http_date(seconds)),
         ("User-Agent", STORE_USER_AGENT.into()),
         ("iCloud-DSID", account.directory_services_id.clone()),
-        ("X-Apple-I-Client-Time", rfc3339(seconds)),
+        ("X-Apple-I-Client-Time", rfc3339(clock.unix_seconds)),
         ("X-Apple-I-Locale", "en_US".into()),
         ("X-Apple-I-TimeZone", clock.time_zone.clone()),
         ("X-Apple-Store-Front", account.store_front.clone()),
@@ -497,10 +498,6 @@ fn sort_by_purchase_date(records: &mut [PurchaseRecord]) {
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_HOUR: u64 = 3_600;
 const MINUTE: u64 = 60;
-const WEEKDAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
-const MONTHS: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
 
 struct UtcTime {
     year: i64,
@@ -509,7 +506,6 @@ struct UtcTime {
     hour: u64,
     minute: u64,
     second: u64,
-    weekday: usize,
 }
 
 /// Howard Hinnant's days-to-civil conversion for UTC timestamps.
@@ -532,7 +528,6 @@ fn utc_time(unix_seconds: u64) -> UtcTime {
         hour: rem / SECONDS_PER_HOUR,
         minute: rem % SECONDS_PER_HOUR / MINUTE,
         second: rem % MINUTE,
-        weekday: usize::try_from(days % 7).unwrap_or_default(),
     }
 }
 
@@ -542,22 +537,6 @@ fn rfc3339(unix_seconds: u64) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
         t.year, t.month, t.day, t.hour, t.minute, t.second
-    )
-}
-
-/// RFC 7231 IMF-fixdate, e.g. `Tue, 14 Nov 2023 22:13:20 GMT`.
-fn http_date(unix_seconds: u64) -> String {
-    let t = utc_time(unix_seconds);
-    let month = usize::try_from(t.month.saturating_sub(1)).unwrap_or_default();
-    format!(
-        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
-        WEEKDAYS[t.weekday % WEEKDAYS.len()],
-        t.day,
-        MONTHS[month % MONTHS.len()],
-        t.year,
-        t.hour,
-        t.minute,
-        t.second
     )
 }
 
@@ -709,6 +688,11 @@ mod tests {
 
     fn assert_requests(requests: &[Request], update: &str) {
         assert_eq!(requests.len(), 6);
+        assert!(
+            requests
+                .iter()
+                .all(|request| header(request, "Date").is_none())
+        );
         let common = [
             ("X-Dsid", "1234"),
             ("iCloud-DSID", "1234"),
@@ -717,7 +701,6 @@ mod tests {
             ("Client-DAAP-Version", "3.12"),
             ("Client-Cloud-Purchase-Daap-Version", "1.1/Configurator-2.0"),
             ("User-Agent", STORE_USER_AGENT),
-            ("Date", "Tue, 14 Nov 2023 22:13:20 GMT"),
             ("X-Apple-I-Client-Time", "2023-11-14T22:13:20Z"),
             ("X-Apple-TZ", "60"),
         ];
@@ -929,7 +912,6 @@ mod tests {
 
     #[test]
     fn formats_dates() {
-        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
         assert_eq!(normalized_limit(0), 10);
         assert_eq!(normalized_limit(500), 100);

@@ -4,6 +4,7 @@
 //! normalisation in `pkg/http/client.go`.
 
 use crate::domain::error::AppStoreError;
+use base64::Engine;
 use reqwest::Url;
 use std::sync::Arc;
 
@@ -13,6 +14,24 @@ pub const BAG_URL: &str = "https://init.itunes.apple.com/bag.xml";
 /// User agent upstream sends on every native Store request.
 pub const STORE_USER_AGENT: &str =
     "Configurator/2.21 (Macintosh; OS X 27.0.1; 26A434) AppleWebKit/0625.2.5.11.6";
+
+/// Headers the `AppleMediaServices` session adds to the commerce requests it
+/// sends (`authenticate`, `buyProduct`, `ent/download`), as captured on the
+/// wire. `X-Apple-TZ` is the emulated session's fixed UTC offset.
+// The AMS session also asks for `br, gzip, deflate`; reqwest is built without
+// decompression, so `Accept-Encoding` is left out to keep bodies readable.
+pub const AMS_SESSION_HEADERS: [(&str, &str); 3] = [
+    ("Accept-Language", "en"),
+    ("X-Apple-Client-Application", "me.majd.ipatool"),
+    ("X-Apple-TZ", "0"),
+];
+
+/// XML prologue of the request plists the Store session sends.
+const XML_PLIST_PROLOGUE: &str = concat!(
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" ",
+    "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n",
+);
 
 /// `MZFinance` authentication path.
 pub const AUTHENTICATE_PATH: &str = "/WebObjects/MZFinance.woa/wa/authenticate";
@@ -284,6 +303,65 @@ pub fn decode_store_plist(body: &[u8]) -> Result<plist::Dictionary, AppStoreErro
         .ok_or_else(|| AppStoreError::Unexpected("Store plist is not a dictionary".into()))
 }
 
+/// Encode a request dictionary the way the Store session puts it on the wire:
+/// prologue lines, then the whole `<plist>` on one line without indentation,
+/// empty strings as `<string/>`. Keys keep the dictionary's insertion order.
+#[must_use]
+pub fn encode_request_plist(dictionary: &plist::Dictionary) -> Vec<u8> {
+    let mut xml = String::from(XML_PLIST_PROLOGUE);
+    xml.push_str("<plist version=\"1.0\">");
+    write_dictionary(&mut xml, dictionary);
+    xml.push_str("</plist>");
+    xml.into_bytes()
+}
+
+fn write_dictionary(xml: &mut String, dictionary: &plist::Dictionary) {
+    xml.push_str("<dict>");
+    for (key, value) in dictionary {
+        write_element(xml, "key", &escape_xml(key));
+        write_value(xml, value);
+    }
+    xml.push_str("</dict>");
+}
+
+/// Dates and UIDs never occur in Store request bodies and are not written.
+fn write_value(xml: &mut String, value: &plist::Value) {
+    match value {
+        plist::Value::Dictionary(dictionary) => write_dictionary(xml, dictionary),
+        plist::Value::Array(items) => {
+            xml.push_str("<array>");
+            for item in items {
+                write_value(xml, item);
+            }
+            xml.push_str("</array>");
+        }
+        plist::Value::String(text) if text.is_empty() => xml.push_str("<string/>"),
+        plist::Value::String(text) => write_element(xml, "string", &escape_xml(text)),
+        plist::Value::Integer(number) => write_element(xml, "integer", &number.to_string()),
+        plist::Value::Real(number) => write_element(xml, "real", &number.to_string()),
+        plist::Value::Boolean(true) => xml.push_str("<true/>"),
+        plist::Value::Boolean(false) => xml.push_str("<false/>"),
+        plist::Value::Data(data) => write_element(
+            xml,
+            "data",
+            &base64::engine::general_purpose::STANDARD.encode(data),
+        ),
+        _ => {}
+    }
+}
+
+fn write_element(xml: &mut String, name: &str, content: &str) {
+    for part in ["<", name, ">", content, "</", name, ">"] {
+        xml.push_str(part);
+    }
+}
+
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn non_plist_error(body: &[u8]) -> AppStoreError {
     AppStoreError::Unexpected(format!(
         "unexpected response from Apple: empty or non-plist body ({} bytes)",
@@ -495,5 +573,26 @@ mod tests {
         );
         assert!(decode_store_plist(b"<html><h1>Forbidden</h1></html>").is_err());
         assert!(decode_store_plist(b"").is_err());
+    }
+    #[test]
+    fn encodes_request_plists_in_the_wire_layout() {
+        let mut nested = plist::Dictionary::new();
+        nested.insert("free".into(), plist::Value::from("always"));
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert("b".into(), plist::Value::from("x<&>"));
+        dictionary.insert("a".into(), plist::Value::from(""));
+        dictionary.insert("flag".into(), plist::Value::Boolean(true));
+        dictionary.insert("off".into(), plist::Value::Boolean(false));
+        dictionary.insert("n".into(), plist::Value::Integer(7.into()));
+        dictionary.insert("d".into(), plist::Value::Dictionary(nested));
+        let expected = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+            <plist version=\"1.0\"><dict><key>b</key><string>x&lt;&amp;&gt;</string>\
+            <key>a</key><string/><key>flag</key><true/><key>off</key><false/>\
+            <key>n</key><integer>7</integer><key>d</key><dict><key>free</key>\
+            <string>always</string></dict></dict></plist>";
+        let encoded = encode_request_plist(&dictionary);
+        assert_eq!(String::from_utf8(encoded.clone()).expect("utf8"), expected);
+        assert_eq!(decode_store_plist(&encoded).expect("decode"), dictionary);
     }
 }
