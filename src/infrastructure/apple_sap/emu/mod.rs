@@ -22,7 +22,9 @@ mod guard;
 mod hook;
 mod register;
 
-pub use engine::{Engine, INSTRUCTION_SIZE, RET_INSTRUCTION, VECTOR_REGISTER_SIZE};
+pub use engine::{
+    Engine, INSTRUCTION_SIZE, RET_INSTRUCTION, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE,
+};
 pub use error::EmuError;
 pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
 pub use register::{

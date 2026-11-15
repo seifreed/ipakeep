@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::engine::{Engine, INSTRUCTION_SIZE};
+use super::engine::{Engine, INSTRUCTION_SIZE, UNLIMITED_INSTRUCTIONS};
 use super::error::EmuError;
 use super::register::Register;
 
@@ -92,7 +92,7 @@ impl Engine<'_> {
             if remaining.is_zero() {
                 return Err(EmuError::Timeout { timeout });
             }
-            let error = match self.start_bounded(next, until, remaining, 0) {
+            let error = match self.start_bounded(next, until, remaining, UNLIMITED_INSTRUCTIONS) {
                 Ok(()) => return Ok(()),
                 Err(error @ EmuError::Unicorn { .. }) => error,
                 Err(error) => return Err(error.with_timeout(timeout)),

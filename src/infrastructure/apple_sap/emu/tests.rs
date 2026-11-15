@@ -590,3 +590,65 @@ fn soft_atomics_match_unicorn_native_semantics() {
         assert_native_matches_soft(instruction);
     }
 }
+
+#[test]
+fn soft_eor3_matches_unicorn_native_semantics() {
+    let vectors: [[u8; 16]; 3] = [
+        core::array::from_fn(|index| byte(index).wrapping_mul(37)),
+        core::array::from_fn(|index| byte(index) ^ 0x5a),
+        [0xc3; 16],
+    ];
+    let prepare = |engine: &mut Engine<'_>| {
+        for (register, vector) in (1..).zip(vectors) {
+            engine.vreg_write(register, vector).expect("vector");
+        }
+    };
+    let mut native = engine_with(&[EOR3_V0_V1_V2_V3]);
+    prepare(&mut native);
+    native.start(CODE, CODE + INSTRUCTION_SIZE).expect("native");
+    let soft = soft_emulate(EOR3_V0_V1_V2_V3, prepare);
+
+    assert_eq!(native.vreg_read(0).ok(), soft.vreg_read(0).ok());
+}
+
+/// An ARMv8.0 core (Cortex-A57) rejects LSE atomics and SHA3, like the Unicorn
+/// builds ipatool's compatibility layer was written for.
+fn armv8_0_engine_with(program: &[u32]) -> Engine<'static> {
+    let mut engine = Engine::with_cpu_model(unicorn_engine::Arm64CpuModel::A57).expect("engine");
+    for base in [CODE, DATA] {
+        engine.mem_map(base, PAGE).expect("map");
+    }
+    engine.mem_write(CODE, &assemble(program)).expect("program");
+    engine
+}
+
+#[test]
+fn run_resumes_after_soft_emulating_unsupported_instructions() {
+    let program = [CASAL_X1_X2_X0, SWPAL_X1_X2_X0, EOR3_V0_V1_V2_V3, movz(5, 1)];
+    let mut engine = armv8_0_engine_with(&program);
+    engine.write_u64(DATA, 10).expect("data");
+    set(&mut engine, 0, DATA);
+    set(&mut engine, 1, 10);
+    set(&mut engine, 2, 20);
+    engine.vreg_write(1, [1; 16]).expect("v1");
+    engine.vreg_write(2, [2; 16]).expect("v2");
+    engine.vreg_write(3, [4; 16]).expect("v3");
+
+    run(&mut engine, &program).expect("run");
+
+    assert_eq!(engine.read_u64(DATA).ok(), Some(10));
+    assert_eq!(x(&engine, 2), 20);
+    assert_eq!(x(&engine, 5), 1);
+    assert_eq!(engine.vreg_read(0).ok(), Some([7; 16]));
+}
+
+#[test]
+fn armv8_0_core_rejects_lse_without_soft_emulation() {
+    let program = [CASAL_X1_X2_X0];
+    let mut engine = armv8_0_engine_with(&program);
+    set(&mut engine, 0, DATA);
+
+    let error = engine.start(CODE, end_of(&program)).expect_err("undefined");
+
+    assert_eq!(error.unicorn_code(), Some(uc_error::EXCEPTION));
+}

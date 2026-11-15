@@ -16,7 +16,8 @@ pub const RET_INSTRUCTION: [u8; 4] = [0xc0, 0x03, 0x5f, 0xd6];
 pub const VECTOR_REGISTER_SIZE: usize = 16;
 
 const MICROSECONDS_MINIMUM: u64 = 1;
-const UNLIMITED_INSTRUCTIONS: usize = 0;
+/// Instruction limit meaning "no limit" for [`Engine::start_bounded`].
+pub const UNLIMITED_INSTRUCTIONS: usize = 0;
 const UNBOUNDED_TIMEOUT: u64 = 0;
 const TIMEOUT_NOT_REACHED: usize = 0;
 
@@ -50,9 +51,14 @@ impl Engine<'_> {
     /// # Errors
     /// Returns [`EmuError::Unicorn`] if Unicorn cannot create or configure the CPU.
     pub fn new() -> Result<Self, EmuError> {
+        Self::with_cpu_model(Arm64CpuModel::MAX)
+    }
+
+    /// Opens an ARM64 emulator with an explicit CPU model.
+    pub(super) fn with_cpu_model(model: Arm64CpuModel) -> Result<Self, EmuError> {
         let mut uc = Unicorn::new_with_data(Arch::ARM64, Mode::ARM, EngineState::default())
             .map_err(native("open arm64 emulator"))?;
-        uc.ctl_set_cpu_model(i32::from(Arm64CpuModel::MAX))
+        uc.ctl_set_cpu_model(i32::from(model))
             .map_err(native("configure arm64 CPU model"))?;
 
         Ok(Self { uc })
