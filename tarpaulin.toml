@@ -7,26 +7,32 @@ fail-under = 100
 all-features = true
 workspace = true
 
-# Boundary adapters depend on Apple services, Docker, Keychain, Xcode simctl, or
+# Boundary adapters depend on Apple services, the pinned Apple assets, the
+# Unicorn-emulated Apple guest, Keychain, Xcode simctl, or
 # process-level CLI dispatch. They are covered by integration/smoke tests where
 # practical; line coverage here is measured for deterministic core code.
 exclude-files = [
   "src/main.rs",
+  "src/infrastructure/apple_sap/assets/bundle.rs",
+  "src/infrastructure/apple_sap/assets/http_range.rs",
+  "src/infrastructure/apple_sap/assets/remote.rs",
+  "src/infrastructure/apple_sap/machine/kbsync.rs",
+  "src/infrastructure/apple_sap/machine/modern_adi.rs",
+  "src/infrastructure/apple_sap/machine/sap.rs",
+  "src/infrastructure/apple_sap/machine/storeagent.rs",
+  "src/infrastructure/apple_sap/signer.rs",
+  "src/infrastructure/apple_sap/storeauth/service.rs",
+  "src/infrastructure/apple_sap/storeauth/worker.rs",
+  "src/infrastructure/appstore/store_api/store_machine.rs",
+  "src/infrastructure/appstore/store_api/store_session.rs",
   "src/presentation/cli/**",
   "src/domain/repository/fake/**",
   "src/domain/usecase/auth_login.rs",
   "src/infrastructure/appstore/store_api/grandslam_auth.rs",
-  "src/infrastructure/appstore/authentication.rs",
-  "src/infrastructure/appstore/bag.rs",
   "src/infrastructure/appstore/store_api.rs",
-  "src/infrastructure/appstore/store_api/commerce.rs",
-  "src/infrastructure/appstore/store_api/commerce_auth.rs",
   "src/infrastructure/appstore/store_api/parsing.rs",
   "src/infrastructure/appstore/storefront.rs",
   "src/infrastructure/grandslam/anisette.rs",
-  "src/infrastructure/grandslam/anisette/remote.rs",
-  "src/infrastructure/grandslam/anisette_docker.rs",
-  "src/infrastructure/grandslam/aoskit.rs",
   "src/infrastructure/grandslam/client.rs",
   "src/infrastructure/grandslam/client/account.rs",
   "src/infrastructure/grandslam/client/app_token.rs",
