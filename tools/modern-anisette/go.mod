@@ -1,6 +1,6 @@
 module github.com/majd/ipatool/v2/ipakeep-anisette-helper
 
-go 1.26.5
+go 1.26.11
 
 require (
 	github.com/juju/persistent-cookiejar v1.0.0

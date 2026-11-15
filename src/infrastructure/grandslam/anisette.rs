@@ -17,7 +17,7 @@ use crate::infrastructure::exec::observed_output;
 use fields::current_locale;
 #[cfg(any(ipakeep_modern_adi, test))]
 use fields::{AnisetteFields, build_cpd, build_headers};
-#[cfg(any(not(ipakeep_modern_adi), test))]
+#[cfg(not(ipakeep_modern_adi))]
 use remote::fetch_remote;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -83,11 +83,13 @@ struct OtpTokens {
 /// Returns an error if a configured/launched anisette server cannot be reached
 /// or returns an incomplete payload.
 #[cfg(ipakeep_modern_adi)]
-pub async fn resolve_anisette(_client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
+pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
     #[cfg(test)]
-    if let Some(result) = test_remote(_client).await {
+    if let Some(result) = test_remote(client).await {
         return result;
     }
+    #[cfg(not(test))]
+    let _ = client;
     super::modern_adi::generate().await
 }
 
@@ -124,21 +126,18 @@ pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, 
 }
 
 #[cfg(test)]
-static TEST_REMOTE_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_REMOTE_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
 pub(crate) fn set_test_remote_url(url: Option<String>) {
-    *TEST_REMOTE_URL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = url;
+    TEST_REMOTE_URL.with(|test_url| test_url.replace(url));
 }
 
 #[cfg(test)]
 async fn test_remote(client: &reqwest::Client) -> Option<Result<AnisetteData, AppStoreError>> {
-    let url = TEST_REMOTE_URL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()?;
+    let url = TEST_REMOTE_URL.with(|test_url| test_url.borrow().clone())?;
     Some(remote::fetch_remote(client, &url).await)
 }
 

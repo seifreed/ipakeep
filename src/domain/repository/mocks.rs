@@ -1,3 +1,8 @@
+#![expect(
+    clippy::struct_field_names,
+    reason = "mockall derives expectation fields from trait method names"
+)]
+
 use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
 use crate::domain::error::{AppStoreError, CredentialError};
 use crate::domain::repository::{

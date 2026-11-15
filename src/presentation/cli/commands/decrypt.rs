@@ -479,8 +479,8 @@ mod tests {
             (28, 0),
             (32, ENCRYPTION_INFO_64),
             (36, 24),
-            (40, CRYPTOFF as u32),
-            (44, CRYPTSIZE as u32),
+            (40, u32::try_from(CRYPTOFF).unwrap()),
+            (44, u32::try_from(CRYPTSIZE).unwrap()),
             (48, 1),
             (52, 0),
             (56, BUILD_VERSION),
@@ -826,7 +826,7 @@ mod tests {
         std::fs::create_dir(&dumps).unwrap();
         std::fs::write(
             dumps.join("TestExec.arm64.bin"),
-            (0..64).map(|i| i as u8).collect::<Vec<_>>(),
+            (0_u8..64).collect::<Vec<_>>(),
         )
         .unwrap();
         let patched = work.path().join("patched.ipa");
@@ -896,13 +896,11 @@ mod tests {
 
         let output_file = work.path().join("not-a-directory");
         std::fs::write(&output_file, b"blocker").unwrap();
-        assert!(write_provisioning_files(&work.path(), Some(&output_file), &result).is_err());
+        assert!(write_provisioning_files(work.path(), Some(&output_file), &result).is_err());
 
         let artifact_directory = work.path().join("artifact-directory");
         std::fs::create_dir_all(artifact_directory.join("embedded.mobileprovision")).unwrap();
-        assert!(
-            write_provisioning_files(&work.path(), Some(&artifact_directory), &result).is_err()
-        );
+        assert!(write_provisioning_files(work.path(), Some(&artifact_directory), &result).is_err());
     }
 
     #[tokio::test]

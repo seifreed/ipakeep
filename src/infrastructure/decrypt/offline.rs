@@ -245,18 +245,18 @@ mod tests {
         }
     }
 
-    fn atom(tag: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    fn atom(tag: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let mut atom = Vec::with_capacity(payload.len() + 8);
         atom.extend_from_slice(&u32::try_from(payload.len() + 8).unwrap().to_be_bytes());
-        atom.extend_from_slice(tag);
+        atom.extend_from_slice(&tag);
         atom.extend_from_slice(payload);
         atom
     }
 
     fn arcade_sinf() -> Vec<u8> {
         let mut key = Vec::new();
-        key.extend_from_slice(&atom(b"key ", &[4, 0, 0, 0]));
-        atom(b"sinf", &atom(b"schi", &key))
+        key.extend_from_slice(&atom(*b"key ", &[4, 0, 0, 0]));
+        atom(*b"sinf", &atom(*b"schi", &key))
     }
 
     #[test]

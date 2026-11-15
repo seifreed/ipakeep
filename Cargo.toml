@@ -81,6 +81,11 @@ predicates = "3"
 [build-dependencies]
 cc = "1"
 
+# This fallback is cfg-disabled when modern ADI is built, so udeps cannot see
+# the objc use even though the fallback remains available for alternate builds.
+[package.metadata.cargo-udeps.ignore]
+normal = ["objc"]
+
 [lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"

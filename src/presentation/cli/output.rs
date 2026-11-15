@@ -176,7 +176,7 @@ mod tests {
             format_list(&values, &OutputFormat::Text, i32::to_string),
             "1\n2"
         );
-        assert!(format_list(&values, &OutputFormat::Json, i32::to_string).contains("\n"));
+        assert!(format_list(&values, &OutputFormat::Json, i32::to_string).contains('\n'));
         assert!(
             format_list(&[BrokenSerialize], &OutputFormat::Json, |_| String::new())
                 .contains("serialization failed")

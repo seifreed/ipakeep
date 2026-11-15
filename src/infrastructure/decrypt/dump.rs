@@ -691,8 +691,12 @@ mod tests {
 
     #[test]
     fn run_dump_routes_device_and_external_backends_through_local_runners() {
-        fn require(_: &str) -> Result<(), String> {
-            Ok(())
+        fn require(program: &str) -> Result<(), String> {
+            if program.is_empty() {
+                Err("empty program".into())
+            } else {
+                Ok(())
+            }
         }
         fn remote(_: (String, Vec<String>), _: Option<&str>) -> Result<(), String> {
             Err("mock remote stop".into())

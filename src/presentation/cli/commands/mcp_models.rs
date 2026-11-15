@@ -135,6 +135,19 @@ pub(super) struct AuthInfoOutput {
     has_cookies: bool,
 }
 
+impl From<&Account> for AuthInfoOutput {
+    fn from(account: &Account) -> Self {
+        Self {
+            email: account.email.clone(),
+            name: account.name.clone(),
+            store_front: account.store_front.clone(),
+            pod: account.pod.clone(),
+            has_password_token: !account.password_token.is_empty(),
+            has_cookies: !account.cookies.is_empty(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{sanitize_segment, to_value};
@@ -163,18 +176,5 @@ mod tests {
                 .unwrap_err()
                 .contains("failed to serialize result")
         );
-    }
-}
-
-impl From<&Account> for AuthInfoOutput {
-    fn from(account: &Account) -> Self {
-        Self {
-            email: account.email.clone(),
-            name: account.name.clone(),
-            store_front: account.store_front.clone(),
-            pod: account.pod.clone(),
-            has_password_token: !account.password_token.is_empty(),
-            has_cookies: !account.cookies.is_empty(),
-        }
     }
 }

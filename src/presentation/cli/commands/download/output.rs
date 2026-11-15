@@ -138,7 +138,7 @@ mod tests {
     fn resolve_defaults_to_current_directory_and_reports_creation_errors() {
         assert!(matches!(
             OutputDestination::resolve(None, 1).expect("default output"),
-            OutputDestination::Directory(path) if path == PathBuf::from(".")
+            OutputDestination::Directory(path) if path.as_path() == Path::new(".")
         ));
 
         let dir = tempfile::TempDir::new().unwrap();

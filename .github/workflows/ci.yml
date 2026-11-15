@@ -1,0 +1,116 @@
+---
+name: CI
+
+"on":
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-quality:
+    name: Rust quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          components: clippy, rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check all targets and features
+        run: cargo check --all-targets --all-features --locked
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Tests
+        run: cargo test --all --locked
+
+      - name: Install quality tools
+        run: |
+          cargo install --locked cargo-license --version 0.7.0
+          cargo install --locked cargo-machete --version 0.9.2
+          cargo install --locked cargo-audit --version 0.22.0
+          cargo install --locked cargo-deny --version 0.19.4
+          cargo install --locked cargo-tarpaulin --version 0.37.6
+
+      - name: Check unused dependencies
+        run: cargo machete
+
+      - name: Audit dependencies
+        run: cargo audit
+
+      - name: Check dependency policy
+        run: cargo deny check
+
+      - name: Enforce coverage threshold
+        run: cargo tarpaulin --all-features --workspace --locked --out xml
+
+      - name: Export dependency licenses
+        run: >-
+          mkdir -p target/reports && cargo license --json --all-features
+          --output target/reports/cargo-license.json
+
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('target/reports/cargo-license.json') != ''
+        with:
+          name: cargo-license-report
+          path: target/reports/cargo-license.json
+          if-no-files-found: error
+
+  unused-dependencies:
+    name: cargo-udeps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: nightly
+
+      - name: Install cargo-udeps
+        run: cargo install --locked cargo-udeps --version 0.1.61
+
+      - name: Find unused dependencies
+        run: cargo +nightly udeps --workspace --all-targets --locked
+
+  go-helper:
+    name: Go helper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/modern-anisette/go.mod
+
+      - name: Test helper
+        working-directory: tools/modern-anisette
+        run: go test ./...
+
+      - name: Vet helper
+        working-directory: tools/modern-anisette
+        run: go vet ./...
+
+  sbom-quality:
+    name: SBOM quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # v1.2.0
+      # yamllint disable rule:line-length
+      - uses: sbom-tool/sbom-tools-action@c73f5ccd0e22e0797e1647d8abd57ba59e407472
+        # yamllint enable rule:line-length
+        with:
+          version: 0.4.0
+          command: quality
+          profile: comprehensive
+          args: sbom/ipakeep.cdx.json --metrics --recommendations

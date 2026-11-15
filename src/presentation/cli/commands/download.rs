@@ -242,7 +242,7 @@ mod tests {
     use crate::domain::repository::{FakeAppStoreRepository, InMemoryCredentialRepository};
     use std::path::PathBuf;
 
-    fn request<'a>(output: Option<&'a str>) -> DownloadRequest<'a> {
+    fn request(output: Option<&str>) -> DownloadRequest<'_> {
         DownloadRequest {
             app: "42",
             country: "us",

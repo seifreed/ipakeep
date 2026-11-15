@@ -905,7 +905,7 @@ mod tests {
         let table_end = FAT_HEADER_SIZE + slices.len() * FAT32_ARCH_ENTRY_SIZE;
         let total_size = table_end + slices.iter().map(|slice| slice.2.len()).sum::<usize>();
         let mut data = vec![0u8; total_size];
-        data[..4].copy_from_slice(&0xCAFEBABEu32.to_be_bytes());
+        data[..4].copy_from_slice(&0xCAFE_BABE_u32.to_be_bytes());
         data[4..8].copy_from_slice(&u32::try_from(slices.len()).unwrap().to_be_bytes());
         let mut slice_offset = table_end;
         for (index, (cpu, subtype, slice)) in slices.iter().enumerate() {
@@ -941,7 +941,7 @@ mod tests {
         let slice = thin_arm64_macho(1);
         let offset = FAT_HEADER_SIZE + FAT64_ARCH_ENTRY_SIZE;
         let mut data = vec![0u8; offset + slice.len()];
-        data[..4].copy_from_slice(&0xCAFEBABFu32.to_be_bytes());
+        data[..4].copy_from_slice(&0xCAFE_BABF_u32.to_be_bytes());
         data[4..8].copy_from_slice(&1u32.to_be_bytes());
         data[8..12].copy_from_slice(&CPU_TYPE_ARM64.to_be_bytes());
         data[12..16].copy_from_slice(&0u32.to_be_bytes());
@@ -1190,7 +1190,7 @@ mod tests {
 
     #[test]
     fn arm_parser_rejects_malformed_fat_tables_and_load_commands() {
-        for magic in [0xCAFEBABEu32, 0xCAFEBABF] {
+        for magic in [0xCAFE_BABE_u32, 0xCAFE_BABF] {
             let mut fat = magic.to_be_bytes().to_vec();
             fat.extend_from_slice(&0u32.to_be_bytes());
             assert!(collect_slices(&fat).is_err());
@@ -1372,11 +1372,11 @@ mod tests {
         supf.extend_from_slice(&1u32.to_be_bytes());
         supf.extend_from_slice(&[0u8; 32]);
 
-        let mut supp = vec![4u8, 0, 0, 0];
-        supp.extend_from_slice(&2u32.to_be_bytes());
-        supp.extend_from_slice(&[0u8; 64]);
+        let mut supp_records = vec![4u8, 0, 0, 0];
+        supp_records.extend_from_slice(&2u32.to_be_bytes());
+        supp_records.extend_from_slice(&[0u8; 64]);
 
-        for records in [&supf, &supp] {
+        for records in [&supf, &supp_records] {
             let (decrypted, pages) = decrypt_binary(&encrypted, &sinf, records, &credential)
                 .expect("decrypt Mach-O")
                 .expect("encrypted slice");

@@ -36,7 +36,7 @@ fn build_modern_anisette_helper() {
         .env("GOOS", "darwin")
         .env("GOARCH", go_arch)
         .output()
-        .expect("macOS builds require Go 1.26.5 or newer for modern Apple Anisette");
+        .expect("macOS builds require Go 1.26.11 or newer for modern Apple Anisette");
     assert!(
         output.status.success(),
         "failed to build modern Apple Anisette helper: {}",

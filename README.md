@@ -590,8 +590,12 @@ Generate and verify the committed CycloneDX SBOM:
 ./scripts/sbom.sh
 ```
 
-The gate scores the SBOM with the project `sbomqs` profile, verifies NTIA
-minimum elements, and scans it with `osv-scanner` and `grype`.
+The gate scores the SBOM with the project `sbomqs` profile and `sbom-tools`,
+verifies NTIA minimum elements, and scans it with `osv-scanner` and `grype`.
+
+CI runs the Rust formatting, compile, Clippy, test, coverage, dependency,
+license, and SBOM checks, plus tests and vet for the Go helper. CodeQL analyzes
+both the Rust crate and the helper used by macOS builds.
 
 ---
 
@@ -602,7 +606,7 @@ Contributions are welcome.
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Run the gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `cargo audit`, `cargo deny check`, `./scripts/sbom.sh`
+4. Run the gates: `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all`, `cargo machete`, `cargo +nightly udeps --workspace --all-targets`, `cargo audit`, `cargo deny check`, `cargo tarpaulin --all-features --workspace`, `cargo license --json`, `./scripts/sbom.sh`
 5. Open a Pull Request
 
 ---

@@ -221,7 +221,7 @@ fn bundle_relative_path(bundle_prefix: &str, path: &str) -> Result<String, Strin
 mod tests {
     use super::*;
 
-    fn plist_bytes(value: plist::Value) -> Vec<u8> {
+    fn plist_bytes(value: &plist::Value) -> Vec<u8> {
         let mut bytes = Vec::new();
         value.to_writer_xml(&mut bytes).unwrap();
         bytes
@@ -233,7 +233,7 @@ mod tests {
             "CFBundleExecutable".into(),
             plist::Value::String("Game".into()),
         );
-        plist_bytes(plist::Value::Dictionary(dict))
+        plist_bytes(&plist::Value::Dictionary(dict))
     }
 
     fn manifest(primary: &[&str], replicas: &[&str]) -> Vec<u8> {
@@ -249,7 +249,7 @@ mod tests {
                 ),
             );
         }
-        plist_bytes(plist::Value::Dictionary(dict))
+        plist_bytes(&plist::Value::Dictionary(dict))
     }
 
     fn ipa(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -266,8 +266,8 @@ mod tests {
     fn sinfs(count: usize) -> Vec<Sinf> {
         (0..count)
             .map(|id| Sinf {
-                id: id as i64,
-                data: vec![id as u8],
+                id: i64::try_from(id).expect("fixture id fits in i64"),
+                data: vec![u8::try_from(id).expect("fixture id fits in a byte")],
             })
             .collect()
     }
@@ -385,7 +385,7 @@ mod tests {
         ]);
         assert!(targets(&malformed, &sinfs(1)).is_err());
 
-        let root_array = plist_bytes(plist::Value::Array(Vec::new()));
+        let root_array = plist_bytes(&plist::Value::Array(Vec::new()));
         let fallback = ipa(&[
             ("Payload/Game.app/Info.plist", &info()),
             ("Payload/Game.app/SC_Info/Manifest.plist", &root_array),
@@ -395,7 +395,7 @@ mod tests {
             "Payload/Game.app/SC_Info/Game.sinf"
         );
 
-        let empty_manifest = plist_bytes(plist::Value::Dictionary(plist::Dictionary::new()));
+        let empty_manifest = plist_bytes(&plist::Value::Dictionary(plist::Dictionary::new()));
         let empty = ipa(&[
             ("Payload/Game.app/Info.plist", &info()),
             ("Payload/Game.app/SC_Info/Manifest.plist", &empty_manifest),
@@ -410,7 +410,7 @@ mod tests {
             "SinfPaths".into(),
             plist::Value::Array(vec![plist::Value::Integer(1.into())]),
         );
-        let invalid = plist_bytes(plist::Value::Dictionary(wrong_type));
+        let invalid = plist_bytes(&plist::Value::Dictionary(wrong_type));
         let invalid = ipa(&[
             ("Payload/Game.app/Info.plist", &info()),
             ("Payload/Game.app/SC_Info/Manifest.plist", &invalid),
@@ -483,7 +483,7 @@ mod tests {
                 .contains("missing app Info.plist")
         );
 
-        let invalid_info = plist_bytes(plist::Value::Dictionary(plist::Dictionary::new()));
+        let invalid_info = plist_bytes(&plist::Value::Dictionary(plist::Dictionary::new()));
         let mut archive =
             zip::ZipArchive::new(Cursor::new(ipa(&[("Info.plist", &invalid_info)]))).unwrap();
         assert!(

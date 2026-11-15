@@ -43,7 +43,7 @@ fn encrypted_sinf(credential: &[u8; 16]) -> Vec<u8> {
         .encrypt_padded_mut::<NoPadding>(&mut encrypted, length)
         .unwrap();
 
-    let sinf = atom(
+    atom(
         *b"sinf",
         &atom(
             *b"schi",
@@ -54,8 +54,7 @@ fn encrypted_sinf(credential: &[u8; 16]) -> Vec<u8> {
             ]
             .concat(),
         ),
-    );
-    sinf
+    )
 }
 
 fn encrypted_arm64_macho() -> Vec<u8> {

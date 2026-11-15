@@ -18,7 +18,9 @@ const BASE_URL: &str = "https://developerservices2.apple.com/services/QH65B2/";
 const XCODE_TOKEN_APP: &str = "com.apple.gs.xcode.auth";
 
 #[cfg(test)]
-static TEST_APP_TOKEN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_APP_TOKEN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Live client bound to a logged-in account.
 pub struct DeveloperClient {
@@ -39,10 +41,7 @@ impl DeveloperClient {
         let http = AppleHttpClient::new().map_err(|e| e.to_string())?;
         let grandslam = GrandSlamClient::new(http.client().clone());
         #[cfg(test)]
-        let test_token = TEST_APP_TOKEN
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        let test_token = TEST_APP_TOKEN.with(|token| token.borrow_mut().take());
         #[cfg(not(test))]
         let test_token = None;
         let gs_token = app_token_for_account(&grandslam, account, test_token).await?;
@@ -387,10 +386,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        TEST_APP_TOKEN
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .replace("app-token".into());
+        TEST_APP_TOKEN.with(|token| token.replace(Some("app-token".into())));
         crate::infrastructure::grandslam::set_test_remote_url(Some(server.uri()));
 
         let result = DeveloperClient::for_account(&account()).await;
