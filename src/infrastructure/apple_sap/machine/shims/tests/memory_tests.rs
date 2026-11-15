@@ -97,10 +97,16 @@ fn comparisons_and_lengths_follow_libc() {
     guest.put_str(DATA, "apple");
     guest.put_str(DATA + 0x40, "apply");
     assert_eq!(guest.ok("_memcmp", &[DATA, DATA + 0x40, 4]), 0);
-    assert_eq!(guest.ok("_memcmp", &[DATA, DATA + 0x40, 5]) as i64, -1);
-    assert_eq!(guest.ok("_strcmp", &[DATA + 0x40, DATA]) as i64, 1);
+    assert_eq!(
+        guest.ok("_memcmp", &[DATA, DATA + 0x40, 5]).cast_signed(),
+        -1
+    );
+    assert_eq!(guest.ok("_strcmp", &[DATA + 0x40, DATA]).cast_signed(), 1);
     assert_eq!(guest.ok("_strncmp", &[DATA, DATA + 0x40, 4]), 0);
-    assert_eq!(guest.ok("_strncmp", &[DATA, DATA + 0x40, 9]) as i64, -20);
+    assert_eq!(
+        guest.ok("_strncmp", &[DATA, DATA + 0x40, 9]).cast_signed(),
+        -20
+    );
     assert_eq!(guest.ok("_strncmp", &[DATA, DATA, 100]), 0);
     assert_eq!(guest.ok("_strlen", &[DATA]), 5);
     assert_eq!(guest.ok("_strnlen", &[DATA, 3]), 3);

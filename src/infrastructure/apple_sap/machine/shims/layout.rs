@@ -45,8 +45,10 @@ mod tests {
 
     #[test]
     fn service_area_holds_code_then_data() {
-        assert!(SHIM_CODE_SIZE < SHIM_AREA_SIZE);
-        assert_eq!(SHIM_BASE % PAGE_SIZE, 0);
-        assert_eq!(SHIM_CODE_SIZE % SHIM_SLOT_SIZE, 0);
+        const {
+            assert!(SHIM_CODE_SIZE < SHIM_AREA_SIZE);
+            assert!(SHIM_BASE.is_multiple_of(PAGE_SIZE));
+            assert!(SHIM_CODE_SIZE.is_multiple_of(SHIM_SLOT_SIZE));
+        }
     }
 }

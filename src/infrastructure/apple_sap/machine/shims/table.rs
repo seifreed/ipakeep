@@ -115,15 +115,13 @@ fn unsupported_import(call: &mut ShimCall<'_, '_>) -> Result<(), ShimError> {
 mod tests {
     use super::*;
 
-    fn noop(_: &mut ShimCall<'_, '_>) -> Result<(), ShimError> {
-        Ok(())
-    }
+    const NOOP: Handler = |_| Ok(());
 
     #[test]
     fn functions_get_consecutive_slots_and_keep_first_binding() {
         let mut table = ShimTable::default();
-        let first = table.add_function("_a", noop).expect("a");
-        let second = table.add_function("_b", noop).expect("b");
+        let first = table.add_function("_a", NOOP).expect("a");
+        let second = table.add_function("_b", NOOP).expect("b");
         assert_eq!(first, SHIM_BASE);
         assert_eq!(second, SHIM_BASE + SHIM_SLOT_SIZE);
         assert_eq!(

@@ -1,4 +1,4 @@
-//! Platform shim families: system, files, XPC, Mach, IOKit, kernel, callbacks.
+//! Platform shim families: system, files, `XPC`, Mach, `IOKit`, kernel, callbacks.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
