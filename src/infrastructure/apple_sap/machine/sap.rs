@@ -722,9 +722,6 @@ pub(in crate::infrastructure::apple_sap) mod test_support {
     use crate::infrastructure::apple_sap::assets::bundle::{Bundle, read_bundle};
     use crate::infrastructure::apple_sap::macho::PreparationCache;
 
-    /// Reason attached to tests that need the pinned Apple binaries.
-    pub(in crate::infrastructure::apple_sap) const NEEDS_ASSETS: &str =
-        "needs the cached Apple SAP assets";
     /// H0's frozen time, 2026-11-15T12:00:00Z.
     pub(in crate::infrastructure::apple_sap) const FIXED_UNIX_TIME: u64 = 1_794_744_000;
     /// H0's primary RNG seed.
@@ -880,14 +877,13 @@ mod tests {
 #[cfg(test)]
 mod golden_tests {
     use super::test_support::{
-        NEEDS_ASSETS, PRIMARY_SEED, SeededHost, bundle, environment, fixture, hex_at,
+        ALTERNATE_SEED, PRIMARY_SEED, SeededHost, bundle, environment, fixture, hex_at,
     };
     use super::*;
 
     #[test]
     #[ignore = "needs the cached Apple SAP assets"]
     fn sap_session_reproduces_golden_vectors() {
-        let _ = NEEDS_ASSETS;
         let golden = fixture("sap.json");
         let hardware = hex_at(&golden, "/hardware_id_hex");
         let host = SeededHost::new(PRIMARY_SEED);
@@ -932,5 +928,23 @@ mod golden_tests {
                 entry["signature_hex"].as_str().unwrap()
             );
         }
+    }
+
+    #[test]
+    #[ignore = "needs the cached Apple SAP assets"]
+    fn sap_setup_request_follows_the_alternate_seed() {
+        let golden = fixture("sap.json");
+        let hardware = hex_at(&golden, "/hardware_id_hex");
+        let host = SeededHost::new(ALTERNATE_SEED);
+        let mut machine = SapMachine::open(&bundle(), &environment(&host)).unwrap();
+        let context = machine.initialize(&hardware).unwrap();
+        let certificate = hex_at(&golden, "/certificate_hex");
+        let first = machine
+            .exchange(SAP_VERSION, &hardware, context, &certificate)
+            .unwrap();
+        assert_eq!(
+            first.output,
+            hex_at(&golden, "/exchange1_output_alt_seed_hex")
+        );
     }
 }

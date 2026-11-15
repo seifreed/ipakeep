@@ -690,7 +690,8 @@ mod tests {
 mod golden_tests {
     use super::*;
     use crate::infrastructure::apple_sap::machine::sap::test_support::{
-        FIXED_UNIX_TIME, PRIMARY_SEED, SeededHost, bundle, environment, fixture, hex_at,
+        ALTERNATE_SEED, FIXED_UNIX_TIME, PRIMARY_SEED, SeededHost, bundle, environment, fixture,
+        hex_at,
     };
 
     fn identifier(golden: &serde_json::Value) -> Vec<u8> {
@@ -755,5 +756,21 @@ mod golden_tests {
         let expected = &golden["rewritten_dsid_minus2"]["headers"];
         assert_eq!(headers.amd, expected["X-Apple-AMD"].as_str().unwrap());
         assert_eq!(headers.amd_m, expected["X-Apple-AMD-M"].as_str().unwrap());
+    }
+
+    #[test]
+    #[ignore = "needs the cached Apple SAP assets"]
+    fn start_provisioning_follows_the_alternate_seed() {
+        let golden = fixture("adi.json");
+        let host = SeededHost::new(ALTERNATE_SEED);
+        let environment = environment(&host);
+        let mut adi = ModernAdi::open(&bundle(), &environment, &identifier(&golden), &[]).unwrap();
+        let spim = hex_at(&golden, "/start_provisioning/spim_hex");
+        let start = adi
+            .start_provisioning(MACHINE_PROVISIONING_DSID, &spim)
+            .unwrap();
+        assert_eq!(start.cpim, hex_at(&golden, "/alt_seed/cpim_hex"));
+        let session = golden["alt_seed"]["session"].as_u64().unwrap();
+        assert_eq!(u64::from(start.session), session);
     }
 }
