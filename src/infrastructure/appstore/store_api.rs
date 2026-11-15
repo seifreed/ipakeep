@@ -3,7 +3,7 @@
 mod commerce;
 mod commerce_auth;
 mod grandslam_auth;
-pub(crate) mod native_commerce;
+pub mod native_commerce;
 mod parsing;
 #[cfg(ipakeep_modern_adi)]
 mod signed_commerce;
