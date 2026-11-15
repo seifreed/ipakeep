@@ -103,10 +103,8 @@ pub(super) fn parse_profile(resp: &Value) -> Result<Vec<u8>, String> {
 }
 
 fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map_or(&[], |v| v.as_slice())
+    let items = value.get(key).and_then(Value::as_array);
+    items.map_or(&[], Vec::as_slice)
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {

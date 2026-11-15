@@ -52,25 +52,27 @@ where
 {
     let mut lines = BufReader::new(reader).lines();
     while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
-            Ok(request) => handle_request(invoker, request).await,
-            Err(error) => Some(JsonRpcResponse::error(
-                Value::Null,
-                PARSE_ERROR,
-                format!("parse error: {error}"),
-            )),
+        let response = if line.trim().is_empty() {
+            None
+        } else {
+            respond_to_line(invoker, &line).await
         };
-
         if let Some(response) = response {
             write_message(&mut writer, &response).await?;
         }
     }
 
     Ok(())
+}
+
+async fn respond_to_line<I>(invoker: &I, line: &str) -> Option<JsonRpcResponse>
+where
+    I: ToolInvoker + ?Sized,
+{
+    match serde_json::from_str::<JsonRpcRequest>(line) {
+        Ok(request) => handle_request(invoker, request).await,
+        Err(error) => Some(parse_error(&error)),
+    }
 }
 
 /// Route a single parsed request to the appropriate handler.
@@ -143,15 +145,22 @@ where
 }
 
 fn to_success<T: Serialize>(id: Value, value: &T) -> JsonRpcResponse {
-    let error_code = INTERNAL_ERROR;
     match serde_json::to_value(value) {
         Ok(value) => JsonRpcResponse::success(id, value),
-        Err(error) => JsonRpcResponse::error(
-            id,
-            error_code,
-            format!("failed to serialize result: {error}"),
-        ),
+        Err(error) => serialization_error(id, &error),
     }
+}
+
+fn serialization_error(id: Value, error: &serde_json::Error) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        id,
+        INTERNAL_ERROR,
+        format!("failed to serialize result: {error}"),
+    )
+}
+
+fn parse_error(error: &serde_json::Error) -> JsonRpcResponse {
+    JsonRpcResponse::error(Value::Null, PARSE_ERROR, format!("parse error: {error}"))
 }
 
 async fn write_message<W>(writer: &mut W, response: &JsonRpcResponse) -> std::io::Result<()>

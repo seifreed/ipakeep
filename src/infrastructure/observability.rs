@@ -5,6 +5,7 @@ use std::io;
 use std::path::Path;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::util::SubscriberInitExt;
 
 const DEFAULT_ENVIRONMENT: &str = "unspecified";
 
@@ -59,6 +60,22 @@ impl LoggingConfig {
         };
         Ok(Self { filter, format })
     }
+
+    fn into_subscriber(self) -> Box<dyn tracing::Subscriber + Send + Sync> {
+        let builder = tracing_subscriber::fmt()
+            .with_env_filter(self.filter)
+            .with_writer(io::stderr);
+        match self.format {
+            LogFormat::Text => Box::new(builder.finish()),
+            LogFormat::Json => Box::new(
+                builder
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(true)
+                    .finish(),
+            ),
+        }
+    }
 }
 
 /// Initialize stderr logging using `RUST_LOG` and `IPAKEEP_LOG_FORMAT`.
@@ -72,21 +89,10 @@ impl LoggingConfig {
 /// Returns an error when logging configuration is invalid or another global
 /// subscriber is already installed.
 pub fn init_logging(verbose: bool) -> Result<(), String> {
-    let config = LoggingConfig::from_env(verbose)?;
-    let result = match config.format {
-        LogFormat::Text => tracing_subscriber::fmt()
-            .with_env_filter(config.filter)
-            .with_writer(io::stderr)
-            .try_init(),
-        LogFormat::Json => tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            .with_current_span(true)
-            .with_env_filter(config.filter)
-            .with_writer(io::stderr)
-            .try_init(),
-    };
-    result.map_err(|_| "could not install the global logging subscriber".into())
+    let subscriber = LoggingConfig::from_env(verbose)?.into_subscriber();
+    subscriber
+        .try_init()
+        .map_err(|_| "could not install the global logging subscriber".into())
 }
 
 /// Install a panic hook that records crash location without panic payload data.
@@ -165,10 +171,12 @@ fn sanitize_environment(value: &str) -> String {
 mod tests {
     use super::{
         LogFormat, LoggingConfig, environment, install_panic_hook, panic_location,
-        panic_payload_type, sanitize_environment,
+        panic_payload_type, read_env_result, sanitize_environment,
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::io::{self, Write};
+    use tracing::Subscriber;
+    use tracing::level_filters::LevelFilter;
 
     struct FailingWriter;
 
@@ -214,6 +222,28 @@ mod tests {
     }
 
     #[test]
+    fn configured_subscriber_honors_filter_for_text_and_json_formats() {
+        for format in ["text", "json"] {
+            let subscriber = LoggingConfig::from_values(Some("warn"), Some(format), true)
+                .expect("configured logging")
+                .into_subscriber();
+            assert_eq!(subscriber.max_level_hint(), Some(LevelFilter::WARN));
+        }
+    }
+
+    #[test]
+    fn present_environment_values_are_returned_verbatim() {
+        assert_eq!(
+            read_env_result("IPAKEEP_TEST", Ok("json".into())),
+            Ok(Some("json".into()))
+        );
+        assert_eq!(
+            read_env_result("IPAKEEP_TEST", Err(std::env::VarError::NotPresent)),
+            Ok(None)
+        );
+    }
+
+    #[test]
     fn environment_label_is_safe_and_bounded() {
         assert_eq!(sanitize_environment("prod\n\u{1b}[31m!"), "prod31m");
         assert_eq!(sanitize_environment(&"a".repeat(100)).len(), 64);
@@ -234,7 +264,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn environment_reader_rejects_non_utf8_values() {
-        use super::read_env_result;
         use std::os::unix::ffi::OsStringExt;
 
         let error = read_env_result(

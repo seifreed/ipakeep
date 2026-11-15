@@ -37,15 +37,25 @@ pub struct InstallRequest<'a> {
 /// Returns an error when the IPA is encrypted, signing fails, or the device
 /// tools reject the installation.
 pub fn install_ipa(request: &InstallRequest<'_>) -> Result<(), String> {
-    require_install_tools(request, require_program)?;
-    let ipa_bytes =
-        fs::read(request.ipa).map_err(|error| format!("{}: {error}", request.ipa.display()))?;
+    install_ipa_with(request, require_program)
+}
+
+fn install_ipa_with(
+    request: &InstallRequest<'_>,
+    require: fn(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    require_install_tools(request, require)?;
+    let ipa_bytes = read_ipa(request.ipa)?;
     ensure_decrypted(ipa_bytes)?;
 
     let workdir = temp_dir("device-install")?;
     let result = install_in_workdir(request, &workdir);
     let _ = fs::remove_dir_all(&workdir);
     result
+}
+
+fn read_ipa(ipa: &Path) -> Result<Vec<u8>, String> {
+    fs::read(ipa).map_err(|error| format!("{}: {error}", ipa.display()))
 }
 
 fn require_install_tools(
@@ -286,7 +296,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn rejects_a_decrypted_ipa_without_a_matching_profile_before_installing() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -319,7 +328,7 @@ mod tests {
         };
 
         assert!(
-            install_ipa(&request)
+            install_ipa_with(&request, |_| Ok(()))
                 .unwrap_err()
                 .contains("no provisioning profile matches com.example.test")
         );
@@ -364,7 +373,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn install_rejects_missing_and_invalid_ipa_before_device_commands() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -379,8 +387,10 @@ mod tests {
             legacy_device: false,
         };
 
-        assert!(install_ipa(&request).unwrap_err().contains("No such file"));
-        fs::write(&ipa, b"not an IPA").unwrap();
         assert!(install_ipa(&request).is_err());
+        let error = install_ipa_with(&request, |_| Ok(())).unwrap_err();
+        assert!(error.starts_with(&ipa.display().to_string()), "{error}");
+        fs::write(&ipa, b"not an IPA").unwrap();
+        assert!(install_ipa_with(&request, |_| Ok(())).is_err());
     }
 }

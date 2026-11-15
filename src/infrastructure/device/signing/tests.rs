@@ -139,24 +139,15 @@ fn chooses_separate_profiles_for_app_and_extension() {
         profile("PREFIX.com.example.app"),
         profile("PREFIX.com.example.app.widget"),
     ];
-    assert!(std::ptr::eq(
-        select_profile(&profiles, "com.example.app").unwrap(),
-        &raw const profiles[0]
-    ));
-    assert!(std::ptr::eq(
-        select_profile(&profiles, "com.example.app.widget").unwrap(),
-        &raw const profiles[1]
-    ));
+    assert_eq!(select_profile(&profiles, "com.example.app"), Ok(0));
+    assert_eq!(select_profile(&profiles, "com.example.app.widget"), Ok(1));
     assert!(select_profile(&profiles[..1], "com.example.app.widget").is_err());
 }
 
 #[test]
 fn prefers_explicit_profile_and_rejects_ambiguous_matches() {
     let profiles = [profile("PREFIX.*"), profile("PREFIX.com.example.app")];
-    assert!(std::ptr::eq(
-        select_profile(&profiles, "com.example.app").unwrap(),
-        &raw const profiles[1]
-    ));
+    assert_eq!(select_profile(&profiles, "com.example.app"), Ok(1));
     assert!(
         select_profile(
             &[profile("PREFIX.*"), profile("OTHER.*")],
@@ -337,6 +328,201 @@ fn entitlement_patterns_only_treat_trailing_star_as_wildcard() {
     assert!(!matches_pattern("TEAM.*.app", "TEAM.one.app"));
 }
 
+fn unsigned_test_app(root: &Path) -> PathBuf {
+    let app = root.join("Test.app");
+    fs::create_dir_all(app.join("Frameworks")).unwrap();
+    fs::write(app.join("Frameworks").join("Support.dylib"), b"dylib").unwrap();
+    Value::Dictionary(Dictionary::from_iter([(
+        "CFBundleIdentifier".to_string(),
+        Value::String("com.example.test".to_string()),
+    )]))
+    .to_file_xml(app.join("Info.plist"))
+    .unwrap();
+    app
+}
+
+fn test_request<'a>(
+    profiles: &'a [PathBuf],
+    entitlements: Option<&'a Path>,
+) -> crate::infrastructure::device::InstallRequest<'a> {
+    crate::infrastructure::device::InstallRequest {
+        ipa: Path::new("unused.ipa"),
+        device: "device",
+        identity: "Apple Development",
+        provisioning_profiles: profiles,
+        entitlements,
+        launch: false,
+        legacy_device: false,
+    }
+}
+
+fn command_line(command: &Command) -> Vec<String> {
+    std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[test]
+fn signs_nested_code_before_the_app_with_validated_entitlements() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let override_path = dir.path().join("override.plist");
+    Value::Dictionary(Dictionary::new())
+        .to_file_xml(&override_path)
+        .unwrap();
+    let mut signing_profile = profile("PREFIX.com.example.test");
+    signing_profile.path = dir.path().join("profile.mobileprovision");
+    fs::write(&signing_profile.path, b"profile for test bundle").unwrap();
+    let request = test_request(&[], Some(&override_path));
+    let mut commands = Vec::new();
+
+    sign_bundle_with_profiles(
+        &app,
+        &request,
+        &[signing_profile],
+        dir.path(),
+        &mut |command| {
+            commands.push(command_line(&command));
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    let dylib = app.join("Frameworks").join("Support.dylib");
+    let entitlements = dir.path().join("entitlements-1.plist");
+    assert_eq!(
+        commands,
+        [
+            vec![
+                "/usr/bin/codesign".to_string(),
+                "--force".into(),
+                "--sign".into(),
+                "Apple Development".into(),
+                "--preserve-metadata=identifier,requirements,flags,entitlements".into(),
+                dylib.display().to_string(),
+            ],
+            vec![
+                "/usr/bin/codesign".to_string(),
+                "--force".into(),
+                "--sign".into(),
+                "Apple Development".into(),
+                "--entitlements".into(),
+                entitlements.display().to_string(),
+                app.display().to_string(),
+            ],
+        ]
+    );
+    let written = Value::from_file(&entitlements).unwrap();
+    assert_eq!(
+        written.as_dictionary().unwrap()["application-identifier"],
+        Value::String("PREFIX.com.example.test".into())
+    );
+    assert_eq!(
+        fs::read(app.join("embedded.mobileprovision")).unwrap(),
+        b"profile for test bundle"
+    );
+}
+
+#[test]
+fn codesign_failure_stops_signing_remaining_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let override_path = dir.path().join("override.plist");
+    Value::Dictionary(Dictionary::new())
+        .to_file_xml(&override_path)
+        .unwrap();
+    let mut signing_profile = profile("PREFIX.com.example.test");
+    signing_profile.path = dir.path().join("profile.mobileprovision");
+    fs::write(&signing_profile.path, b"profile").unwrap();
+    let request = test_request(&[], Some(&override_path));
+    let mut attempts = 0;
+
+    let error =
+        sign_bundle_with_profiles(&app, &request, &[signing_profile], dir.path(), &mut |_| {
+            attempts += 1;
+            Err("codesign rejected".to_string())
+        })
+        .unwrap_err();
+
+    assert_eq!(error, "codesign rejected");
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn sign_bundle_reads_request_profiles_and_rejects_unmatched_bundles_before_signing() {
+    let mut entitlements = Dictionary::new();
+    entitlements.insert(
+        "application-identifier".into(),
+        Value::String("OTHER.com.other".into()),
+    );
+    let mut plist = Vec::new();
+    Value::Dictionary(Dictionary::from_iter([(
+        "Entitlements".to_string(),
+        Value::Dictionary(entitlements),
+    )]))
+    .to_writer_xml(&mut plist)
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let profile_path = dir.path().join("other.mobileprovision");
+    fs::write(&profile_path, cms::fixtures::der_signed_data(&plist)).unwrap();
+
+    let profiles = [profile_path];
+    let error = sign_bundle(&app, &test_request(&profiles, None), dir.path()).unwrap_err();
+    assert_eq!(
+        error,
+        "no provisioning profile matches com.example.test; supply --provisioning-profile for this bundle"
+    );
+    assert!(!app.join("embedded.mobileprovision").exists());
+
+    let missing = [dir.path().join("missing.mobileprovision")];
+    let error = sign_bundle(&app, &test_request(&missing, None), dir.path()).unwrap_err();
+    assert!(error.starts_with("reading "), "{error}");
+}
+
+#[test]
+fn ambiguous_profiles_are_reported_by_bundle_identifier() {
+    assert_eq!(
+        select_profile(
+            &[profile("PREFIX.*"), profile("OTHER.*")],
+            "com.example.app"
+        ),
+        Err(
+            "multiple provisioning profiles match com.example.app; supply one matching profile"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn codesign_entitlement_output_is_parsed_as_a_dictionary() {
+    assert!(parse_entitlements_xml(" \n").unwrap().is_empty());
+    let mut xml = Vec::new();
+    Value::Dictionary(Dictionary::from_iter([(
+        "get-task-allow".to_string(),
+        Value::Boolean(true),
+    )]))
+    .to_writer_xml(&mut xml)
+    .unwrap();
+    let parsed = parse_entitlements_xml(&String::from_utf8(xml).unwrap()).unwrap();
+    assert_eq!(parsed["get-task-allow"], Value::Boolean(true));
+
+    let mut array = Vec::new();
+    Value::Array(Vec::new()).to_writer_xml(&mut array).unwrap();
+    assert_eq!(
+        parse_entitlements_xml(&String::from_utf8(array).unwrap()).unwrap_err(),
+        "entitlements must be a dictionary"
+    );
+    assert!(parse_entitlements_xml("<plist><dict>").is_err());
+}
+
+#[test]
+fn embedded_entitlements_of_unreadable_code_are_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(read_entitlements(&dir.path().join("Missing.app"), None).is_err());
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn prepare_target_reads_real_codesign_entitlements_and_embeds_matching_profile() {
@@ -383,7 +569,7 @@ fn signs_nested_code_and_app_using_matching_profiles() {
         legacy_device: false,
     };
 
-    sign_bundle_with_profiles(&app, &request, &profiles, dir.path()).unwrap();
+    sign_bundle_with_profiles(&app, &request, &profiles, dir.path(), &mut run_inherit).unwrap();
 
     assert_eq!(
         fs::read(app.join("embedded.mobileprovision")).unwrap(),

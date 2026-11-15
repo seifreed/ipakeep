@@ -68,6 +68,13 @@ impl Profile {
         let identifier = format!("{prefix}.{bundle_id}");
         matches_pattern(pattern, &identifier).then_some(identifier)
     }
+
+    fn has_exact_app_id(&self) -> bool {
+        self.entitlements
+            .get("application-identifier")
+            .and_then(Value::as_string)
+            .is_some_and(|id| !id.contains('*'))
+    }
 }
 
 fn record_profile_decode(started: Instant, error_type: Option<&'static str>) {
@@ -98,12 +105,12 @@ pub(super) fn sign_bundle(
     request: &InstallRequest<'_>,
     workdir: &Path,
 ) -> Result<(), String> {
-    let profiles = request
-        .provisioning_profiles
-        .iter()
-        .map(|path| Profile::read(path))
-        .collect::<Result<Vec<_>, _>>()?;
-    sign_bundle_with_profiles(app, request, &profiles, workdir)
+    let profiles = read_profiles(request.provisioning_profiles)?;
+    sign_bundle_with_profiles(app, request, &profiles, workdir, &mut run_inherit)
+}
+
+fn read_profiles(paths: &[PathBuf]) -> Result<Vec<Profile>, String> {
+    paths.iter().map(|path| Profile::read(path)).collect()
 }
 
 fn sign_bundle_with_profiles(
@@ -111,6 +118,7 @@ fn sign_bundle_with_profiles(
     request: &InstallRequest<'_>,
     profiles: &[Profile],
     workdir: &Path,
+    run: &mut dyn FnMut(Command) -> Result<(), String>,
 ) -> Result<(), String> {
     let mut targets = Vec::new();
     collect_sign_targets(app, &mut targets, &|_| Ok(true))?;
@@ -123,17 +131,25 @@ fn sign_bundle_with_profiles(
         prepared.push((target, entitlements));
     }
     for (target, entitlements) in prepared {
-        let mut command = Command::new("/usr/bin/codesign");
-        command.args(["--force", "--sign", request.identity]);
-        if let Some(path) = entitlements {
-            command.arg("--entitlements").arg(path);
-        } else {
-            command.arg("--preserve-metadata=identifier,requirements,flags,entitlements");
-        }
-        command.arg(target);
-        run_inherit(command)?;
+        run(codesign_command(
+            request.identity,
+            target,
+            entitlements.as_deref(),
+        ))?;
     }
     Ok(())
+}
+
+fn codesign_command(identity: &str, target: &Path, entitlements: Option<&Path>) -> Command {
+    let mut command = Command::new("/usr/bin/codesign");
+    command.args(["--force", "--sign", identity]);
+    if let Some(path) = entitlements {
+        command.arg("--entitlements").arg(path);
+    } else {
+        command.arg("--preserve-metadata=identifier,requirements,flags,entitlements");
+    }
+    command.arg(target);
+    command
 }
 
 fn prepare_target(
@@ -150,7 +166,7 @@ fn prepare_target(
         return Ok(None);
     }
     let bundle_id = bundle_identifier(target)?;
-    let profile = select_profile(profiles, &bundle_id)?;
+    let profile = &profiles[select_profile(profiles, &bundle_id)?];
     let requested = read_entitlements(target, override_path)?;
     let entitlements = signing_entitlements(&requested, profile, &bundle_id)
         .map_err(|error| format!("{bundle_id}: {error}"))?;
@@ -163,24 +179,18 @@ fn prepare_target(
     Ok(Some(path))
 }
 
-fn select_profile<'a>(profiles: &'a [Profile], bundle_id: &str) -> Result<&'a Profile, String> {
-    let matching: Vec<_> = profiles
-        .iter()
-        .filter(|p| p.app_id(bundle_id).is_some())
+fn select_profile(profiles: &[Profile], bundle_id: &str) -> Result<usize, String> {
+    let matching: Vec<usize> = (0..profiles.len())
+        .filter(|&index| profiles[index].app_id(bundle_id).is_some())
         .collect();
-    let exact: Vec<_> = matching
+    let exact: Vec<usize> = matching
         .iter()
         .copied()
-        .filter(|p| {
-            p.entitlements
-                .get("application-identifier")
-                .and_then(Value::as_string)
-                .is_some_and(|id| !id.contains('*'))
-        })
+        .filter(|&index| profiles[index].has_exact_app_id())
         .collect();
-    let candidates = if exact.is_empty() { &matching } else { &exact };
+    let candidates = if exact.is_empty() { matching } else { exact };
     match candidates.as_slice() {
-        [profile] => Ok(profile),
+        [index] => Ok(*index),
         [] => Err(format!(
             "no provisioning profile matches {bundle_id}; supply --provisioning-profile for this bundle"
         )),
@@ -191,15 +201,26 @@ fn select_profile<'a>(profiles: &'a [Profile], bundle_id: &str) -> Result<&'a Pr
 }
 
 fn read_entitlements(target: &Path, override_path: Option<&Path>) -> Result<Dictionary, String> {
-    let value = if let Some(path) = override_path {
-        Value::from_file(path).map_err(|error| format!("{}: {error}", path.display()))?
-    } else {
-        let xml = extract_entitlements(target)?;
-        if xml.trim().is_empty() {
-            return Ok(Dictionary::new());
-        }
-        Value::from_reader(Cursor::new(xml)).map_err(|error| error.to_string())?
-    };
+    match override_path {
+        Some(path) => read_entitlements_file(path),
+        None => parse_entitlements_xml(&extract_entitlements(target)?),
+    }
+}
+
+fn read_entitlements_file(path: &Path) -> Result<Dictionary, String> {
+    let value = Value::from_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    entitlements_dictionary(value)
+}
+
+fn parse_entitlements_xml(xml: &str) -> Result<Dictionary, String> {
+    if xml.trim().is_empty() {
+        return Ok(Dictionary::new());
+    }
+    let value = Value::from_reader(Cursor::new(xml)).map_err(|error| error.to_string())?;
+    entitlements_dictionary(value)
+}
+
+fn entitlements_dictionary(value: Value) -> Result<Dictionary, String> {
     value
         .into_dictionary()
         .ok_or_else(|| "entitlements must be a dictionary".into())
