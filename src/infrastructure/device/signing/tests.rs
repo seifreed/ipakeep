@@ -1,7 +1,8 @@
 use super::*;
+use crate::infrastructure::observability::log_capture::LogCapture;
 
 #[test]
-fn security_command_output_is_parsed_as_a_provisioning_profile() {
+fn reads_der_and_indefinite_length_ber_provisioning_profiles() {
     let mut entitlements = Dictionary::new();
     entitlements.insert(
         "application-identifier".into(),
@@ -9,20 +10,33 @@ fn security_command_output_is_parsed_as_a_provisioning_profile() {
     );
     let mut profile = Dictionary::new();
     profile.insert("Entitlements".into(), Value::Dictionary(entitlements));
-    let mut stdout = Vec::new();
+    let mut plist = Vec::new();
     Value::Dictionary(profile)
-        .to_writer_xml(&mut stdout)
+        .to_writer_xml(&mut plist)
         .expect("encode profile plist");
-    let mut output = Command::new("true").output().expect("successful command");
-    output.stdout = stdout;
+    let dir = tempfile::tempdir().unwrap();
+    let capture = LogCapture::default();
+    let _guard = capture.install();
 
-    let parsed = Profile::from_security_output(Path::new("profile.mobileprovision"), &output)
-        .expect("provisioning profile");
-
-    assert_eq!(
-        parsed.app_id("com.example.app").as_deref(),
-        Some("PREFIX.com.example.app")
-    );
+    for (name, envelope) in [
+        ("der", cms::fixtures::der_signed_data(&plist)),
+        ("ber", cms::fixtures::ber_signed_data(&plist, 64)),
+    ] {
+        let path = dir.path().join(format!("{name}.mobileprovision"));
+        fs::write(&path, envelope).unwrap();
+        let parsed = Profile::read(&path).expect("provisioning profile");
+        assert_eq!(parsed.path, path);
+        assert_eq!(
+            parsed.app_id("com.example.app").as_deref(),
+            Some("PREFIX.com.example.app")
+        );
+    }
+    let logs = capture.contents();
+    assert_eq!(logs.matches("provisioning_profile.decoded").count(), 2);
+    assert!(logs.contains("outcome=\"success\""));
+    assert!(logs.contains("duration_ms="));
+    assert!(!logs.contains("PREFIX"));
+    assert!(!logs.contains(".mobileprovision"));
 }
 
 fn profile(identifier: &str) -> Profile {
@@ -226,14 +240,27 @@ fn parses_entitlements_from_cms_profile_output() {
     );
 }
 
-#[cfg(target_os = "macos")]
 #[test]
-fn profile_reader_rejects_invalid_cms_data() {
+fn profile_reader_rejects_invalid_cms_data_and_missing_files() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("invalid.mobileprovision");
     fs::write(&path, b"not a provisioning profile").unwrap();
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let error = Profile::read(&path).err().unwrap();
+    assert!(error.starts_with("decoding "), "{error}");
 
-    assert!(Profile::read(&path).is_err());
+    let missing = directory.path().join("missing.mobileprovision");
+    let error = Profile::read(&missing).err().unwrap();
+    assert!(error.starts_with("reading "), "{error}");
+
+    let logs = capture.contents();
+    assert!(logs.contains("WARN"));
+    assert!(logs.contains("outcome=\"failure\""));
+    assert!(logs.contains("error_type=\"invalid_cms\""));
+    assert!(logs.contains("error_type=\"read_failed\""));
+    assert!(!logs.contains("not a provisioning profile"));
+    assert!(!logs.contains(".mobileprovision"));
 }
 
 #[test]

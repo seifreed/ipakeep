@@ -2,7 +2,6 @@
 
 use super::InstallRequest;
 use crate::infrastructure::decrypt::extract_entitlements;
-use crate::infrastructure::exec::observed_output;
 use crate::infrastructure::exec::run_inherit;
 use crate::infrastructure::ipa::bundle_identifier;
 use crate::infrastructure::signing::collect_sign_targets;
@@ -11,6 +10,9 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Instant;
+
+mod cms;
 
 pub(super) struct Profile {
     path: PathBuf,
@@ -18,23 +20,28 @@ pub(super) struct Profile {
 }
 
 impl Profile {
+    /// Decode a `.mobileprovision`; like `security cms -D`, its CMS signature is not verified.
     pub(super) fn read(path: &Path) -> Result<Self, String> {
-        let mut command = Command::new("/usr/bin/security");
-        command.args(["cms", "-D", "-i"]).arg(path);
-        let output = observed_output(&mut command)
-            .map_err(|error| format!("decoding {}: {error}", path.display()))?;
-        Self::from_security_output(path, &output)
+        let started = Instant::now();
+        let result = Self::decode(path);
+        record_profile_decode(started, result.as_ref().err().map(|(kind, _)| *kind));
+        result.map_err(|(_, message)| message)
     }
 
-    fn from_security_output(path: &Path, output: &std::process::Output) -> Result<Self, String> {
-        if !output.status.success() {
-            return Err(format!(
-                "{}: {}",
-                path.display(),
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Self::from_cms_output(path, &output.stdout)
+    fn decode(path: &Path) -> Result<Self, (&'static str, String)> {
+        let envelope = fs::read(path).map_err(|error| {
+            (
+                "read_failed",
+                format!("reading {}: {error}", path.display()),
+            )
+        })?;
+        let content = cms::signed_data_content(&envelope).map_err(|error| {
+            (
+                "invalid_cms",
+                format!("decoding {}: {error}", path.display()),
+            )
+        })?;
+        Self::from_cms_output(path, &content).map_err(|message| ("invalid_profile", message))
     }
 
     fn from_cms_output(path: &Path, output: &[u8]) -> Result<Self, String> {
@@ -60,6 +67,29 @@ impl Profile {
         let (prefix, _) = pattern.split_once('.')?;
         let identifier = format!("{prefix}.{bundle_id}");
         matches_pattern(pattern, &identifier).then_some(identifier)
+    }
+}
+
+fn record_profile_decode(started: Instant, error_type: Option<&'static str>) {
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match error_type {
+        None => tracing::debug!(
+            service = "ipakeep",
+            component = "device_signing",
+            event_name = "provisioning_profile.decoded",
+            outcome = "success",
+            duration_ms,
+            "provisioning profile decoded"
+        ),
+        Some(error_type) => tracing::warn!(
+            service = "ipakeep",
+            component = "device_signing",
+            event_name = "provisioning_profile.decoded",
+            outcome = "failure",
+            error_type,
+            duration_ms,
+            "provisioning profile could not be decoded"
+        ),
     }
 }
 
