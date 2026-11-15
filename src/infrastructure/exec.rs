@@ -1,4 +1,4 @@
-//! Minimal helpers for shelling out to external tools (dumpers, openssl, …).
+//! Minimal helpers for shelling out to external tools (dumpers, device tools, …).
 //!
 //! Kept separate from `simulator`'s private process helpers so the `decrypt`
 //! flow does not depend on the simulator module.
@@ -43,17 +43,6 @@ pub(crate) fn run_inherit(mut command: Command) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{command:?} exited with {status}"))
-    }
-}
-
-/// Run `command` capturing output; on failure return its trimmed stderr.
-pub(crate) fn run_quiet(mut command: Command) -> Result<(), String> {
-    let output =
-        observed_output(&mut command).map_err(|e| format!("failed to run {command:?}: {e}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 
@@ -166,7 +155,7 @@ pub(crate) fn newest_ipa(dir: &Path) -> Option<PathBuf> {
 mod tests {
     use super::{
         find_in_path, newest_ipa, observed_output, observed_status, require_program, run_inherit,
-        run_quiet, temp_dir,
+        temp_dir,
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::process::Command;
@@ -208,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    fn command_runners_return_status_and_trimmed_stderr() {
+    fn run_inherit_reports_exit_status_and_spawn_errors() {
         let mut success = Command::new("sh");
         success.args(["-c", "exit 0"]);
         assert!(run_inherit(success).is_ok());
@@ -218,18 +207,6 @@ mod tests {
         assert!(run_inherit(failed).unwrap_err().contains("exit status: 7"));
         assert!(
             run_inherit(Command::new("ipakeep-command-that-does-not-exist"))
-                .unwrap_err()
-                .starts_with("failed to run")
-        );
-
-        let mut quiet = Command::new("sh");
-        quiet.args(["-c", "printf '  failure  ' >&2; exit 7"]);
-        assert_eq!(run_quiet(quiet).unwrap_err(), "failure");
-        let mut quiet = Command::new("sh");
-        quiet.args(["-c", "exit 0"]);
-        assert!(run_quiet(quiet).is_ok());
-        assert!(
-            run_quiet(Command::new("ipakeep-command-that-does-not-exist"))
                 .unwrap_err()
                 .starts_with("failed to run")
         );

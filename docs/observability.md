@@ -288,6 +288,8 @@ Useful events include:
 - `process.completed` and `process.spawn_failed` for host tools.
 - `auth.retry.scheduled` and `appstore.request.retry` for recoverable retries.
 - `download.artifact.saved` for the local IPA write.
+- `developer.csr.generated` and `developer.csr.failed` for the native RSA key
+  and certificate signing request generation (never the subject or key).
 
 Successful request/process detail and routine state resolution are DEBUG.
 Command and credential writes are INFO. Recoverable fallbacks, retries,

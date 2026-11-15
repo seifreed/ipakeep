@@ -78,6 +78,10 @@ ctr = "0.9"
 hkdf = "0.12"
 unicorn-engine = { version = "2.1", default-features = false, features = ["arch_aarch64"] }
 
+# Developer certificate request (RSA-2048 key + PKCS#10 CSR)
+rsa = { version = "0.10", default-features = false, features = ["std", "encoding", "pkcs1v15"] }
+x509-cert = "0.3"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
 
