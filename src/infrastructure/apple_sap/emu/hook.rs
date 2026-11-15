@@ -14,6 +14,9 @@ pub const ALL_ADDRESSES_BEGIN: u64 = 1;
 /// Hook range end that, paired with [`ALL_ADDRESSES_BEGIN`], covers every address.
 pub const ALL_ADDRESSES_END: u64 = 0;
 
+/// The Unicorn handle every hook callback receives.
+type Uc<'u> = Unicorn<'u, EngineState>;
+
 /// Identifies a registered hook so it can be removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HookId(UcHookId);
@@ -101,11 +104,7 @@ impl<'a> Engine<'a> {
     where
         F: FnMut(&mut Engine<'_>, MemoryAccess, u64, usize, i64) -> Result<(), EmuError> + 'a,
     {
-        let hook = move |uc: &mut Unicorn<'_, EngineState>,
-                         kind: MemType,
-                         address: u64,
-                         size: usize,
-                         value: i64| {
+        let hook = move |uc: &mut Uc<'_>, kind: MemType, address: u64, size: usize, value: i64| {
             let access = MemoryAccess::from_mem_type(kind);
             with_engine(uc, (), |engine| {
                 callback(engine, access, address, size, value)
@@ -129,11 +128,7 @@ impl<'a> Engine<'a> {
     where
         F: FnMut(&mut Engine<'_>, MemoryAccess, u64, usize) -> Result<bool, EmuError> + 'a,
     {
-        let hook = move |uc: &mut Unicorn<'_, EngineState>,
-                         kind: MemType,
-                         address: u64,
-                         size: usize,
-                         _value: i64| {
+        let hook = move |uc: &mut Uc<'_>, kind: MemType, address: u64, size: usize, _: i64| {
             let access = MemoryAccess::from_mem_type(kind);
             with_engine(uc, false, |engine| callback(engine, access, address, size))
         };

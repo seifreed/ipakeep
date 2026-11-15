@@ -152,14 +152,11 @@ impl<'c, 'e> ShimCall<'c, 'e> {
 
     /// Clears and frees a heap allocation.
     pub(super) fn release(&mut self, address: u64) -> Result<(), ShimError> {
-        let allocation =
-            self.state()?
-                .heap
-                .allocation(address)
-                .ok_or(ShimError::UnknownPointer {
-                    operation: "free",
-                    address,
-                })?;
+        let allocation = self.state()?.heap.allocation(address);
+        let allocation = allocation.ok_or(ShimError::UnknownPointer {
+            operation: "free",
+            address,
+        })?;
         self.fill(address, 0, allocation.reserved)?;
         self.state()?.heap.release(address)?;
 
