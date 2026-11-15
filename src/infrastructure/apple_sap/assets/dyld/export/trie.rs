@@ -186,4 +186,68 @@ mod tests {
         assert_eq!(exports[1].re_export, b"_c");
         assert!(exports[1].is_listed_in_symtab());
     }
+
+    #[test]
+    fn stub_and_resolver_export_uses_resolver_offset_as_address() {
+        // root terminal: size 3, flags stub-and-resolver, stub 4, resolver 8.
+        let trie = [0x03, 0x10, 0x04, 0x08, 0x00];
+        let exports = parse_exports(&trie, 0x1000).expect("parse trie");
+        assert_eq!(
+            exports,
+            [TrieExport {
+                name: Vec::new(),
+                re_export: Vec::new(),
+                flags: FLAG_STUB_AND_RESOLVER,
+                address: 0x1008,
+            }]
+        );
+        assert!(!exports[0].is_listed_in_symtab());
+    }
+
+    #[test]
+    fn thread_local_export_is_listed_and_relocated() {
+        let trie = [0x02, 0x01, 0x10, 0x00];
+        let exports = parse_exports(&trie, 0x1000).expect("parse trie");
+        assert_eq!(exports[0].address, 0x1010);
+        assert!(exports[0].is_listed_in_symtab());
+    }
+
+    #[test]
+    fn truncated_trie_is_rejected() {
+        for trie in [&[][..], &[0x80], &[0x00], &[0x01, 0x80]] {
+            assert!(matches!(
+                parse_exports(trie, 0),
+                Err(ExportError::Format("export trie is truncated"))
+            ));
+        }
+    }
+
+    #[test]
+    fn cyclic_trie_hits_the_depth_limit() {
+        const DEEP_STACK: usize = 64 << 20;
+        // root: no terminal, one child "a" pointing back at the root.
+        let result = std::thread::Builder::new()
+            .stack_size(DEEP_STACK)
+            .spawn(|| parse_exports(&[0x00, 0x01, b'a', 0x00, 0x00], 0))
+            .expect("spawn parser")
+            .join()
+            .expect("parser thread");
+        assert!(matches!(
+            result,
+            Err(ExportError::Format("export trie is too deep"))
+        ));
+    }
+
+    #[test]
+    fn oversized_uleb_drops_high_bits_and_strings_stop_at_end() {
+        let mut bytes = vec![0xff; 10];
+        bytes.extend_from_slice(&[0x81, 0x01, b'a', b'b']);
+        let mut cursor = Cursor {
+            data: &bytes,
+            position: 0,
+        };
+        assert_eq!(cursor.uleb().expect("uleb"), u64::MAX);
+        assert_eq!(cursor.string(), b"ab");
+        assert_eq!(cursor.string(), b"");
+    }
 }

@@ -1442,8 +1442,503 @@ fn u64_array<const N: usize>(data: &[u8], offset: usize) -> Option<[u64; N]> {
 }
 
 #[cfg(test)]
+pub(crate) mod fixtures {
+    //! Byte builders for synthetic in-cache Mach-O images.
+
+    use super::{
+        CPU_TYPE_ARM64, DYLIB_USE_MARKER, DYSYMTAB_FIELDS, INDIRECT_SYMBOL_LOCAL, LC_DYSYMTAB,
+        LC_FUNCTION_STARTS, LC_ID_DYLIB, LC_SEGMENT_64, LC_SYMTAB, MH_DYLIB_IN_CACHE, MH_MAGIC_64,
+        NAME_FIELD_SIZE, put_u32,
+    };
+
+    /// `LC_ID_DYLIB`.
+    pub(crate) const ID_DYLIB: u32 = LC_ID_DYLIB;
+    /// `LC_FUNCTION_STARTS`.
+    pub(crate) const FUNCTION_STARTS_COMMAND: u32 = LC_FUNCTION_STARTS;
+    /// `INDIRECT_SYMBOL_LOCAL`.
+    pub(crate) const LOCAL_INDIRECT: u32 = INDIRECT_SYMBOL_LOCAL;
+    /// `MH_DYLIB` file type.
+    pub(crate) const MH_DYLIB: u32 = 6;
+    /// arm64 CPU type.
+    pub(crate) const ARM64: u32 = CPU_TYPE_ARM64;
+    /// The in-cache header flag.
+    pub(crate) const IN_CACHE: u32 = MH_DYLIB_IN_CACHE;
+    /// `N_SECT` local symbol type.
+    pub(crate) const LOCAL: u8 = 0x0e;
+    /// `N_SECT | N_EXT` defined external symbol type.
+    pub(crate) const DEFINED: u8 = 0x0f;
+    /// `N_UNDF | N_EXT` undefined symbol type.
+    pub(crate) const UNDEFINED: u8 = 0x01;
+    /// `N_INDR | N_EXT` indirect symbol type.
+    pub(crate) const INDIRECT: u8 = 0x0b;
+    const DYLIB_VERSION: u32 = 0x1_0000;
+    const PROTECTION: u32 = 3;
+    const SEGMENT_HEADER: usize = 72;
+    const SECTION_BYTES: usize = 80;
+    const PLAIN_NAME_OFFSET: u32 = 24;
+    const USE_NAME_OFFSET: u32 = 28;
+    const DYLIB_TIMESTAMP: u32 = 2;
+    const COMMAND_ALIGN: usize = 8;
+    const SYMTAB_SIZE: u32 = 24;
+    const LINKEDIT_COMMAND_SIZE: u32 = 16;
+    const RELOCATION_FILLER: u32 = 7;
+
+    pub(crate) struct SectionSpec<'a> {
+        pub name: &'a [u8],
+        pub segment: &'a [u8],
+        pub address: u64,
+        pub size: u64,
+        pub offset: u32,
+    }
+
+    pub(crate) struct SegmentSpec<'a> {
+        pub name: &'a [u8],
+        pub address: u64,
+        pub memory_size: u64,
+        pub file_offset: u64,
+        pub file_size: u64,
+        pub sections: &'a [SectionSpec<'a>],
+    }
+
+    pub(crate) fn words(values: &[u32]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for value in values {
+            put_u32(&mut out, *value);
+        }
+        out
+    }
+
+    pub(crate) fn u32_of(value: usize) -> u32 {
+        u32::try_from(value).expect("fixture size fits in u32")
+    }
+
+    fn name_field(name: &[u8]) -> [u8; NAME_FIELD_SIZE] {
+        let mut field = [0; NAME_FIELD_SIZE];
+        field[..name.len()].copy_from_slice(name);
+        field
+    }
+
+    pub(crate) fn segment_command(spec: &SegmentSpec<'_>) -> Vec<u8> {
+        let count = spec.sections.len();
+        let mut out = words(&[
+            LC_SEGMENT_64,
+            u32_of(SEGMENT_HEADER + count * SECTION_BYTES),
+        ]);
+        out.extend_from_slice(&name_field(spec.name));
+        for value in [
+            spec.address,
+            spec.memory_size,
+            spec.file_offset,
+            spec.file_size,
+        ] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend(words(&[PROTECTION, PROTECTION, u32_of(count), 0]));
+        for section in spec.sections {
+            out.extend_from_slice(&name_field(section.name));
+            out.extend_from_slice(&name_field(section.segment));
+            out.extend_from_slice(&section.address.to_le_bytes());
+            out.extend_from_slice(&section.size.to_le_bytes());
+            out.extend(words(&[section.offset, 0, 0, 0, 0, 0, 0, 0]));
+        }
+        out
+    }
+
+    pub(crate) fn symtab_command(
+        symbol_offset: u32,
+        symbol_count: u32,
+        string_offset: u32,
+        string_size: u32,
+    ) -> Vec<u8> {
+        words(&[
+            LC_SYMTAB,
+            SYMTAB_SIZE,
+            symbol_offset,
+            symbol_count,
+            string_offset,
+            string_size,
+        ])
+    }
+
+    pub(crate) fn dysymtab_command(fields: [u32; DYSYMTAB_FIELDS]) -> Vec<u8> {
+        let mut out = words(&[LC_DYSYMTAB, u32_of(8 + DYSYMTAB_FIELDS * 4)]);
+        out.extend(words(&fields));
+        out
+    }
+
+    /// `LC_DYSYMTAB` fields for `[locals, defined, undefined]` symbol counts.
+    pub(crate) fn dysymtab_fields(
+        counts: [u32; 3],
+        indirect_offset: u32,
+        indirect_count: u32,
+    ) -> [u32; DYSYMTAB_FIELDS] {
+        let [locals, defined, undefined] = counts;
+        let mut fields = [0; DYSYMTAB_FIELDS];
+        fields[..6].copy_from_slice(&[0, locals, locals, defined, locals + defined, undefined]);
+        fields[12] = indirect_offset;
+        fields[13] = indirect_count;
+        fields[14..].fill(RELOCATION_FILLER);
+        fields
+    }
+
+    pub(crate) fn linkedit_command(command: u32, offset: u32, size: u32) -> Vec<u8> {
+        words(&[command, LINKEDIT_COMMAND_SIZE, offset, size])
+    }
+
+    pub(crate) fn raw_command(command: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = words(&[command, u32_of(8 + payload.len())]);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    pub(crate) fn dylib_command(command: u32, name: &[u8], use_flags: Option<u32>) -> Vec<u8> {
+        let mut out = match use_flags {
+            None => words(&[
+                command,
+                0,
+                PLAIN_NAME_OFFSET,
+                DYLIB_TIMESTAMP,
+                DYLIB_VERSION,
+                DYLIB_VERSION,
+            ]),
+            Some(flags) => words(&[
+                command,
+                0,
+                USE_NAME_OFFSET,
+                DYLIB_USE_MARKER,
+                DYLIB_VERSION,
+                DYLIB_VERSION,
+                flags,
+            ]),
+        };
+        out.extend_from_slice(name);
+        out.push(0);
+        out.resize(out.len().next_multiple_of(COMMAND_ALIGN), 0);
+        let length = u32_of(out.len());
+        out[4..8].copy_from_slice(&length.to_le_bytes());
+        out
+    }
+
+    /// A Mach-O header followed by `commands`.
+    pub(crate) fn macho(cpu: u32, flags: u32, commands: &[Vec<u8>]) -> Vec<u8> {
+        let size: usize = commands.iter().map(Vec::len).sum();
+        let mut out = words(&[
+            MH_MAGIC_64,
+            cpu,
+            0,
+            MH_DYLIB,
+            u32_of(commands.len()),
+            u32_of(size),
+            flags,
+            0,
+        ]);
+        for command in commands {
+            out.extend(command);
+        }
+        out
+    }
+
+    pub(crate) fn nlist(string_index: u32, kind: u8, section: u8, value: u64) -> Vec<u8> {
+        let mut out = words(&[string_index]);
+        out.extend_from_slice(&[kind, section, 0, 0]);
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    /// A string table starting with NUL, plus each name's index.
+    pub(crate) fn string_table(names: &[&[u8]]) -> (Vec<u8>, Vec<u32>) {
+        let mut table = vec![0];
+        let indices = names
+            .iter()
+            .map(|name| {
+                let index = u32_of(table.len());
+                table.extend_from_slice(name);
+                table.push(0);
+                index
+            })
+            .collect();
+        (table, indices)
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::fixtures::{
+        ARM64, DEFINED, IN_CACHE, LOCAL, MH_DYLIB, SectionSpec, SegmentSpec, UNDEFINED,
+        dylib_command, dysymtab_command, dysymtab_fields, linkedit_command, macho, nlist,
+        raw_command, segment_command, string_table, symtab_command, u32_of, words,
+    };
     use super::*;
+
+    const BASE: u64 = 0x1_0000;
+    const MEMORY_SIZE: usize = 0x3000;
+    const SPAN: u64 = 0x1000;
+    const SPAN_BYTES: usize = 0x1000;
+    const TEXT_SECTION_OFFSET: u32 = 0x400;
+    const DATA_ADDRESS: u64 = 0x1_1000;
+    const DATA_FILE: u64 = 0x1000;
+    const ZERO_FILL_ADDRESS: u64 = 0x1_4000;
+    const LINKEDIT_ADDRESS: u64 = 0x1_3000;
+    const LINKEDIT_FILE: u32 = 0x2000;
+    const SYMBOLS: u32 = 0x2000;
+    const STRINGS: u32 = 0x2100;
+    const STRING_SIZE: u32 = 0x40;
+    const INDIRECT: u32 = 0x2200;
+    const TRIE: u32 = 0x2300;
+    const FUNCTION_STARTS: u32 = 0x2400;
+    const SIGN_DRS: u32 = 0x2500;
+    const UNMAPPED_OFFSET: u32 = 0x9000;
+    const CRYPT_OFFSET: u32 = 0x1010;
+    const LC_UUID: u32 = 0x1b;
+    const LOAD_FLAGS: u32 = 1;
+    const SYMBOL_COUNT: u32 = 5;
+    const FUNCTION_START_BYTES: [u8; 4] = [1, 2, 3, 4];
+    const INDIRECT_TABLE: [u32; 3] = [2, INDIRECT_SYMBOL_LOCAL, 1];
+    const EXPORTED_DATA: usize = 0x4000;
+    const EXPORTED_LINKEDIT: usize = 0x8000;
+    const TRIE_SIZE: u32 = 29;
+    /// root -> "_r" (regular), "_t" (thread-local), "_x" (re-export of "_y").
+    const EXPORT_TRIE: [u8; TRIE_SIZE as usize] = [
+        0x00, 0x03, b'_', b'r', 0x00, 14, b'_', b't', 0x00, 18, b'_', b'x', 0x00, 22, 0x02, 0x00,
+        0x10, 0x00, 0x02, 0x01, 0x20, 0x00, 0x05, 0x08, 0x01, b'_', b'y', 0x00, 0x00,
+    ];
+
+    /// File bytes at `offset - file_base`; virtual addresses map to
+    /// `address - BASE`.
+    struct FlatMemory {
+        data: Vec<u8>,
+        file_base: u64,
+    }
+
+    impl FlatMemory {
+        fn bytes(&self, offset: u64, length: usize) -> Result<&[u8], ExportError> {
+            offset
+                .checked_sub(self.file_base)
+                .and_then(|start| usize::try_from(start).ok())
+                .and_then(|start| self.data.get(start..start.checked_add(length)?))
+                .ok_or_else(|| ExportError::Read {
+                    context: "flat memory",
+                    source: std::io::Error::other("out of range"),
+                })
+        }
+    }
+
+    impl ImageMemory for FlatMemory {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<(), ExportError> {
+            buf.copy_from_slice(self.bytes(offset, buf.len())?);
+            Ok(())
+        }
+
+        fn read_at_addr(&self, buf: &mut [u8], address: u64) -> Result<(), ExportError> {
+            let offset = address
+                .checked_sub(BASE)
+                .ok_or(ExportError::Format("unmapped address"))?;
+            self.read_at(buf, offset + self.file_base)
+        }
+    }
+
+    fn place(data: &mut [u8], offset: u32, bytes: &[u8]) {
+        let start = offset as usize;
+        data[start..start + bytes.len()].copy_from_slice(bytes);
+    }
+
+    fn sample_memory() -> FlatMemory {
+        let mut data: Vec<u8> = (0..MEMORY_SIZE)
+            .map(|index| index.to_le_bytes()[0] | 1)
+            .collect();
+        data[LINKEDIT_FILE as usize..].fill(0);
+        let (strings, names) =
+            string_table(&[b"_local_sym", b"_def.dotted", b"_undef", REDACTED_SYMBOL]);
+        let symbols = [
+            nlist(names[0], LOCAL, 1, BASE + 0x400),
+            nlist(names[1], DEFINED, 1, BASE + 0x404),
+            nlist(names[2], UNDEFINED, 0, 0),
+            nlist(names[3], LOCAL, 1, BASE + 0x408),
+            nlist(0x1000, LOCAL, 1, BASE + 0x40c),
+        ]
+        .concat();
+        place(&mut data, SYMBOLS, &symbols);
+        place(&mut data, STRINGS, &strings);
+        place(&mut data, INDIRECT, &words(&INDIRECT_TABLE));
+        place(&mut data, TRIE, &EXPORT_TRIE);
+        place(&mut data, FUNCTION_STARTS, &FUNCTION_START_BYTES);
+        FlatMemory { data, file_base: 0 }
+    }
+
+    fn text_segment(section_address: u64, section_offset: u32) -> Vec<u8> {
+        segment_command(&SegmentSpec {
+            name: TEXT_SEGMENT,
+            address: BASE,
+            memory_size: SPAN,
+            file_offset: 0,
+            file_size: SPAN,
+            sections: &[SectionSpec {
+                name: b"__text",
+                segment: TEXT_SEGMENT,
+                address: section_address,
+                size: 0x10,
+                offset: section_offset,
+            }],
+        })
+    }
+
+    fn data_segment() -> Vec<u8> {
+        segment_command(&SegmentSpec {
+            name: b"__DATA",
+            address: DATA_ADDRESS,
+            memory_size: 2 * SPAN,
+            file_offset: DATA_FILE,
+            file_size: SPAN,
+            sections: &[
+                SectionSpec {
+                    name: b"__data",
+                    segment: b"__DATA",
+                    address: DATA_ADDRESS,
+                    size: 8,
+                    offset: 0x1000,
+                },
+                SectionSpec {
+                    name: b"__bss",
+                    segment: b"__DATA",
+                    address: DATA_ADDRESS + SPAN,
+                    size: 0x100,
+                    offset: 0,
+                },
+            ],
+        })
+    }
+
+    fn plain_segment(name: &[u8], address: u64, file_offset: u64, file_size: u64) -> Vec<u8> {
+        segment_command(&SegmentSpec {
+            name,
+            address,
+            memory_size: SPAN,
+            file_offset,
+            file_size,
+            sections: &[],
+        })
+    }
+
+    fn sample_commands() -> Vec<Vec<u8>> {
+        vec![
+            text_segment(BASE + u64::from(TEXT_SECTION_OFFSET), TEXT_SECTION_OFFSET),
+            data_segment(),
+            plain_segment(
+                LINKEDIT_SEGMENT,
+                LINKEDIT_ADDRESS,
+                LINKEDIT_FILE.into(),
+                SPAN,
+            ),
+            plain_segment(b"__ZERO", ZERO_FILL_ADDRESS, 0, 0),
+            dylib_command(LC_ID_DYLIB, b"/usr/lib/libsample.dylib", None),
+            dylib_command(LC_LOAD_DYLIB, b"/usr/lib/libdep.dylib", Some(LOAD_FLAGS)),
+            dylib_command(
+                LC_LAZY_LOAD_DYLIB,
+                b"/usr/lib/liblazy.dylib",
+                Some(LOAD_FLAGS),
+            ),
+            symtab_command(SYMBOLS, SYMBOL_COUNT, STRINGS, STRING_SIZE),
+            dysymtab_command(dysymtab_fields([2, 1, 1], INDIRECT, 3)),
+            linkedit_command(LC_DYLD_EXPORTS_TRIE, TRIE, TRIE_SIZE),
+            linkedit_command(LC_FUNCTION_STARTS, FUNCTION_STARTS, 4),
+            linkedit_command(LC_DATA_IN_CODE, 0, 0),
+            linkedit_command(LC_DYLIB_CODE_SIGN_DRS, SIGN_DRS, 0),
+            linkedit_command(LC_DYLD_CHAINED_FIXUPS, 0, 0),
+            raw_command(LC_ENCRYPTION_INFO_64, &words(&[CRYPT_OFFSET, 0x10, 0, 0])),
+            raw_command(LC_UUID, &[0xab; 16]),
+        ]
+    }
+
+    fn parse(commands: &[Vec<u8>], flags: u32) -> MachImage {
+        let bytes = macho(ARM64, flags, commands);
+        MachImage::parse(
+            &bytes[..MACH_HEADER_64_SIZE],
+            &bytes[MACH_HEADER_64_SIZE..],
+            &[],
+        )
+        .expect("parse sample image")
+    }
+
+    fn loaded(commands: &[Vec<u8>], memory: &FlatMemory) -> MachImage {
+        let mut image = parse(commands, IN_CACHE);
+        if let Some(symtab) = image.symtab() {
+            image.symbols = read_symbols(&symtab, memory).expect("read symbols");
+        }
+        if let Some(dysymtab) = image.dysymtab() {
+            image.indirect_symbols = read_indirect_symbols(&dysymtab, image.symbols.len(), memory)
+                .expect("read indirect symbols");
+        }
+        image
+    }
+
+    fn extra_local() -> Symbol {
+        Symbol {
+            name: b"_extra".to_vec(),
+            kind: LOCAL,
+            section: 1,
+            description: 0,
+            value: BASE,
+        }
+    }
+
+    fn export_sample(commands: &[Vec<u8>]) -> Result<Vec<u8>, ExportError> {
+        let memory = sample_memory();
+        export_in_cache_image(loaded(commands, &memory), &memory, &[extra_local()])
+    }
+
+    fn reparse(out: &[u8]) -> MachImage {
+        let header = MachHeader::parse(out).expect("exported header");
+        let end = MACH_HEADER_64_SIZE + header.commands_size as usize;
+        MachImage::parse(
+            &out[..MACH_HEADER_64_SIZE],
+            &out[MACH_HEADER_64_SIZE..end],
+            &[],
+        )
+        .expect("reparse exported image")
+    }
+
+    fn exported_linkedit(out: &[u8]) -> FlatMemory {
+        FlatMemory {
+            data: out.to_vec(),
+            file_base: 0,
+        }
+    }
+
+    fn without(commands: Vec<Vec<u8>>, command: u32) -> Vec<Vec<u8>> {
+        commands
+            .into_iter()
+            .filter(|raw| le_u32(raw, 0) != Some(command))
+            .collect()
+    }
+
+    fn without_segment(commands: Vec<Vec<u8>>, name: &[u8]) -> Vec<Vec<u8>> {
+        commands
+            .into_iter()
+            .filter(|raw| le_u32(raw, 0) != Some(LC_SEGMENT_64) || cstring(&raw[8..24]) != name)
+            .collect()
+    }
+
+    fn with(mut commands: Vec<Vec<u8>>, extra: Vec<u8>) -> Vec<Vec<u8>> {
+        commands.push(extra);
+        commands
+    }
+
+    fn export_error(commands: &[Vec<u8>]) -> ExportError {
+        export_sample(commands).expect_err("export must fail")
+    }
+
+    fn header(cpu: u32, sub_cpu: u32, file_type: u32) -> MachHeader {
+        MachHeader {
+            magic: MH_MAGIC_64,
+            cpu,
+            sub_cpu,
+            file_type,
+            command_count: 0,
+            commands_size: 0,
+            flags: 0,
+            reserved: 0,
+        }
+    }
 
     #[test]
     fn go_symbol_name_strips_underscore_only_for_dotted_names() {
@@ -1462,7 +1957,7 @@ mod tests {
     #[test]
     fn dylib_round_trips_with_padding() {
         let mut raw = Vec::new();
-        for word in [LC_LOAD_DYLIB, 40, 24, 2, 0x10000, 0x10000] {
+        for word in [LC_LOAD_DYLIB, 40, 24, 2, 0x1_0000, 0x1_0000] {
             put_u32(&mut raw, word);
         }
         raw.extend_from_slice(b"/usr/lib/libz\0");
@@ -1478,5 +1973,487 @@ mod tests {
         let mut indirect = vec![1, INDIRECT_SYMBOL_LOCAL, 7];
         shift_indirect_symbols(&mut indirect, 2);
         assert_eq!(indirect, vec![3, INDIRECT_SYMBOL_LOCAL, 9]);
+        shift_indirect_symbols(&mut indirect, 0);
+        assert_eq!(indirect, vec![3, INDIRECT_SYMBOL_LOCAL, 9]);
+    }
+
+    #[test]
+    fn header_parse_rejects_short_and_foreign_input() {
+        assert!(matches!(
+            MachHeader::parse(&[0; 8]),
+            Err(ExportError::Format("truncated header"))
+        ));
+        assert!(matches!(
+            MachHeader::parse(&[0; MACH_HEADER_64_SIZE]),
+            Err(ExportError::Format("not a 64-bit Mach-O"))
+        ));
+        let parsed = MachHeader::parse(&macho(ARM64, IN_CACHE, &[])).expect("header");
+        assert_eq!((parsed.cpu, parsed.file_type), (ARM64, MH_DYLIB));
+        assert!(parsed.in_cache());
+    }
+
+    #[test]
+    fn page_size_follows_cpu_and_file_type() {
+        const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+        assert_eq!(
+            header(CPU_TYPE_ARM64, 0, MH_DYLIB).page_size(),
+            PAGE_SIZE_16K
+        );
+        assert_eq!(
+            header(CPU_TYPE_ARM64_32, 0, MH_DYLIB).page_size(),
+            PAGE_SIZE_16K
+        );
+        assert_eq!(
+            header(CPU_TYPE_ARM, CPU_SUBTYPE_ARM_V7K, MH_KEXT_BUNDLE).page_size(),
+            PAGE_SIZE_16K
+        );
+        assert_eq!(
+            header(CPU_TYPE_ARM, CPU_SUBTYPE_ARM_V7K, MH_DYLIB).page_size(),
+            PAGE_SIZE_4K
+        );
+        assert_eq!(
+            header(CPU_TYPE_X86_64, 0, MH_DYLIB).page_size(),
+            PAGE_SIZE_4K
+        );
+    }
+
+    #[test]
+    fn parses_every_load_command_kind() {
+        let image = parse(&sample_commands(), IN_CACHE);
+        let commands: Vec<u32> = image.loads.iter().map(LoadCommand::command).collect();
+        assert_eq!(
+            commands,
+            [
+                LC_SEGMENT_64,
+                LC_SEGMENT_64,
+                LC_SEGMENT_64,
+                LC_SEGMENT_64,
+                LC_ID_DYLIB,
+                LC_LOAD_DYLIB,
+                LC_LAZY_LOAD_DYLIB,
+                LC_SYMTAB,
+                LC_DYSYMTAB,
+                LC_DYLD_EXPORTS_TRIE,
+                LC_FUNCTION_STARTS,
+                LC_DATA_IN_CODE,
+                LC_DYLIB_CODE_SIGN_DRS,
+                LC_DYLD_CHAINED_FIXUPS,
+                LC_ENCRYPTION_INFO_64,
+                LC_UUID,
+            ]
+        );
+        assert_eq!(LoadCommand::Raw(vec![1]).command(), 0);
+        assert_eq!(image.base_address(), BASE);
+        assert_eq!(
+            image
+                .segment(b"__DATA")
+                .map(|segment| segment.sections.len()),
+            Some(2)
+        );
+        let dysymtab = image.dysymtab().expect("dysymtab");
+        assert_eq!(
+            (
+                dysymtab.undefined_index(),
+                dysymtab.undefined_count(),
+                dysymtab.indirect_offset(),
+                dysymtab.indirect_count()
+            ),
+            (3, 1, INDIRECT, 3)
+        );
+    }
+
+    #[test]
+    fn parser_honours_exclusions_and_rejects_bad_command_sizes() {
+        let bytes = macho(ARM64, IN_CACHE, &[raw_command(LC_UUID, &[])]);
+        let header = &bytes[..MACH_HEADER_64_SIZE];
+        let symtab = symtab_command(0, 0, 0, 0);
+        let excluded = MachImage::parse(header, &symtab, &[LC_SYMTAB]).expect("excluded");
+        assert_eq!(excluded.loads, Vec::<LoadCommand>::new());
+        assert!(excluded.symtab().is_none() && excluded.dysymtab().is_none());
+        assert!(matches!(
+            MachImage::parse(header, &[0; 4], &[]),
+            Err(ExportError::Format("command block too small"))
+        ));
+        for size in [4, 16] {
+            assert!(matches!(
+                MachImage::parse(header, &words(&[LC_UUID, size]), &[]),
+                Err(ExportError::Format("invalid command block size"))
+            ));
+        }
+    }
+
+    #[test]
+    fn truncated_segment_commands_are_rejected() {
+        let segment = plain_segment(b"__X", BASE, 0, SPAN);
+        for length in [40, 60] {
+            assert!(matches!(
+                parse_load_command(LC_SEGMENT_64, &segment[..length]),
+                Err(ExportError::Format("truncated LC_SEGMENT_64"))
+            ));
+        }
+        let mut missing_section = segment;
+        missing_section[64..68].copy_from_slice(&1u32.to_le_bytes());
+        assert!(matches!(
+            parse_load_command(LC_SEGMENT_64, &missing_section),
+            Err(ExportError::Format("truncated section"))
+        ));
+    }
+
+    #[test]
+    fn truncated_fixed_commands_are_rejected() {
+        let cases: [(u32, Vec<u8>, &str); 5] = [
+            (LC_SYMTAB, words(&[LC_SYMTAB, 8]), "truncated LC_SYMTAB"),
+            (LC_DYSYMTAB, words(&[LC_DYSYMTAB]), "truncated LC_DYSYMTAB"),
+            (
+                LC_DYSYMTAB,
+                words(&[LC_DYSYMTAB, 80]),
+                "truncated LC_DYSYMTAB",
+            ),
+            (
+                LC_FUNCTION_STARTS,
+                words(&[LC_FUNCTION_STARTS, 8]),
+                "truncated linkedit data command",
+            ),
+            (
+                LC_LOAD_DYLIB,
+                words(&[LC_LOAD_DYLIB, 8]),
+                "truncated dylib command",
+            ),
+        ];
+        for (command, raw, message) in cases {
+            match parse_load_command(command, &raw) {
+                Err(ExportError::Format(actual)) => assert_eq!(actual, message),
+                other => panic!("expected {message}, got {other:?}"),
+            }
+        }
+        assert!(Nlist::parse(&[0; 8]).is_err());
+        let symtab = parse_symtab(&symtab_command(1, 2, 3, 4)).expect("symtab");
+        assert_eq!(
+            (
+                symtab.symbol_offset,
+                symtab.symbol_count,
+                symtab.string_offset,
+                symtab.string_size
+            ),
+            (1, 2, 3, 4)
+        );
+    }
+
+    #[test]
+    fn dylib_commands_validate_their_name() {
+        let header = words(&[LC_LOAD_DYLIB, 24, 24, 2, 1, 1]);
+        assert!(matches!(
+            parse_dylib(&header),
+            Err(ExportError::Format(
+                "invalid name in dynamic library command"
+            ))
+        ));
+        let mut beyond = header;
+        beyond[8..12].copy_from_slice(&64u32.to_le_bytes());
+        assert!(matches!(
+            parse_dylib(&beyond),
+            Err(ExportError::Format(
+                "invalid name in dynamic library command"
+            ))
+        ));
+        let mut short =
+            parse_dylib(&dylib_command(LC_ID_DYLIB, b"/usr/lib/libz.dylib", None)).expect("dylib");
+        short.length = 8;
+        assert!(matches!(
+            write_dylib(&short, &mut Vec::new()),
+            Err(ExportError::Format(
+                "dylib command is smaller than its contents"
+            ))
+        ));
+    }
+
+    #[test]
+    fn dylib_use_commands_keep_flags_only_for_dependencies() {
+        let image = parse(&sample_commands(), IN_CACHE);
+        let flags: Vec<Option<u32>> = image
+            .loads
+            .iter()
+            .filter_map(|load| match load {
+                LoadCommand::Dylib(dylib) => Some(dylib.0.use_flags),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(flags, [None, Some(LOAD_FLAGS), Some(0)]);
+    }
+
+    #[test]
+    fn symbol_readers_resolve_names_and_validate_ranges() {
+        let memory = sample_memory();
+        let image = loaded(&sample_commands(), &memory);
+        let names: Vec<&[u8]> = image.symbols.iter().map(|s| s.name.as_slice()).collect();
+        assert_eq!(
+            names,
+            [
+                b"_local_sym".as_slice(),
+                b"def.dotted",
+                b"_undef",
+                REDACTED_SYMBOL,
+                b""
+            ]
+        );
+        assert!(image.symbols[1].is_external() && !image.symbols[1].is_undefined());
+        assert!(image.symbols[2].is_undefined() && !image.symbols[2].is_indirect());
+        assert_eq!(image.indirect_symbols, INDIRECT_TABLE);
+        let mut dysymtab = image.dysymtab().expect("dysymtab");
+        dysymtab.fields[DYSYM_NUNDEF] = 3;
+        assert!(matches!(
+            read_indirect_symbols(&dysymtab, image.symbols.len(), &memory),
+            Err(ExportError::Format(
+                "undefined symbols exceed the symbol table"
+            ))
+        ));
+    }
+
+    #[test]
+    fn export_rebuilds_header_segments_and_sections() {
+        let memory = sample_memory();
+        let out = export_sample(&sample_commands()).expect("export");
+        let image = reparse(&out);
+        assert!(!image.header.in_cache());
+        assert_eq!(image.header.command_count, 15);
+        assert!(!image.has_command(LC_DYLD_CHAINED_FIXUPS));
+        let layout: Vec<(Vec<u8>, u64, u64)> = image
+            .segments()
+            .map(|s| (s.name().to_vec(), s.file_offset, s.memory_size))
+            .collect();
+        let page = PAGE_SIZE_16K;
+        assert_eq!(layout[0], (TEXT_SEGMENT.to_vec(), 0, page));
+        assert_eq!(layout[1], (b"__DATA".to_vec(), page, page + SPAN));
+        assert_eq!(layout[2], (LINKEDIT_SEGMENT.to_vec(), 2 * page, page));
+        assert_eq!(layout[3], (b"__ZERO".to_vec(), 3 * page, SPAN));
+        assert_eq!(out.len() as u64, 3 * page);
+        let offsets: Vec<u32> = image
+            .segments()
+            .flat_map(|segment| segment.sections.iter().map(|section| section.offset))
+            .collect();
+        assert_eq!(offsets, [TEXT_SECTION_OFFSET, 0x4000, 0]);
+        let text = TEXT_SECTION_OFFSET as usize..SPAN_BYTES;
+        assert_eq!(out[text.clone()], memory.data[text]);
+        assert_eq!(
+            out[EXPORTED_DATA..EXPORTED_DATA + 0x1000],
+            memory.data[0x1000..0x2000]
+        );
+        assert!(
+            out[EXPORTED_DATA + 0x1000..EXPORTED_LINKEDIT]
+                .iter()
+                .all(|b| *b == 0)
+        );
+    }
+
+    #[test]
+    fn export_remaps_linkedit_and_encryption_offsets() {
+        let out = export_sample(&sample_commands()).expect("export");
+        let image = reparse(&out);
+        let link = |command| image.first_link_edit(command).expect("linkedit command");
+        assert_eq!(link(LC_DYLD_EXPORTS_TRIE).offset, u32_of(EXPORTED_LINKEDIT));
+        assert_eq!(
+            out[EXPORTED_LINKEDIT..EXPORTED_LINKEDIT + TRIE_SIZE as usize],
+            EXPORT_TRIE
+        );
+        assert_eq!(
+            link(LC_FUNCTION_STARTS).offset,
+            u32_of(EXPORTED_LINKEDIT) + 32
+        );
+        assert_eq!(
+            out[EXPORTED_LINKEDIT + 32..EXPORTED_LINKEDIT + 36],
+            FUNCTION_START_BYTES
+        );
+        let symtab = image.symtab().expect("symtab");
+        assert_eq!(link(LC_DATA_IN_CODE).offset, symtab.symbol_offset);
+        assert_eq!(
+            link(LC_DYLIB_CODE_SIGN_DRS).offset,
+            u32_of(EXPORTED_LINKEDIT) + SIGN_DRS - LINKEDIT_FILE
+        );
+        let encryption = image
+            .loads
+            .iter()
+            .find_map(|load| match load {
+                LoadCommand::Raw(raw) if le_u32(raw, 0) == Some(LC_ENCRYPTION_INFO_64) => {
+                    le_u32(raw, 8)
+                }
+                _ => None,
+            })
+            .expect("encryption info");
+        assert_eq!(encryption, u32_of(EXPORTED_DATA) + CRYPT_OFFSET - 0x1000);
+    }
+
+    #[test]
+    fn export_rebuilds_symbol_tables() {
+        let out = export_sample(&sample_commands()).expect("export");
+        let image = reparse(&out);
+        let exported = exported_linkedit(&out);
+        let symtab = image.symtab().expect("symtab");
+        let symbols = read_symbols(&symtab, &exported).expect("exported symbols");
+        let names: Vec<&[u8]> = symbols.iter().map(|s| s.name.as_slice()).collect();
+        assert_eq!(
+            names,
+            [
+                b"_extra".as_slice(),
+                b"_local_sym",
+                b"",
+                b"def.dotted",
+                b"_t",
+                b"_x",
+                b"_undef"
+            ]
+        );
+        assert_eq!(
+            (symbols[4].kind, symbols[4].value),
+            (RE_EXPORT_KIND, BASE + 0x20)
+        );
+        let dysymtab = image.dysymtab().expect("dysymtab");
+        assert_eq!(dysymtab.fields[..6], [0, 3, 3, 3, 6, 1]);
+        assert_eq!(dysymtab.fields[DYSYM_EXTREL..], [0, 0, 0, 0]);
+        let indirect =
+            read_indirect_symbols(&dysymtab, symbols.len(), &exported).expect("indirect");
+        assert_eq!(indirect, [3, INDIRECT_SYMBOL_LOCAL, 2]);
+    }
+
+    #[test]
+    fn export_without_trie_or_symtab() {
+        for commands in [
+            with(
+                without(sample_commands(), LC_DYLD_EXPORTS_TRIE),
+                linkedit_command(LC_DYLD_EXPORTS_TRIE, TRIE, 0),
+            ),
+            without(sample_commands(), LC_DYLD_EXPORTS_TRIE),
+        ] {
+            let image = reparse(&export_sample(&commands).expect("export"));
+            assert_eq!(image.symtab().map(|symtab| symtab.symbol_count), Some(5));
+        }
+        let memory = sample_memory();
+        let image = parse(&without(sample_commands(), LC_SYMTAB), IN_CACHE);
+        let out = export_in_cache_image(image, &memory, &[]).expect("export");
+        let fields = reparse(&out).dysymtab().expect("dysymtab").fields;
+        assert_eq!(fields[..6], [0, 0, 0, 2, 2, 0]);
+    }
+
+    #[test]
+    fn export_requires_in_cache_flag() {
+        let memory = sample_memory();
+        let image = parse(&sample_commands(), 0);
+        assert!(matches!(
+            export_in_cache_image(image, &memory, &[]),
+            Err(ExportError::Unsupported("image is not marked as in-cache"))
+        ));
+    }
+
+    #[test]
+    fn export_requires_linkedit_and_dysymtab_without_dyld_info() {
+        let no_linkedit = without(
+            without_segment(sample_commands(), LINKEDIT_SEGMENT),
+            LC_DYLIB_CODE_SIGN_DRS,
+        );
+        assert!(matches!(
+            export_error(&no_linkedit),
+            ExportError::Format("unable to find __LINKEDIT segment")
+        ));
+        assert!(matches!(
+            export_error(&without(sample_commands(), LC_DYSYMTAB)),
+            ExportError::Format("binary has no LC_DYSYMTAB")
+        ));
+        for command in [LC_DYLD_INFO, LC_DYLD_INFO_ONLY] {
+            assert!(matches!(
+                export_error(&with(sample_commands(), raw_command(command, &[0; 40]))),
+                ExportError::Unsupported("LC_DYLD_INFO in an in-cache image")
+            ));
+        }
+    }
+
+    #[test]
+    fn export_validates_text_layout() {
+        let mut before = sample_commands();
+        before[0] = text_segment(BASE - 0x10, TEXT_SECTION_OFFSET);
+        assert!(matches!(
+            export_error(&before),
+            ExportError::Format("__TEXT section precedes its segment")
+        ));
+        let mut beyond = sample_commands();
+        beyond[0] = text_segment(BASE + 2 * SPAN, TEXT_SECTION_OFFSET);
+        assert!(matches!(
+            export_error(&beyond),
+            ExportError::Format("__TEXT data start exceeds segment data length")
+        ));
+        let mut unplaced = sample_commands();
+        unplaced[0] = text_segment(BASE, 0);
+        let image = parse(&unplaced, IN_CACHE);
+        assert_eq!(text_first_section_offset(&image).expect("offset"), 0);
+        let headless = parse(&[data_segment()], IN_CACHE);
+        assert_eq!(text_first_section_offset(&headless).expect("offset"), 0);
+        assert_eq!(headless.base_address(), 0);
+    }
+
+    #[test]
+    fn export_rejects_unremappable_or_unsupported_commands() {
+        assert!(matches!(
+            export_error(&with(
+                sample_commands(),
+                linkedit_command(LC_LINKER_OPTIMIZATION_HINT, UNMAPPED_OFFSET, 0)
+            )),
+            ExportError::Remap(offset) if offset == u64::from(UNMAPPED_OFFSET)
+        ));
+        assert!(matches!(
+            export_error(&with(
+                sample_commands(),
+                raw_command(LC_FILESET_ENTRY, &[0; 16])
+            )),
+            ExportError::Unsupported("fileset entry inside an exported image")
+        ));
+        assert!(matches!(
+            export_error(&with(
+                sample_commands(),
+                raw_command(LC_ENCRYPTION_INFO, &[])
+            )),
+            ExportError::Format("truncated encryption info")
+        ));
+    }
+
+    #[test]
+    fn export_propagates_memory_failures() {
+        let commands = with(
+            without(sample_commands(), LC_FUNCTION_STARTS),
+            linkedit_command(LC_FUNCTION_STARTS, UNMAPPED_OFFSET, 4),
+        );
+        assert!(matches!(export_error(&commands), ExportError::Read { .. }));
+        let mut unmapped = sample_commands();
+        unmapped[1] = plain_segment(b"__DATA", 0x10, DATA_FILE, SPAN);
+        assert!(matches!(
+            export_error(&unmapped),
+            ExportError::Format("unmapped address")
+        ));
+    }
+
+    #[test]
+    fn segment_map_remaps_offsets_inside_segments() {
+        let image = parse(&sample_commands(), IN_CACHE);
+        let mut map = SegmentMap::new(&image, PAGE_SIZE_16K);
+        assert_eq!(map.remap(0x1010).expect("data"), 0x4010);
+        assert!(matches!(map.remap(0x3001), Err(ExportError::Remap(0x3001))));
+        map.resize_linkedit(0x10);
+        let linkedit = map.lookup(LINKEDIT_SEGMENT).expect("linkedit");
+        assert_eq!(linkedit.new_end - linkedit.new_start, 0x10);
+        let mut headless = SegmentMap::new(&parse(&[data_segment()], IN_CACHE), PAGE_SIZE_4K);
+        headless.resize_linkedit(0x10);
+        assert!(headless.lookup(LINKEDIT_SEGMENT).is_none());
+    }
+
+    #[test]
+    fn byte_helpers_reject_out_of_range_reads() {
+        assert_eq!(le_u16(&[1, 2], 0), Some(0x0201));
+        assert_eq!(le_u16(&[1], 0), None);
+        assert_eq!(le_u32(&[1, 2, 3], 0), None);
+        assert_eq!(le_u64(&[0; 8], usize::MAX), None);
+        assert_eq!(low32(0x1_2345_6789), 0x2345_6789);
+        assert_eq!(
+            name_field(b"__TEXT\0\0\0\0\0\0\0\0\0\0", 0).map(|f| f[..6].to_vec()),
+            Some(b"__TEXT".to_vec())
+        );
+        assert_eq!(name_field(b"short", 0), None);
+        assert_eq!(cstring(b"abc"), b"abc");
     }
 }

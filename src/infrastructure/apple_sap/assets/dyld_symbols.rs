@@ -179,10 +179,124 @@ impl SymbolReader<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::dyld::export::fixtures::{
+        dysymtab_command, dysymtab_fields, symtab_command, u32_of,
+    };
+    use super::super::dyld::fixtures::{
+        CacheFixture, IMAGE_PATH, INDIRECT_ENTRIES, LINKEDIT_MEMBER, STRING_SIZE, STRINGS,
+        SUBCACHE_SIZE, SYMBOL_COUNT, SYMBOLS, image_commands, replace_command,
+    };
     use super::*;
+
+    const INDIRECT_TABLE: u32 = 0x1200;
+
+    fn restore(commands: &[Vec<u8>]) -> Result<MachImage, DyldError> {
+        let fixture = CacheFixture::with_commands(commands);
+        let cache = fixture.open().expect("open cache");
+        let image = cache.image(IMAGE_PATH).expect("image");
+        let (header, raw) = cache.image_commands(&image).expect("image commands");
+        let mut macho = MachImage::parse(&header, &raw, &[export::LC_SYMTAB, export::LC_DYSYMTAB])
+            .expect("parse image");
+        restore_image_symbols(&cache, &image, LINKEDIT_MEMBER, &mut macho).map(|()| macho)
+    }
+
+    fn with_command(command: u32, replacement: Option<&[u8]>) -> Vec<Vec<u8>> {
+        replace_command(image_commands(), command, replacement)
+    }
+
+    fn assert_format(result: Result<MachImage, DyldError>, expected: &str) {
+        match result {
+            Err(DyldError::Format(message)) => assert_eq!(message, expected),
+            other => panic!("expected {expected:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn restores_symbol_tables_in_load_command_order() {
+        let macho = restore(&image_commands()).expect("restore symbols");
+        let commands: Vec<u32> = macho.loads.iter().map(LoadCommand::command).collect();
+        let expected: Vec<u32> = image_commands()
+            .iter()
+            .filter_map(|raw| le_u32(raw, 0))
+            .collect();
+        assert_eq!(commands, expected);
+        let names: Vec<&[u8]> = macho.symbols.iter().map(|s| s.name.as_slice()).collect();
+        assert_eq!(
+            names,
+            [
+                b"_local".as_slice(),
+                b"_exported",
+                b"_indirect",
+                b"_undef",
+                b""
+            ]
+        );
+        assert!(macho.symbols[2].is_indirect());
+        assert_eq!(macho.indirect_symbols, INDIRECT_ENTRIES);
+        let symtab = macho.symtab().expect("symtab");
+        assert_eq!(
+            (
+                symtab.symbol_offset,
+                symtab.symbol_count,
+                symtab.string_offset
+            ),
+            (SYMBOLS, SYMBOL_COUNT, STRINGS)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_symbol_tables() {
+        let beyond = u32_of(SUBCACHE_SIZE);
+        for symtab in [
+            symtab_command(SYMBOLS, MAXIMUM_SYMBOLS + 1, STRINGS, STRING_SIZE),
+            symtab_command(beyond, SYMBOL_COUNT, STRINGS, STRING_SIZE),
+            symtab_command(SYMBOLS, SYMBOL_COUNT, beyond, STRING_SIZE),
+        ] {
+            assert_format(
+                restore(&with_command(export::LC_SYMTAB, Some(&symtab))),
+                "invalid image symbol table",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_dynamic_symbol_tables() {
+        const INVALID: &str = "invalid dynamic symbol table";
+        assert_format(restore(&with_command(export::LC_SYMTAB, None)), INVALID);
+        for fields in [
+            dysymtab_fields([2, 2, 2], INDIRECT_TABLE, 2),
+            dysymtab_fields([2, 2, 1], INDIRECT_TABLE, MAXIMUM_INDIRECT_SYMBOLS + 1),
+        ] {
+            let dysymtab = dysymtab_command(fields);
+            assert_format(
+                restore(&with_command(export::LC_DYSYMTAB, Some(&dysymtab))),
+                INVALID,
+            );
+        }
+        let outside = dysymtab_command(dysymtab_fields([2, 2, 1], u32_of(SUBCACHE_SIZE), 2));
+        assert_format(
+            restore(&with_command(export::LC_DYSYMTAB, Some(&outside))),
+            "indirect symbols exceed cache member",
+        );
+    }
+
+    #[test]
+    fn rejects_load_commands_missing_from_the_parsed_image() {
+        let fixture = CacheFixture::new();
+        let cache = fixture.open().expect("open cache");
+        let image = cache.image(IMAGE_PATH).expect("image");
+        let (header, raw) = cache.image_commands(&image).expect("image commands");
+        let mut macho = MachImage::parse(&header, &raw, &[]).expect("parse image");
+        macho.loads.clear();
+        assert!(matches!(
+            restore_image_symbols(&cache, &image, LINKEDIT_MEMBER, &mut macho),
+            Err(DyldError::Format("image load command order changed"))
+        ));
+    }
 
     #[test]
     fn next_command_rejects_short_and_oversized_commands() {
+        assert!(next_command(&[0; 4], 0).is_err());
         let mut commands = vec![0u8; 16];
         commands[4..8].copy_from_slice(&4u32.to_le_bytes());
         assert!(next_command(&commands, 0).is_err());
