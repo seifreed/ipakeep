@@ -8,4 +8,6 @@ pub mod assets;
 pub mod emu;
 pub mod machine;
 pub mod macho;
+pub mod protocol;
+pub mod signer;
 pub mod storeauth;
