@@ -28,26 +28,14 @@ jobs:
         include:
           - language: rust
             build-mode: none
-          - language: go
-            build-mode: manual
 
     steps:
       - uses: actions/checkout@v7
-
-      - if: matrix.language == 'go'
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: tools/modern-anisette/go.mod
 
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-
-      - if: matrix.language == 'go'
-        name: Build Go Anisette helper
-        working-directory: tools/modern-anisette
-        run: go build ./...
 
       - uses: github/codeql-action/analyze@v4
         with:

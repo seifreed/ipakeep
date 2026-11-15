@@ -18,7 +18,7 @@ pub(super) async fn init(
     client: &reqwest::Client,
     email: &str,
 ) -> Result<SrpInitResponse, AppStoreError> {
-    let anisette = resolve_anisette(client).await?;
+    let anisette = resolve_anisette().await?;
     init_with_anisette(client, GRANDSLAM_URL, email, anisette).await
 }
 
@@ -56,7 +56,7 @@ async fn init_with_anisette(
 fn srp_init_error(ec: i64) -> AppStoreError {
     if ec == -80045 {
         return AppStoreError::AuthenticationFailed(format!(
-            "SRP init failed with error code {ec}: Apple rejected the Anisette identity before validating credentials; check IPAKEEP_ANISETTE_URL"
+            "SRP init failed with error code {ec}: Apple rejected the Anisette identity before validating credentials; delete anisette-v4.json in the ipakeep config directory to re-provision"
         ));
     }
     AppStoreError::AuthenticationFailed(format!("SRP init failed with error code {ec}"))
@@ -249,7 +249,7 @@ mod tests {
     fn anisette_rejection_does_not_look_like_a_password_error() {
         let message = srp_init_error(-80045).to_string();
         assert!(message.contains("before validating credentials"));
-        assert!(message.contains("IPAKEEP_ANISETTE_URL"));
+        assert!(message.contains("anisette-v4.json"));
     }
 
     #[test]

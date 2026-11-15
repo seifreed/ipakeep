@@ -25,6 +25,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
+
       - name: Format
         run: cargo fmt --all -- --check
 
@@ -33,9 +36,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
-
-      - name: Tests
-        run: cargo test --all --locked
 
       - name: Install quality tools
         run: |
@@ -69,6 +69,41 @@ jobs:
           path: target/reports/cargo-license.json
           if-no-files-found: error
 
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+
+      - if: runner.os == 'Linux'
+        name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
+
+      - if: runner.os == 'macOS'
+        name: Install native build dependencies
+        run: brew install cmake ninja
+
+      # MSVC comes with the runner image; unicorn-engine-sys builds with
+      # CMake + Ninja and bindgen needs libclang from LLVM.
+      - if: runner.os == 'Windows'
+        name: Install native build dependencies
+        shell: pwsh
+        run: |
+          choco install -y --no-progress cmake ninja llvm
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Tests
+        run: cargo test --all --locked
+
   unused-dependencies:
     name: cargo-udeps
     runs-on: ubuntu-latest
@@ -79,29 +114,14 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
+
       - name: Install cargo-udeps
         run: cargo install --locked cargo-udeps --version 0.1.61
 
       - name: Find unused dependencies
         run: cargo +nightly udeps --workspace --all-targets --locked
-
-  go-helper:
-    name: Go helper
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: tools/modern-anisette/go.mod
-
-      - name: Test helper
-        working-directory: tools/modern-anisette
-        run: go test ./...
-
-      - name: Vet helper
-        working-directory: tools/modern-anisette
-        run: go vet ./...
 
   sbom-quality:
     name: SBOM quality

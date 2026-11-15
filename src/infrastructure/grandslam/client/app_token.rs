@@ -176,7 +176,7 @@ pub(super) async fn request_app_token(
     let app = grandslam_app_identifier(app);
     let state = AppTokenState::from_account(account)?;
     let checksum = app_token_checksum(&state.session_key, &state.identity_id, &app)?;
-    let anisette = resolve_anisette(client).await?;
+    let anisette = resolve_anisette().await?;
 
     let body = serde_json::json!({
         "Header": {

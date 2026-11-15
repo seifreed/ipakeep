@@ -65,37 +65,6 @@ pub(super) fn parse_download_item(
     }))
 }
 
-pub(super) fn external_version_ids(value: &serde_json::Value) -> Vec<String> {
-    match value {
-        serde_json::Value::String(ids) => ids
-            .split(',')
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(str::to_string)
-            .collect(),
-        serde_json::Value::Array(ids) => ids
-            .iter()
-            .filter_map(external_version_id)
-            .collect::<Vec<_>>(),
-        other => external_version_id(other).into_iter().collect(),
-    }
-}
-
-fn external_version_id(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::String(id) => {
-            let id = id.trim();
-            if id.is_empty() {
-                None
-            } else {
-                Some(id.to_string())
-            }
-        }
-        serde_json::Value::Number(id) => Some(id.to_string()),
-        _ => None,
-    }
-}
-
 fn parse_download_sinfs(value: Option<&serde_json::Value>) -> Result<Vec<Sinf>, AppStoreError> {
     let Some(arr) = value.and_then(serde_json::Value::as_array) else {
         return Ok(Vec::new());

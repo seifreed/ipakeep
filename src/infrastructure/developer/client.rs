@@ -45,10 +45,7 @@ impl DeveloperClient {
         #[cfg(not(test))]
         let test_token = None;
         let gs_token = app_token_for_account(&grandslam, account, test_token).await?;
-        Self::finish_authentication(account, http, gs_token, |client| async move {
-            resolve_anisette(&client).await
-        })
-        .await
+        Self::finish_authentication(account, http, gs_token, |_client| resolve_anisette()).await
     }
 
     async fn finish_authentication<F, Fut, E>(
@@ -377,24 +374,19 @@ mod tests {
 
     #[tokio::test]
     async fn for_account_uses_local_anisette_service_after_app_token() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "X-Apple-I-MD": "remote-md",
-                "X-Apple-I-MD-M": "remote-md-m"
-            })))
-            .mount(&server)
-            .await;
+        let anisette = AnisetteData {
+            headers: HashMap::from([("X-Apple-I-MD".into(), "native-md".into())]),
+            cpd: json!({}),
+        };
         TEST_APP_TOKEN.with(|token| token.replace(Some("app-token".into())));
-        crate::infrastructure::grandslam::set_test_remote_url(Some(server.uri()));
+        crate::infrastructure::grandslam::set_test_anisette(Some(anisette));
 
         let result = DeveloperClient::for_account(&account()).await;
 
-        crate::infrastructure::grandslam::set_test_remote_url(None);
+        crate::infrastructure::grandslam::set_test_anisette(None);
         let client = result.expect("developer client");
         assert_eq!(client.gs_token, "app-token");
-        assert_eq!(client.anisette.headers["X-Apple-I-MD"], "remote-md");
+        assert_eq!(client.anisette.headers["X-Apple-I-MD"], "native-md");
     }
 
     #[tokio::test]

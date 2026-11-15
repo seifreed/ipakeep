@@ -1,5 +1,3 @@
-#![allow(unexpected_cfgs)]
-
 //! ipakeep — Download IPA files from the Apple App Store.
 //!
 //! This library provides the core functionality for authenticating with
@@ -33,10 +31,6 @@
 //! # Ok(())
 //! # }
 //! ```
-
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-#[macro_use]
-extern crate objc;
 
 pub mod domain;
 pub mod infrastructure;

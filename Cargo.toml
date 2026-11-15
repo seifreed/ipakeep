@@ -24,6 +24,8 @@ async-trait = "0.1"
 
 # HTTP
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "cookies", "json", "form"] }
+# Persistent Store session cookie jar (`store-cookies.json`).
+cookie_store = { version = "0.22", default-features = false, features = ["serde_json"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -76,7 +78,6 @@ unicorn-engine = { version = "2.1", default-features = false, features = ["arch_
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
-objc = "0.2"
 
 [dev-dependencies]
 mockall = "0.15.0"
@@ -85,14 +86,6 @@ wiremock = "0.6"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 assert_cmd = "2"
 predicates = "3"
-
-[build-dependencies]
-cc = "1"
-
-# This fallback is cfg-disabled when modern ADI is built, so udeps cannot see
-# the objc use even though the fallback remains available for alternate builds.
-[package.metadata.cargo-udeps.ignore]
-normal = ["objc"]
 
 [lints.rust]
 unsafe_code = "deny"

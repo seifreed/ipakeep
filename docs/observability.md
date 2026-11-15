@@ -12,9 +12,9 @@ install a global subscriber.
 
 The runtime mixes asynchronous App Store/GrandSlam HTTP with synchronous IPA
 and Mach-O file processing, native keychain and Apple framework calls, and
-external tools such as Docker, `codesign`, `xcrun`, Frida, and
-`ideviceinstaller`. macOS keychain/native ADI calls use `spawn_blocking`; the
-cross-platform Anisette provider may launch a local Docker container. Account
+external tools such as `codesign`, `xcrun`, Frida, and `ideviceinstaller`.
+macOS keychain calls use `spawn_blocking`; the emulated Apple ADI/SAP machine
+runs on its own worker thread in-process on every platform. Account
 credentials are stored in macOS Keychain or a permission-restricted file. There
 is no database, message queue, scheduler, or long-lived service process.
 

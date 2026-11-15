@@ -27,7 +27,7 @@ pub(super) async fn request_trusted_device_notification(
     dsid: &str,
     idms_token: &str,
 ) -> Result<(), AppStoreError> {
-    let headers = identity_headers(client, dsid, idms_token).await?;
+    let headers = identity_headers(dsid, idms_token).await?;
     request_trusted_device_notification_with_headers(client, TRUSTED_DEVICE_URL, headers).await
 }
 
@@ -51,7 +51,7 @@ pub(super) async fn list_trusted_phone_numbers(
     dsid: &str,
     idms_token: &str,
 ) -> Result<Vec<TrustedPhoneNumber>, AppStoreError> {
-    let headers = identity_headers(client, dsid, idms_token).await?;
+    let headers = identity_headers(dsid, idms_token).await?;
     list_trusted_phone_numbers_with_headers(client, AUTH_OPTIONS_URL, headers).await
 }
 
@@ -87,7 +87,7 @@ pub(super) async fn validate_trusted_device_code(
     idms_token: &str,
     code: &str,
 ) -> Result<(), AppStoreError> {
-    let headers = identity_headers(client, dsid, idms_token).await?;
+    let headers = identity_headers(dsid, idms_token).await?;
     validate_trusted_device_code_with_headers(client, VALIDATE_URL, headers, code).await
 }
 
@@ -118,7 +118,7 @@ pub(super) async fn request_sms(
     idms_token: &str,
     phone_id: i64,
 ) -> Result<(), AppStoreError> {
-    let headers = identity_headers(client, dsid, idms_token).await?;
+    let headers = identity_headers(dsid, idms_token).await?;
     request_sms_with_headers(client, PHONE_URL, headers, phone_id).await
 }
 
@@ -153,7 +153,7 @@ pub(super) async fn validate_sms_code(
     phone_id: i64,
     code: &str,
 ) -> Result<(), AppStoreError> {
-    let headers = identity_headers(client, dsid, idms_token).await?;
+    let headers = identity_headers(dsid, idms_token).await?;
     validate_sms_code_with_headers(client, PHONE_SECURITY_CODE_URL, headers, phone_id, code).await
 }
 
@@ -190,11 +190,10 @@ async fn validate_sms_code_with_headers(
 }
 
 async fn identity_headers(
-    client: &reqwest::Client,
     dsid: &str,
     idms_token: &str,
 ) -> Result<HashMap<String, String>, AppStoreError> {
-    let mut headers = resolve_anisette(client).await?.headers;
+    let mut headers = resolve_anisette().await?.headers;
     add_auth_headers(&mut headers, dsid, idms_token);
     Ok(headers)
 }

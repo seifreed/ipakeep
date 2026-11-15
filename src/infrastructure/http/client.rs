@@ -3,13 +3,11 @@
 mod response;
 
 use super::telemetry::{read_response_bytes, read_response_text, send_with_observability};
-use reqwest::cookie::Jar;
-use reqwest::{Client, ClientBuilder, Url};
+use reqwest::{Client, ClientBuilder};
 pub use response::HttpResponse;
 use response::{decode_json_or_plist, ensure_success_status, http_status_error};
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Apple `akd` User-Agent string used for `GrandSlam` authentication.
 const USER_AGENT: &str = "akd/1.0 CFNetwork/1560.4.3 Darwin/24.2.0";
@@ -54,7 +52,6 @@ pub(crate) fn build_plist_request(
 #[derive(Clone)]
 pub struct AppleHttpClient {
     client: Client,
-    cookie_jar: Arc<Jar>,
 }
 
 impl AppleHttpClient {
@@ -67,33 +64,14 @@ impl AppleHttpClient {
         let apple_root = reqwest::Certificate::from_pem(APPLE_ROOT_CA)
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
-        let cookie_jar = Arc::new(Jar::default());
         let client = ClientBuilder::new()
             .user_agent(USER_AGENT)
-            .cookie_provider(cookie_jar.clone())
+            .cookie_store(true)
             .add_root_certificate(apple_root)
             .build()
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
-        Ok(Self { client, cookie_jar })
-    }
-
-    /// Seed the in-memory cookie jar with raw `Set-Cookie` values.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AppStoreError::NetworkError` if the cookie origin URL is invalid.
-    pub fn seed_cookies(
-        &self,
-        cookies: &[String],
-        origin: &str,
-    ) -> Result<(), crate::domain::error::AppStoreError> {
-        let url = Url::parse(origin)
-            .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
-        for cookie in cookies {
-            self.cookie_jar.add_cookie_str(cookie, &url);
-        }
-        Ok(())
+        Ok(Self { client })
     }
 
     /// Send a GET request and deserialize the JSON response.
@@ -232,59 +210,23 @@ impl AppleHttpClient {
         plist_xml: &[u8],
         headers: Option<&HashMap<String, String>>,
     ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
-        self.post_plist_bytes_with_server_errors(url, plist_xml, headers, false)
-            .await
-    }
-
-    /// Send an authentication plist while preserving server errors for retry handling.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AppStoreError::NetworkError` if the request fails or the response is malformed.
-    pub async fn post_auth_plist_bytes(
-        &self,
-        url: &str,
-        plist_xml: &[u8],
-        headers: Option<&HashMap<String, String>>,
-    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
-        self.post_plist_bytes_with_server_errors(url, plist_xml, headers, true)
-            .await
-    }
-
-    async fn post_plist_bytes_with_server_errors(
-        &self,
-        url: &str,
-        plist_xml: &[u8],
-        headers: Option<&HashMap<String, String>>,
-        preserve_server_errors: bool,
-    ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
         let response = send_with_observability(
             &self.client,
             build_plist_request(&self.client, url, plist_xml, headers),
         )
         .await
         .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
-        Self::parse_plist_response(response, preserve_server_errors).await
+        Self::parse_plist_response(response).await
     }
 
     async fn parse_plist_response(
         response: reqwest::Response,
-        preserve_server_errors: bool,
     ) -> Result<HttpResponse<serde_json::Value>, crate::domain::error::AppStoreError> {
         let status = response.status();
         let resp_headers = response.headers().clone();
         let body_bytes = read_response_bytes(response)
             .await
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
-
-        // Apple's login edge sometimes rejects an under-attested request before it
-        // reaches account processing: a 5xx, an un-followable 3xx (a 301/302 with
-        // no usable `Location`, which reqwest leaves for us), or a generic 404
-        // HTML page. These carry no account data; surface them with a null body so
-        // the caller can retry instead of failing on the undecodable HTML.
-        if should_preserve_server_error(preserve_server_errors, status) {
-            return Ok(null_plist_response(status, resp_headers));
-        }
 
         ensure_success_status("POST plist", status, &body_bytes)?;
 
@@ -341,13 +283,6 @@ impl AppleHttpClient {
     }
 }
 
-fn should_preserve_server_error(preserve: bool, status: reqwest::StatusCode) -> bool {
-    preserve
-        && (status.is_server_error()
-            || status.is_redirection()
-            || status == reqwest::StatusCode::NOT_FOUND)
-}
-
 fn null_plist_response(
     status: reqwest::StatusCode,
     headers: reqwest::header::HeaderMap,
@@ -398,7 +333,7 @@ fn decode_plist_body(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_plist_request, should_preserve_server_error};
+    use super::build_plist_request;
     use std::collections::HashMap;
 
     #[test]
@@ -429,28 +364,5 @@ mod tests {
             "application/xml"
         );
         assert_eq!(custom.headers()["x-request-id"], "42");
-    }
-
-    #[test]
-    fn authentication_preserves_only_retryable_server_statuses() {
-        for status in [
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
-            reqwest::StatusCode::FOUND,
-            reqwest::StatusCode::NOT_FOUND,
-        ] {
-            assert!(should_preserve_server_error(true, status));
-        }
-        for status in [
-            reqwest::StatusCode::OK,
-            reqwest::StatusCode::UNAUTHORIZED,
-            reqwest::StatusCode::BAD_REQUEST,
-        ] {
-            assert!(!should_preserve_server_error(true, status));
-            assert!(!should_preserve_server_error(false, status));
-        }
-        assert!(!should_preserve_server_error(
-            false,
-            reqwest::StatusCode::INTERNAL_SERVER_ERROR
-        ));
     }
 }

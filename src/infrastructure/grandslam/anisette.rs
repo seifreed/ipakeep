@@ -1,31 +1,18 @@
 //! Anisette / Client Provisioning Data (CPD) for Apple `GrandSlam`.
 //!
 //! Apple's `GrandSlam` authentication requires device metadata (CPD) embedded
-//! in the SRP request plist. This module maps local or remote device data into
-//! the request headers and plist.
+//! in the SRP request plist. The headers come from the in-process Apple SAP
+//! service ([`SapService::anisette_headers`]) on every platform; this module
+//! maps them into the request headers and the CPD dictionary.
 
 mod fields;
 mod time;
 
-#[cfg(any(not(ipakeep_modern_adi), test))]
-mod remote;
-
 use crate::domain::error::AppStoreError;
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-use crate::infrastructure::exec::observed_output;
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-use fields::current_locale;
-#[cfg(any(ipakeep_modern_adi, test))]
+use crate::infrastructure::apple_sap::storeauth::SapService;
 use fields::{AnisetteFields, build_cpd, build_headers};
-#[cfg(not(ipakeep_modern_adi))]
-use remote::fetch_remote;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-use time::iso8601_now;
-
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-use super::aoskit::{machine_serial_number, machine_udid, retrieve_otp_headers};
 
 /// Device provisioning data bundled with HTTP headers.
 #[derive(Debug, Clone)]
@@ -36,198 +23,66 @@ pub struct AnisetteData {
     pub cpd: JsonValue,
 }
 
-/// Returns the local user's `GeneratedUID` on macOS, if available.
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-fn get_local_user_uuid() -> Option<String> {
-    let username = std::env::var("USER").ok()?;
-    let mut command = std::process::Command::new("dscl");
-    command.args([
-        "/Search",
-        "-read",
-        &format!("/Users/{username}"),
-        "GeneratedUID",
-    ]);
-    let output = observed_output(&mut command).ok()?;
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    // Parse "GeneratedUID: AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
-    stdout
-        .split_whitespace()
-        .nth(1)
-        .map(|s| s.trim().to_string())
-}
-
-const DEVICE_MODEL: &str = "MacBookPro18,3";
+/// Device model the emulated `akd` reports (matches its `X-MMe-Client-Info`).
+const DEVICE_MODEL: &str = "MacBookPro13,3";
+/// Operating system the emulated `akd` reports.
+const DEVICE_OS: &str = "Mac OS X 10.12.6";
+/// Build of [`DEVICE_OS`].
+const SYSTEM_VERSION: &str = "16G29";
 const RINFO: &str = "17106176";
-const CLIENT_INFO: &str = "<MacBookPro18,3> <Mac OS X;15.2;24C5089c> <com.apple.AOSKit/282 (com.apple.dt.Xcode/3594.4.19)>";
+const CLIENT_INFO: &str =
+    "<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
 const FALLBACK_DEVICE_ID: &str = "FEDCBA09-8765-4321-0FED-CBA987654321";
 
-/// Cryptographic OTP tokens (`X-Apple-I-MD*`) bundled together.
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-struct OtpTokens {
-    md: String,
-    md_lu: String,
-    md_m: String,
-}
-
-/// Obtain Anisette data for the current platform/configuration.
+/// Obtain Anisette data from the process-wide native Apple SAP service.
 ///
-/// Resolution order:
-/// 1. `IPAKEEP_ANISETTE_URL` — fetch from an explicit remote anisette server.
-/// 2. macOS — generate locally via `AOSKit` (real OTP tokens).
-/// 3. Other platforms — auto-launch the bundled Docker anisette server and
-///    fetch from it (`AOSKit` is unavailable, so placeholder tokens would be
-///    rejected by Apple).
+/// The first call reuses (or creates) the persisted machine provisioning;
+/// later calls return the same headers for the rest of the process, because
+/// Apple binds the `GrandSlam` session to the `X-Apple-I-MD-M` it saw.
 ///
 /// # Errors
 ///
-/// Returns an error if a configured/launched anisette server cannot be reached
-/// or returns an incomplete payload.
-#[cfg(ipakeep_modern_adi)]
-pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
+/// Returns an error when the Apple assets, the emulated machine, GSA
+/// provisioning or the state file fail.
+pub async fn resolve_anisette() -> Result<AnisetteData, AppStoreError> {
     #[cfg(test)]
-    if let Some(result) = test_remote(client).await {
-        return result;
+    if let Some(data) = test_anisette() {
+        return Ok(data);
     }
-    #[cfg(not(test))]
-    let _ = client;
-    super::modern_adi::generate().await
-}
-
-#[cfg(not(ipakeep_modern_adi))]
-/// Resolve Anisette data from an explicit server or the platform provider.
-///
-/// # Errors
-///
-/// Returns an error when no usable Anisette provider is available.
-pub async fn resolve_anisette(client: &reqwest::Client) -> Result<AnisetteData, AppStoreError> {
-    #[cfg(test)]
-    if let Some(result) = test_remote(client).await {
-        return result;
-    }
-    if let Ok(url) = std::env::var("IPAKEEP_ANISETTE_URL") {
-        let url = url.trim();
-        if !url.is_empty() {
-            return fetch_remote(client, url).await;
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        // macOS can generate valid OTP tokens locally via AOSKit.
-        generate_anisette()
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Other platforms lack AOSKit; fetch from the Docker anisette server.
-        let url = super::anisette_docker::ensure_local_server(client).await?;
-        fetch_remote(client, &url).await
-    }
+    let headers = SapService::shared()?.anisette_headers().await?;
+    from_headers(&headers.to_map())
 }
 
 #[cfg(test)]
 thread_local! {
-    static TEST_REMOTE_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static TEST_ANISETTE: std::cell::RefCell<Option<AnisetteData>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Make [`resolve_anisette`] return `data` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_test_anisette(data: Option<AnisetteData>) {
+    TEST_ANISETTE.with(|cell| cell.replace(data));
 }
 
 #[cfg(test)]
-pub(crate) fn set_test_remote_url(url: Option<String>) {
-    TEST_REMOTE_URL.with(|test_url| test_url.replace(url));
+fn test_anisette() -> Option<AnisetteData> {
+    TEST_ANISETTE.with(|cell| cell.borrow().clone())
 }
 
-#[cfg(test)]
-async fn test_remote(client: &reqwest::Client) -> Option<Result<AnisetteData, AppStoreError>> {
-    let url = TEST_REMOTE_URL.with(|test_url| test_url.borrow().clone())?;
-    Some(remote::fetch_remote(client, &url).await)
-}
-
-#[cfg(any(ipakeep_modern_adi, test))]
-pub(super) fn from_headers(
-    headers: HashMap<String, String>,
-) -> Result<AnisetteData, AppStoreError> {
-    let fields = headers
-        .into_iter()
-        .map(|(key, value)| (key, JsonValue::String(value)))
-        .collect();
-    let fields = AnisetteFields::from_remote(&fields)?;
-    Ok(AnisetteData {
-        headers: build_headers(&fields),
-        cpd: build_cpd(&fields),
-    })
-}
-
-/// Generate Anisette / CPD data locally (macOS `AOSKit` path).
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-fn generate_anisette() -> Result<AnisetteData, AppStoreError> {
-    let tokens = otp_tokens()?;
-    let (device_id, serial) = machine_identifiers();
-
-    let fields = AnisetteFields {
-        time: iso8601_now(),
-        timezone: "UTC".to_string(),
-        locale: current_locale(),
-        md: tokens.md,
-        md_lu: get_local_user_uuid().unwrap_or(tokens.md_lu),
-        md_m: tokens.md_m,
-        rinfo: RINFO.to_string(),
-        client_info: CLIENT_INFO.to_string(),
-        device_id,
-        serial,
-    };
-
-    Ok(AnisetteData {
-        headers: build_headers(&fields),
-        cpd: build_cpd(&fields),
-    })
-}
-
-/// Resolve the OTP tokens from native macOS `AOSKit`.
+/// Map an anisette header set to request headers and CPD.
 ///
-/// `X-Apple-I-MD` and `X-Apple-I-MD-M` are cryptographic tokens generated by
-/// Apple's proprietary CoreADI/AOSKit libraries. Missing values are an error;
-/// fabricated tokens cannot authenticate.
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-fn otp_tokens() -> Result<OtpTokens, AppStoreError> {
-    otp_tokens_from_headers(retrieve_otp_headers("-2"), get_local_user_uuid())
-}
-
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-fn otp_tokens_from_headers(
-    headers: Option<HashMap<String, String>>,
-    local_user_uuid: Option<String>,
-) -> Result<OtpTokens, AppStoreError> {
-    let missing = |field: &str| {
-        AppStoreError::AuthenticationFailed(format!(
-            "macOS AOSKit did not provide {field}; refusing to send placeholder Anisette data"
-        ))
-    };
-    let headers = headers.ok_or_else(|| missing("OTP headers"))?;
-    // AOSUtilities may return keys with or without the `-I-` segment.
-    let pick = |primary: &str, fallback: &str| {
-        headers
-            .get(primary)
-            .or_else(|| headers.get(fallback))
-            .cloned()
-            .filter(|value| !value.is_empty())
-    };
-    Ok(OtpTokens {
-        md: pick("X-Apple-I-MD", "X-Apple-MD").ok_or_else(|| missing("X-Apple-I-MD"))?,
-        md_lu: pick("X-Apple-I-MD-LU", "X-Apple-MD-LU")
-            .or(local_user_uuid)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| missing("X-Apple-I-MD-LU"))?,
-        md_m: pick("X-Apple-I-MD-M", "X-Apple-MD-M").ok_or_else(|| missing("X-Apple-I-MD-M"))?,
+/// # Errors
+///
+/// Returns [`AppStoreError::AuthenticationFailed`] when the one-time password
+/// or machine identifier is missing.
+pub(crate) fn from_headers(
+    headers: &HashMap<String, String>,
+) -> Result<AnisetteData, AppStoreError> {
+    let fields = AnisetteFields::from_headers(headers)?;
+    Ok(AnisetteData {
+        headers: build_headers(&fields),
+        cpd: build_cpd(&fields),
     })
-}
-
-/// Resolve the `(device_id, serial)` pair, using real identifiers on macOS to
-/// avoid Apple error 433.
-#[cfg(all(target_os = "macos", not(ipakeep_modern_adi)))]
-fn machine_identifiers() -> (String, String) {
-    (
-        machine_udid().unwrap_or_else(|| FALLBACK_DEVICE_ID.to_string()),
-        machine_serial_number().unwrap_or_else(|| "0".to_string()),
-    )
 }
 
 #[cfg(test)]
@@ -242,39 +97,44 @@ mod tests {
             ("X-Mme-Client-Info".into(), "Mac client".into()),
         ]);
 
-        let anisette = from_headers(headers).expect("anisette headers");
+        let anisette = from_headers(&headers).expect("anisette headers");
 
         assert_eq!(anisette.headers["X-Apple-I-MD"], "otp");
         assert_eq!(anisette.headers["X-Apple-I-MD-M"], "machine");
         assert_eq!(anisette.cpd["X-Apple-I-MD"], "otp");
         assert_eq!(anisette.cpd["X-MMe-Client-Info"], "Mac client");
     }
-}
-
-#[cfg(all(test, target_os = "macos", not(ipakeep_modern_adi)))]
-mod legacy_tests {
-    use super::*;
 
     #[test]
-    fn otp_tokens_require_real_headers() {
-        let result = otp_tokens_from_headers(None, None);
-        assert!(result.err().unwrap().to_string().contains("OTP headers"));
-
-        let result = otp_tokens_from_headers(Some(HashMap::new()), None);
-        assert!(result.err().unwrap().to_string().contains("X-Apple-I-MD"));
-    }
-
-    #[test]
-    fn otp_tokens_map_aoskit_header_aliases() {
+    fn cpd_matches_the_native_akd_client_identity() {
         let headers = HashMap::from([
-            ("X-Apple-MD".into(), "otp".into()),
-            ("X-Apple-MD-M".into(), "machine".into()),
+            ("X-Apple-I-MD".into(), "otp".into()),
+            ("X-Apple-I-MD-M".into(), "machine".into()),
         ]);
 
-        let tokens = otp_tokens_from_headers(Some(headers), Some("local-uuid".into())).unwrap();
+        let data = from_headers(&headers).expect("Anisette data");
 
-        assert_eq!(tokens.md, "otp");
-        assert_eq!(tokens.md_m, "machine");
-        assert_eq!(tokens.md_lu, "local-uuid");
+        assert_eq!(data.cpd["dt"], DEVICE_MODEL);
+        assert_eq!(data.cpd["os"], DEVICE_OS);
+        assert_eq!(data.cpd["sv"], SYSTEM_VERSION);
+        assert_eq!(data.headers["X-MMe-Client-Info"], CLIENT_INFO);
+    }
+
+    #[tokio::test]
+    async fn resolve_returns_the_test_override() {
+        let data = from_headers(&HashMap::from([
+            ("X-Apple-I-MD".into(), "override".into()),
+            ("X-Apple-I-MD-M".into(), "machine".into()),
+        ]))
+        .expect("Anisette data");
+        set_test_anisette(Some(data));
+
+        let resolved = resolve_anisette().await;
+        set_test_anisette(None);
+
+        assert_eq!(
+            resolved.expect("override").headers["X-Apple-I-MD"],
+            "override"
+        );
     }
 }

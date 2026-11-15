@@ -1,12 +1,11 @@
 //! App Store API implementation — search, purchase, download, list-versions.
 
-mod commerce;
-mod commerce_auth;
 mod grandslam_auth;
 pub mod native_commerce;
 mod parsing;
-#[cfg(ipakeep_modern_adi)]
-mod signed_commerce;
+mod store_cookies;
+pub mod store_machine;
+mod store_session;
 mod transport;
 
 use crate::domain::entity::{Account, App, AppVersion, DownloadItem, OwnedApp, TrustedPhoneNumber};
@@ -15,19 +14,39 @@ use crate::domain::repository::{
     AuthenticationRepository, CatalogRepository, DownloadRepository, PurchaseRepository,
     VersionRepository,
 };
+use crate::infrastructure::apple_sap::storeauth::SapService;
 use crate::infrastructure::appstore::config::AppleApiConfig;
 use crate::infrastructure::http::AppleHttpClient;
-use crate::infrastructure::http::client::HttpResponse;
 use async_trait::async_trait;
+use native_commerce::bag::machine_guid;
+use native_commerce::login::Credentials;
 use parsing::parse_app;
-use std::collections::HashMap;
-use transport::{appstore_query_url, pod_from_cookies, response_is_store_error};
+use std::path::PathBuf;
+use std::sync::Arc;
+use store_machine::StoreMachine;
+use store_session::{StoreSession, StoreSessionConfig};
+use tokio::sync::OnceCell;
+use transport::appstore_query_url;
+
+const APP_DIRECTORY: &str = "ipakeep";
+/// GUID sent when the machine has no readable MAC address.
+const FALLBACK_HARDWARE_ID: [u8; 6] = [0; 6];
+
+/// The machine GUID Apple sees: the uppercase hex MAC address, or zeros when
+/// none is readable.
+#[must_use]
+pub fn device_guid() -> String {
+    let address = mac_address::get_mac_address().ok().flatten();
+    machine_guid(&address.map_or(FALLBACK_HARDWARE_ID, mac_address::MacAddress::bytes))
+}
 
 /// `AppStoreRepository` implementation using Apple's private APIs.
 #[derive(Clone)]
 pub struct AppleAppStoreRepository {
     client: AppleHttpClient,
     config: AppleApiConfig,
+    machine: Option<Arc<dyn StoreMachine>>,
+    session: Arc<OnceCell<StoreSession>>,
 }
 
 impl AppleAppStoreRepository {
@@ -36,60 +55,61 @@ impl AppleAppStoreRepository {
         Self::with_config(client, AppleApiConfig::default())
     }
 
-    /// Create a new Apple App Store repository with custom configuration.
+    /// Create a new Apple App Store repository with custom configuration,
+    /// over the process-wide native Apple SAP service.
     pub fn with_config(client: AppleHttpClient, config: AppleApiConfig) -> Self {
-        Self { client, config }
-    }
-
-    /// Build the store URL with optional pod prefix.
-    fn store_url(&self, account: &Account, path: &str) -> String {
-        if account.pod.is_empty() {
-            format!("{}{path}", self.config.store_base_url)
-        } else {
-            format!("https://p{}-buy.itunes.apple.com{path}", account.pod)
+        Self {
+            client,
+            config,
+            machine: None,
+            session: Arc::new(OnceCell::new()),
         }
     }
 
-    /// POST a plist to a store endpoint, retrying on the account's pod-specific
-    /// host when the account has no pod yet and the first (generic-host) response
-    /// is an error that sets an `itspod` affinity cookie. Apple's generic
-    /// `buy.itunes.apple.com` answers "account could not be found" until the
-    /// request lands on the right pod (e.g. `p48-buy.itunes.apple.com`); the
-    /// `GrandSlam` SPD does not provide the pod, so it is discovered here.
-    async fn post_store_plist(
-        &self,
-        account: &Account,
-        path: &str,
-        query: &str,
-        plist_body: &serde_json::Value,
-        headers: &HashMap<String, String>,
-    ) -> Result<HttpResponse<serde_json::Value>, AppStoreError> {
-        let url = format!("{}{query}", self.store_url(account, path));
-        let response = self
-            .client
-            .post_plist(&url, plist_body, Some(headers))
-            .await?;
-
-        if !account.pod.is_empty() || !response_is_store_error(&response.body) {
-            return Ok(response);
+    /// Create a repository whose Store session uses `machine` for anisette,
+    /// Store AMD, kbsync and SAP signing.
+    pub fn with_store_machine(
+        client: AppleHttpClient,
+        config: AppleApiConfig,
+        machine: Arc<dyn StoreMachine>,
+    ) -> Self {
+        Self {
+            machine: Some(machine),
+            ..Self::with_config(client, config)
         }
-        let Some(pod) = pod_from_cookies(&response.headers) else {
-            return Ok(response);
-        };
+    }
 
-        let pod_url = format!("https://p{pod}-buy.itunes.apple.com{path}{query}");
-        tracing::debug!(
-            service = "ipakeep",
-            component = "appstore",
-            operation = "store_request",
-            event_name = "appstore.request.retry",
-            outcome = "retrying",
-            "retrying store request on pod-specific host"
-        );
-        self.client
-            .post_plist(&pod_url, plist_body, Some(headers))
+    /// The native Store session, opened on first use.
+    async fn store(&self) -> Result<&StoreSession, AppStoreError> {
+        self.session
+            .get_or_try_init(|| async {
+                let machine = match &self.machine {
+                    Some(machine) => Arc::clone(machine),
+                    None => Arc::new(SapService::shared()?),
+                };
+                StoreSession::open(machine, self.session_config()?)
+            })
             .await
     }
+
+    fn session_config(&self) -> Result<StoreSessionConfig, AppStoreError> {
+        let state_directory = match &self.config.state_directory {
+            Some(directory) => directory.clone(),
+            None => default_state_directory()?,
+        };
+        Ok(StoreSessionConfig {
+            bag_url: self.config.bag_url.clone(),
+            purchase_history_url: self.config.purchase_history_url.clone(),
+            origin: self.config.store_origin.clone(),
+            state_directory,
+        })
+    }
+}
+
+fn default_state_directory() -> Result<PathBuf, AppStoreError> {
+    dirs::config_dir()
+        .map(|directory| directory.join(APP_DIRECTORY))
+        .ok_or_else(|| AppStoreError::NetworkError("cannot find user config directory".into()))
 }
 
 #[async_trait]
@@ -239,31 +259,16 @@ impl PurchaseRepository for AppleAppStoreRepository {
         app_id: i64,
         guid: &str,
     ) -> Result<(), AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login {
-            return signed_commerce::purchase(account, app_id, |operation, request| async move {
-                crate::infrastructure::grandslam::store_request(operation, &request).await
-            })
-            .await;
-        }
-        commerce::purchase(self, account, app_id, guid).await
+        self.store().await?.purchase(account, app_id, guid).await
     }
+
     async fn list_purchases(
         &self,
         account: &Account,
         limit: u32,
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login {
-            return signed_commerce::owned_apps(account, limit, |operation, request| async move {
-                crate::infrastructure::grandslam::store_request(operation, &request).await
-            })
-            .await;
-        }
-        let _ = (account, limit);
-        Err(AppStoreError::Unexpected(
-            "listing purchases requires the signed App Store login available on modern macOS builds; this build cannot query owned apps".into(),
-        ))
+        let guid = device_guid();
+        self.store().await?.owned_apps(account, limit, &guid).await
     }
 }
 
@@ -276,28 +281,13 @@ impl DownloadRepository for AppleAppStoreRepository {
         guid: &str,
         version_id: Option<String>,
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login {
-            return signed_commerce::download(
-                account,
-                app_id,
-                version_id.as_deref(),
-                |operation, request| async move {
-                    crate::infrastructure::grandslam::store_request(operation, &request).await
-                },
-            )
-            .await;
-        }
-        commerce::download(self, account, app_id, guid, version_id).await
+        self.store()
+            .await?
+            .download(account, app_id, guid, version_id.as_deref())
+            .await
     }
 
     async fn download_bytes(&self, url: &str) -> Result<Vec<u8>, AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login
-            && let Some(package) = signed_commerce::take_staged_package(url)
-        {
-            return package;
-        }
         self.client
             .download_file(url, None)
             .await
@@ -313,18 +303,10 @@ impl VersionRepository for AppleAppStoreRepository {
         app_id: i64,
         guid: &str,
     ) -> Result<Vec<AppVersion>, AppStoreError> {
-        #[cfg(ipakeep_modern_adi)]
-        if self.config.signed_store_login {
-            return signed_commerce::list_versions(
-                account,
-                app_id,
-                |operation, request| async move {
-                    crate::infrastructure::grandslam::store_request(operation, &request).await
-                },
-            )
-            .await;
-        }
-        commerce::list_versions(self, account, app_id, guid).await
+        self.store()
+            .await?
+            .list_versions(account, app_id, guid)
+            .await
     }
 }
 
@@ -335,27 +317,12 @@ async fn store_authenticate(
     code: Option<&str>,
     guid: &str,
 ) -> Result<Account, AppStoreError> {
-    #[cfg(ipakeep_modern_adi)]
-    if repository.config.signed_store_login {
-        return crate::infrastructure::grandslam::store_login(email, password, code).await;
-    }
-
-    let client = &repository.client;
-    let auth_url = crate::infrastructure::appstore::bag::resolve_auth_endpoint(
-        client,
-        &repository.config.bag_url,
-        guid,
-    )
-    .await?;
-    match code {
-        Some(code) => {
-            super::authentication::authenticate_with_2fa(
-                client, &auth_url, email, password, code, guid,
-            )
-            .await
-        }
-        None => super::authentication::authenticate(client, &auth_url, email, password, guid).await,
-    }
+    let credentials = Credentials {
+        email,
+        password,
+        auth_code: code,
+    };
+    repository.store().await?.login(credentials, guid).await
 }
 
 #[cfg(test)]

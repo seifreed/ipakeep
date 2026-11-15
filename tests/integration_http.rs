@@ -211,45 +211,21 @@ async fn form_and_download_requests_forward_custom_headers() {
 }
 
 #[tokio::test]
-async fn seeded_cookies_are_sent_to_their_origin() {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/cookie"))
-        .and(header("cookie", "session=value"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
-        .mount(&server)
-        .await;
-
-    let client = AppleHttpClient::new().unwrap();
-    client
-        .seed_cookies(&["session=value; Path=/".into()], &server.uri())
-        .unwrap();
-    assert!(
-        client
-            .get_json::<serde_json::Value>(&format!("{}/cookie", server.uri()))
-            .await
-            .is_ok()
-    );
-}
-
-#[tokio::test]
-async fn auth_plist_preserves_retryable_server_errors_and_empty_204() {
+async fn post_plist_returns_an_empty_204_as_null_and_rejects_server_errors() {
     let server = MockServer::start().await;
     for (route, status) in [("/auth-error", 500), ("/empty", 204)] {
         Mock::given(method("POST"))
             .and(path(route))
-            .respond_with(ResponseTemplate::new(status).set_body_string("not a plist"))
+            .respond_with(ResponseTemplate::new(status))
             .mount(&server)
             .await;
     }
     let client = AppleHttpClient::new().unwrap();
-    for route in ["/auth-error", "/empty"] {
-        let response = client
-            .post_auth_plist_bytes(&format!("{}{route}", server.uri()), b"request", None)
-            .await
-            .unwrap();
-        assert!(response.body.is_null());
-    }
+    let empty = client
+        .post_plist_bytes(&format!("{}/empty", server.uri()), b"request", None)
+        .await
+        .unwrap();
+    assert!(empty.body.is_null());
     assert!(
         client
             .post_plist_bytes(&format!("{}/auth-error", server.uri()), b"request", None)
@@ -287,15 +263,5 @@ async fn download_file_returns_raw_bytes_and_status_errors() {
             .unwrap_err()
             .to_string()
             .contains("HTTP 404")
-    );
-}
-
-#[test]
-fn cookie_seeding_rejects_an_invalid_origin_url() {
-    let client = AppleHttpClient::new().unwrap();
-    assert!(
-        client
-            .seed_cookies(&["session=value".into()], "not a URL")
-            .is_err()
     );
 }

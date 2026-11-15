@@ -97,12 +97,12 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 
 | Feature | Description |
 |---------|-------------|
-| **Modern GrandSlam auth** | macOS login uses local ADI provisioning and supports trusted-device/SMS 2FA |
+| **Native Store sign-in** | In-process Apple ADI/SAP (Store AMD proof, kbsync, action signatures) on macOS, Linux and Windows, with trusted-device 2FA |
+| **GrandSlam auth** | `--grandslam` SRP login with trusted-device/SMS 2FA over the same native anisette |
 | **Trusted-phone enumeration** | Lists the account's trusted phone numbers for SMS 2FA instead of guessing |
-| **Legacy auth** | Classic App Store authentication flow with `-5000` retry handling |
 | **Search & lookup** | Public iTunes Search/Lookup by term or bundle identifier |
 | **Purchase** | Acquire a free-app license via `buyProduct` |
-| **Owned apps** | `purchases` lists the apps the authenticated account already owns (modern-macOS signed session) |
+| **Owned apps** | `purchases` lists the apps the authenticated account already owns (signed Store session) |
 | **Download & patch** | Fetches the IPA and injects `sinf` DRM blobs + `iTunesMetadata.plist`; output is **still FairPlay-encrypted** |
 | **Device decryption** | Orchestrates a Frida dump of the app **running on a jailbroken device** (or Apple Silicon Mac with SIP off), then patches and verifies; cannot decrypt the file alone |
 | **Offline decryption** | `decrypt offline` decrypts a local encrypted IPA natively (no running app, no external tool, any minimum iOS) with a per-account credential, and verifies the result |
@@ -110,7 +110,7 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
-| **Cross-platform Anisette** | Local modern ADI on macOS, auto-managed Docker anisette server elsewhere |
+| **Cross-platform Anisette** | Native in-process anisette on every platform; no Docker, Go or remote server |
 | **MCP server** | `mcp` runs ipakeep as a Model Context Protocol server over stdio, exposing `search`, `list_versions`, `auth_info`, `download` and `purchases` as tools for AI agents |
 | **CLI + Library** | Use as a command-line tool or as a Rust crate |
 
@@ -148,9 +148,11 @@ cargo build --release
 # binary at target/release/ipakeep
 ```
 
-Building on macOS also requires Go 1.26.5 or newer. The build compiles a small
-helper around ipatool's pinned modern ADI implementation; Apple framework assets
-are downloaded and verified on the first macOS login.
+Building needs a C toolchain, CMake and libclang for the bundled Unicorn
+emulator (`unicorn-engine-sys`): `cmake libclang-dev pkg-config` on Debian/Ubuntu,
+Xcode command line tools plus `cmake` on macOS, and MSVC with CMake, Ninja and
+LLVM (`LIBCLANG_PATH`) on Windows. Apple's signed framework assets are
+downloaded and verified on the first sign-in.
 
 ### Install the binary
 
@@ -158,16 +160,14 @@ are downloaded and verified on the first macOS login.
 cargo install --path .
 ```
 
-### Anisette on Linux / Windows
+### Sign-in state
 
-Apple's `AOSKit` is macOS-only, so off-macOS ipakeep launches a Docker anisette
-server automatically. **Docker must be installed and running.** Override the
-provider if you already run one:
-
-```bash
-export IPAKEEP_ANISETTE_URL=http://127.0.0.1:6969   # use an existing server
-export IPAKEEP_ANISETTE_IMAGE=my/anisette:tag        # use a custom image
-```
+ipakeep provisions an emulated Apple machine in-process on every platform and
+keeps its state in the user config directory (`ipakeep/` under
+`~/Library/Application Support` on macOS, `~/.config` on Linux, `%APPDATA%` on
+Windows): `anisette-v4.json` (machine provisioning), `store-cookies.json`
+(Store session cookies, shared by the code-less and the 2FA sign-in attempts)
+and `kbsync-v1.json`. Delete them to start from a fresh identity.
 
 ---
 
@@ -499,8 +499,8 @@ ipakeep auth revoke
 | Option | Description |
 |--------|-------------|
 | `--format <text\|json>` | Output format (default `text`) |
-| `--legacy` | Force the Configurator login flow |
-| `--grandslam` | Use GrandSlam SRP login (the macOS default) |
+| `--legacy` | Use the Store login flow (the default; kept for compatibility) |
+| `--grandslam` | Use GrandSlam SRP login instead of the Store login |
 | `--non-interactive` | Fail instead of prompting |
 | `--file-keychain` | Force the file keychain instead of the macOS Keychain |
 | `--verbose` | Enable debug-level logging |
@@ -515,10 +515,11 @@ ipakeep auth revoke
 
 ### Authentication Notes
 
-- macOS uses a local modern ADI provider for GrandSlam. The first login downloads
-  Apple's signed macOS framework assets and provisions a local device identity.
-- Linux and Windows retain the Configurator default; `--grandslam` selects SRP
-  and uses the configured anisette provider.
+- Every platform signs in through the native Store login: the first login
+  downloads Apple's signed framework assets and provisions a local device
+  identity. Without `--code`, Apple pushes a code to your trusted devices; the
+  coded attempt reuses the saved Store cookie session.
+- `--grandslam` selects SRP and uses the same native anisette.
 - Use `--non-interactive` with `--email`, `--password`, and optionally `--code`
   when no prompts are allowed.
 
@@ -578,8 +579,7 @@ main.rs          Wires concrete infrastructure into the presentation handlers
 ## Requirements
 
 - Rust toolchain (edition 2024)
-- macOS builds require Go 1.26.5+ for local modern ADI; Linux/Windows use Docker
-  for the anisette server
+- CMake, libclang and a C toolchain (see Installation) for the Unicorn emulator
 - See [Cargo.toml](Cargo.toml) for dependencies
 
 ## SBOM
@@ -593,9 +593,9 @@ Generate and verify the committed CycloneDX SBOM:
 The gate scores the SBOM with the project `sbomqs` profile and `sbom-tools`,
 verifies NTIA minimum elements, and scans it with `osv-scanner` and `grype`.
 
-CI runs the Rust formatting, compile, Clippy, test, coverage, dependency,
-license, and SBOM checks, plus tests and vet for the Go helper. CodeQL analyzes
-both the Rust crate and the helper used by macOS builds.
+CI runs the Rust formatting, compile, Clippy, coverage, dependency, license,
+and SBOM checks, and the test suite on Linux, macOS and Windows. CodeQL
+analyzes the Rust crate.
 
 ---
 

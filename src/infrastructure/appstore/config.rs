@@ -1,30 +1,37 @@
 //! Apple API endpoint configuration.
 
+use super::store_api::native_commerce::bag::BAG_URL;
+use super::store_api::native_commerce::owned_apps::PURCHASE_DAAP_BASE_URL;
+use std::path::PathBuf;
+
 /// Configurable URLs for Apple's App Store APIs.
 #[derive(Debug, Clone)]
 pub struct AppleApiConfig {
-    /// URL for the bag.xml discovery endpoint.
+    /// URL for the Store bag.xml discovery endpoint.
     pub bag_url: String,
     /// Base URL for the iTunes Search API.
     pub itunes_search_url: String,
     /// Base URL for the iTunes Lookup API.
     pub itunes_lookup_url: String,
-    /// Base URL for the Apple Store purchase/download endpoints.
-    pub store_base_url: String,
-    /// Log in through the bundled ipatool helper, which signs `MZFinance`
-    /// requests with the Store AMD proof and SAP action signature. Only
-    /// available on modern macOS builds.
-    pub signed_store_login: bool,
+    /// `MZPurchaseDaap` base URL for the purchase history.
+    pub purchase_history_url: String,
+    /// When set, every Store commerce request goes to this origin instead of
+    /// Apple's hosts (path and query kept); for proxies and tests.
+    pub store_origin: Option<String>,
+    /// Directory of the Store session files (`store-cookies.json`,
+    /// `kbsync-v1.json`); `None` means `<user config dir>/ipakeep`.
+    pub state_directory: Option<PathBuf>,
 }
 
 impl Default for AppleApiConfig {
     fn default() -> Self {
         Self {
-            bag_url: "https://init.itunes.apple.com/bag.xml".into(),
+            bag_url: BAG_URL.into(),
             itunes_search_url: "https://itunes.apple.com/search".into(),
             itunes_lookup_url: "https://itunes.apple.com/lookup".into(),
-            store_base_url: "https://buy.itunes.apple.com".into(),
-            signed_store_login: cfg!(ipakeep_modern_adi),
+            purchase_history_url: PURCHASE_DAAP_BASE_URL.into(),
+            store_origin: None,
+            state_directory: None,
         }
     }
 }
