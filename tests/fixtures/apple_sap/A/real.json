@@ -1,0 +1,29 @@
+{
+  "043-70701-651.dmg.aea.data_offset": 1375050680,
+  "043-70867-640.dmg.aea.data_offset": 4718032450,
+  "fcs_key_url": "https://wkms-public.apple.com/fcs-keys/mIR-wHh7FG0RupKVJzefCHNe-tSBsr4cGDojSK3kZZc=",
+  "ipsw_size": 26637307067,
+  "kernelcache.data_offset": 26216672403,
+  "kernelcache.method": 8,
+  "last_segment": {
+    "compressed": 759,
+    "decompressed": 1048576,
+    "output_offset": 2878341120
+  },
+  "last_segment_plain_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "main_key": "552c0f56a31360da7f5a9494b0fac12323218baca1fd3fcd915b2b60d8f512d0",
+  "output_size": 2879389696,
+  "segment0": {
+    "checksum": "20ba73acbb4549a42efd5d9b0874167a05d2493f16d0967599d9aab69f0e2c64",
+    "compressed": 18467,
+    "decompressed": 1048576,
+    "input_offset": 21220
+  },
+  "segment0_plain_sha256": "20ba73acbb4549a42efd5d9b0874167a05d2493f16d0967599d9aab69f0e2c64",
+  "segment_size": 1048576,
+  "segments": 2746,
+  "source_size": 2415919104,
+  "straddle_sha256": "91e255e821ec083972c749f2c3b287b8cb0bf3a0aa2bf680aef9beac90c8c5d5",
+  "symmetric_key": "31aea328da71f9675046b186d7d1f661d2d64cbb689522a1fd4701181fa8c714",
+  "zip_entries": 1630
+}

@@ -145,6 +145,16 @@ impl<T: ReadAt + ?Sized> ReadAt for Arc<T> {
     }
 }
 
+impl<T: ReadAt + ?Sized> ReadAt for Box<T> {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+
+    fn size(&self) -> u64 {
+        (**self).size()
+    }
+}
+
 impl<T: ReadAt + ?Sized> ReadAt for &T {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         (**self).read_at(buf, offset)

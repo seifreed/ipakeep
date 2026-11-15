@@ -1,0 +1,10 @@
+{
+  "clusters": 3,
+  "hpke_ct": "a0be8a1527e6f51b2cf7818b93ba95b5578456bfa55f39d2b2580b6ac2f4dac4f1118e4e0321ea76d75b5daf0fed7c37",
+  "hpke_enc": "04eef80871c0ec20961822082de98f0dbfbf8be18905120eacebe9cf7153b5230479f232bca6177345e702ee5fe68529318db78f9ef80d7700884b5170961de5f2",
+  "main_key": "dadee71c67424f12dfc1c9eb48d947fff2e0d9b3b53ac01e0f447fcbc606283e",
+  "output_sha256": "ff01d1a158526094826a3559295d56c4730cea0ff0eb0cc86c081eda383949f0",
+  "output_size": 19480,
+  "segments": 5,
+  "symmetric_key": "deaccb2aa100b1f6c1cafd8567f1fcb7c7e4b21fd6bbdcf8e38adbc71ae43b6d"
+}

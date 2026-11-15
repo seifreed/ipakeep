@@ -1,1 +1,1179 @@
-//! Ported from ipatool `internal/sap/assets`.
+//! Apple Encrypted Archive (AEA1, symmetric profile 1) random-access decryption.
+//!
+//! Ported from ipatool `internal/sap/assets/aea.go`.
+//!
+//! The symmetric key is HPKE-wrapped (`DHKEM(P-256, HKDF-SHA256)`,
+//! `HKDF-SHA256`, `AES-256-GCM`, base mode) to an Apple-published FCS P-256
+//! key named in the archive metadata. HPKE is implemented here on top of
+//! `p256`, `hkdf` and `aes-gcm`. Clusters and segments are authenticated with
+//! HMAC-SHA256, decrypted with AES-256-CTR, LZFSE-decoded and SHA-256 checked
+//! lazily when [`ReadAt::read_at`] touches them.
+
+use std::collections::{HashMap, VecDeque};
+use std::io;
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use aes::Aes256;
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use ctr::cipher::{KeyIvInit, StreamCipher};
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
+use p256::pkcs8::DecodePrivateKey;
+use p256::{PublicKey, SecretKey};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
+use super::http_range::{BlockingHttp, HttpRangeError, ReadAt, clamp_len};
+
+const AEA_MAGIC: &[u8; 4] = b"AEA1";
+const AEA_SYMMETRIC_PROFILE: u32 = 1;
+const AEA_PROFILE_MASK: u32 = 0x00ff_ffff;
+const AEA_MAIN_KEY_INFO: &[u8] = b"AEA_AMK";
+const AEA_ROOT_KEY_INFO: &[u8] = b"AEA_RHEK";
+const AEA_CLUSTER_KEY_INFO: &[u8] = b"AEA_CK";
+const AEA_CLUSTER_HEADER_KEY_INFO: &[u8] = b"AEA_CHEK";
+const AEA_SEGMENT_KEY_INFO: &[u8] = b"AEA_SK";
+const AEA_LZFSE_COMPRESSION: u8 = b'e';
+const AEA_SHA256_CHECKSUM: u8 = 2;
+const AEA_DECODED_SEGMENT_CACHE_COUNT: usize = 64;
+const MAX_AEA_AUTH_DATA_SIZE: u32 = 1 << 20;
+const MAX_FCS_KEY_SIZE: usize = 64 << 10;
+
+const AEA_HEADER_SIZE: usize = 12;
+const MAC_SIZE: usize = 32;
+const MAIN_SALT_SIZE: usize = 32;
+const ROOT_DATA_SIZE: usize = 48;
+const ENCRYPTED_ROOT_SIZE: usize = MAC_SIZE + ROOT_DATA_SIZE + MAC_SIZE;
+const SEGMENT_HEADER_SIZE: usize = 8 + 32;
+const HEADER_KEY_SIZE: usize = MAC_SIZE + 32 + 16;
+const METADATA_LENGTH_SIZE: usize = 4;
+const MIN_METADATA_RECORD_LENGTH: u32 = 5;
+
+const FCS_KEY_URL_FIELD: &[u8] = b"com.apple.wkms.fcs-key-url";
+const FCS_RESPONSE_FIELD: &[u8] = b"com.apple.wkms.fcs-response";
+const FCS_KEY_SCHEME: &str = "https";
+const FCS_KEY_HOST: &str = "wkms-public.apple.com";
+
+const HPKE_VERSION_LABEL: &[u8] = b"HPKE-v1";
+const HPKE_KEM_SUITE: &[u8] = b"KEM\x00\x10";
+const HPKE_SUITE: &[u8] = b"HPKE\x00\x10\x00\x01\x00\x02";
+const HPKE_MODE_BASE: u8 = 0;
+const HPKE_SECRET_SIZE: usize = 32;
+const HPKE_KEY_SIZE: usize = 32;
+const HPKE_NONCE_SIZE: usize = 12;
+const P256_UNCOMPRESSED_POINT_SIZE: usize = 65;
+const SEC1_UNCOMPRESSED_TAG: u8 = 0x04;
+
+type HmacSha256 = Hmac<Sha256>;
+type Aes256Ctr = ctr::Ctr128BE<Aes256>;
+type Mac32 = [u8; MAC_SIZE];
+
+/// Decoded AEA authentication-data records, keyed by raw field name.
+pub type AeaMetadata = HashMap<Vec<u8>, Vec<u8>>;
+
+/// Errors produced while opening or reading an AEA archive.
+#[derive(Debug, thiserror::Error)]
+pub enum AeaError {
+    /// Reading the encrypted source failed.
+    #[error("read {context}: {source}")]
+    Io {
+        /// What was being read.
+        context: &'static str,
+        /// Underlying I/O error.
+        #[source]
+        source: io::Error,
+    },
+    /// The archive does not start with `AEA1`.
+    #[error("invalid AEA magic {0:?}")]
+    InvalidMagic([u8; 4]),
+    /// The archive uses a profile other than 1.
+    #[error("unsupported AEA profile {0}")]
+    UnsupportedProfile(u32),
+    /// The authentication data exceeds the 1 MiB bound.
+    #[error("AEA authentication data is too large: {0}")]
+    AuthDataTooLarge(u32),
+    /// A metadata record length is out of bounds.
+    #[error("invalid AEA metadata record length {0}")]
+    InvalidMetadataRecordLength(u32),
+    /// A metadata record lacks a NUL-terminated, non-empty key.
+    #[error("invalid AEA metadata record")]
+    InvalidMetadataRecord,
+    /// A required metadata field is absent.
+    #[error("AEA metadata does not contain {0}")]
+    MissingMetadata(&'static str),
+    /// The FCS key URL is not an `https://wkms-public.apple.com` URL.
+    #[error("invalid Apple FCS key URL {0:?}")]
+    InvalidKeyUrl(String),
+    /// Downloading the FCS key failed.
+    #[error("download Apple FCS key: {0}")]
+    Http(#[from] HttpRangeError),
+    /// The FCS key is not a PKCS#8 P-256 private key in PEM form.
+    #[error("parse Apple FCS private key: {0}")]
+    InvalidPrivateKey(String),
+    /// The FCS response JSON or its base64 fields are malformed.
+    #[error("parse AEA FCS response: {0}")]
+    InvalidFcsResponse(String),
+    /// HPKE decapsulation or decryption failed.
+    #[error("unwrap AEA symmetric key: {0}")]
+    Hpke(&'static str),
+    /// HKDF could not produce the requested key length.
+    #[error("expand AEA key: invalid length {0}")]
+    KeyDerivation(usize),
+    /// The root header MAC does not match.
+    #[error("AEA root header failed authentication")]
+    RootAuthentication,
+    /// The declared output size is zero or too large.
+    #[error("invalid AEA output size {0}")]
+    InvalidOutputSize(u64),
+    /// The declared encrypted size differs from the source size.
+    #[error("AEA encrypted size is {actual}, expected {expected}")]
+    EncryptedSizeMismatch {
+        /// Size declared by the root header.
+        actual: u64,
+        /// Size of the encrypted source.
+        expected: u64,
+    },
+    /// Segment size or segments per cluster is zero.
+    #[error("AEA has an invalid segment layout")]
+    InvalidSegmentLayout,
+    /// The archive is not LZFSE-compressed with SHA-256 checksums.
+    #[error("unsupported AEA encoding: compression {compression:?}, checksum {checksum}")]
+    UnsupportedEncoding {
+        /// Compression algorithm byte.
+        compression: char,
+        /// Checksum algorithm byte.
+        checksum: u8,
+    },
+    /// A cluster header extends past the end of the source.
+    #[error("AEA cluster header extends beyond the encrypted image")]
+    ClusterOutOfBounds,
+    /// A cluster header MAC does not match.
+    #[error("AEA cluster {0} failed authentication")]
+    ClusterAuthentication(u32),
+    /// A segment header is inconsistent.
+    #[error("AEA cluster {cluster} segment {segment} {reason}")]
+    InvalidSegment {
+        /// Cluster index.
+        cluster: u32,
+        /// Segment index inside the cluster.
+        segment: u32,
+        /// Description of the inconsistency.
+        reason: &'static str,
+    },
+    /// Indexed segments decode to more than the declared output.
+    #[error("AEA segment data exceeds the declared output size")]
+    OutputOverflow,
+    /// Indexed segments decode to a different size than declared.
+    #[error("AEA segment data has size {actual}, expected {expected}")]
+    OutputSizeMismatch {
+        /// Sum of the indexed segment sizes.
+        actual: u64,
+        /// Declared output size.
+        expected: u64,
+    },
+    /// A read touched a segment that was never indexed.
+    #[error("AEA segment {0} is missing")]
+    MissingSegment(u64),
+    /// A segment MAC does not match.
+    #[error("AEA cluster {cluster} segment {segment} failed authentication")]
+    SegmentAuthentication {
+        /// Cluster index.
+        cluster: u32,
+        /// Segment index inside the cluster.
+        segment: u32,
+    },
+    /// LZFSE decoding failed or produced the wrong size.
+    #[error("decompress AEA cluster {cluster} segment {segment}: {reason}")]
+    Decompress {
+        /// Cluster index.
+        cluster: u32,
+        /// Segment index inside the cluster.
+        segment: u32,
+        /// Decoder failure.
+        reason: String,
+    },
+    /// The decoded segment does not match its SHA-256 checksum.
+    #[error("AEA cluster {cluster} segment {segment} failed checksum verification")]
+    Checksum {
+        /// Cluster index.
+        cluster: u32,
+        /// Segment index inside the cluster.
+        segment: u32,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    input_offset: u64,
+    output_offset: u64,
+    compressed_size: u32,
+    decompressed_size: u32,
+    checksum: [u8; 32],
+    mac: Mac32,
+    cluster: u32,
+    index: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RootHeader {
+    file_size: u64,
+    encrypted_size: u64,
+    segment_size: u32,
+    segments_per_cluster: u32,
+    compression: u8,
+    checksum: u8,
+}
+
+struct HeaderKey {
+    mac: [u8; MAC_SIZE],
+    key: [u8; 32],
+    iv: [u8; 16],
+}
+
+#[derive(Debug, Default)]
+struct SegmentCache {
+    entries: HashMap<u64, Arc<Vec<u8>>>,
+    order: VecDeque<u64>,
+}
+
+struct Prologue {
+    profile_and_scrypt: u32,
+    auth_data: Vec<u8>,
+    metadata: AeaMetadata,
+}
+
+/// Lazily decrypted plaintext of an AEA1 profile-1 archive.
+///
+/// Opening authenticates the root header and every cluster header and
+/// indexes all segments; segment payloads are only fetched, authenticated,
+/// decrypted, decompressed and checksum-verified when read. The 64 most
+/// recently decoded segments are cached.
+#[derive(Debug)]
+pub struct AeaReader<R> {
+    source: R,
+    size: u64,
+    segment_size: u32,
+    main_key: Vec<u8>,
+    segments: Vec<Option<Segment>>,
+    cache: Mutex<SegmentCache>,
+}
+
+impl<R: ReadAt> AeaReader<R> {
+    /// Opens `source`, downloading the FCS key named by its metadata.
+    ///
+    /// # Errors
+    /// Fails on malformed headers, key download or unwrap failures and
+    /// authentication failures of the root or any cluster header.
+    pub fn open(source: R, http: &BlockingHttp) -> Result<Self, AeaError> {
+        Self::open_keyed(source, |metadata| {
+            let pem = fetch_fcs_key(http, metadata)?;
+            unwrap_symmetric_key(&pem, metadata)
+        })
+    }
+
+    /// Opens `source` with an already downloaded FCS private key PEM.
+    ///
+    /// # Errors
+    /// See [`AeaReader::open`].
+    pub fn open_with_fcs_key(source: R, pem: &[u8]) -> Result<Self, AeaError> {
+        Self::open_keyed(source, |metadata| unwrap_symmetric_key(pem, metadata))
+    }
+
+    /// Opens `source` with its unwrapped symmetric key.
+    ///
+    /// # Errors
+    /// See [`AeaReader::open`].
+    pub fn open_with_symmetric_key(source: R, symmetric_key: &[u8]) -> Result<Self, AeaError> {
+        Self::open_keyed(source, |_| Ok(symmetric_key.to_vec()))
+    }
+
+    /// Size of one decoded segment; reads aligned to it decode one segment.
+    pub fn segment_size(&self) -> u32 {
+        self.segment_size
+    }
+
+    fn open_keyed(
+        source: R,
+        resolve: impl FnOnce(&AeaMetadata) -> Result<Vec<u8>, AeaError>,
+    ) -> Result<Self, AeaError> {
+        let prologue = read_prologue(&source)?;
+        let symmetric_key = resolve(&prologue.metadata)?;
+        let salt_offset = (AEA_HEADER_SIZE + prologue.auth_data.len()) as u64;
+        let main_salt: [u8; MAIN_SALT_SIZE] = read_array(&source, salt_offset, "AEA main salt")?;
+        let main_info = indexed_info(AEA_MAIN_KEY_INFO, prologue.profile_and_scrypt);
+        let main_key = derive_key(
+            &symmetric_key,
+            Some(&main_salt),
+            &main_info,
+            symmetric_key.len(),
+        )?;
+        let root_offset = salt_offset + MAIN_SALT_SIZE as u64;
+        let (root, first_cluster_mac) = read_root(&source, root_offset, &main_key, &prologue)?;
+        let segment_count = root.file_size.div_ceil(u64::from(root.segment_size));
+        let mut reader = Self {
+            size: root.file_size,
+            segment_size: root.segment_size,
+            main_key,
+            segments: vec![
+                None;
+                usize::try_from(segment_count)
+                    .map_err(|_| AeaError::InvalidOutputSize(root.file_size))?
+            ],
+            cache: Mutex::new(SegmentCache::default()),
+            source,
+        };
+        let cluster_offset = root_offset + ENCRYPTED_ROOT_SIZE as u64;
+        reader.index_clusters(cluster_offset, first_cluster_mac, &root)?;
+        Ok(reader)
+    }
+
+    fn index_clusters(
+        &mut self,
+        mut offset: u64,
+        mut cluster_mac: Mac32,
+        root: &RootHeader,
+    ) -> Result<(), AeaError> {
+        let per_cluster = u64::from(root.segments_per_cluster);
+        let header_size = (SEGMENT_HEADER_SIZE + MAC_SIZE) as u64 * per_cluster + MAC_SIZE as u64;
+        let mut output_size = 0;
+        let mut cluster = 0_u32;
+        while output_size < root.file_size {
+            let header =
+                self.read_cluster_header(offset, header_size, cluster, &cluster_mac, root)?;
+            offset = self.index_segments(&header, offset + header_size, root, &mut output_size)?;
+            cluster_mac = header.next_mac;
+            cluster += 1;
+        }
+        if output_size != root.file_size {
+            return Err(AeaError::OutputSizeMismatch {
+                actual: output_size,
+                expected: root.file_size,
+            });
+        }
+        Ok(())
+    }
+
+    fn read_cluster_header(
+        &self,
+        offset: u64,
+        header_size: u64,
+        cluster: u32,
+        expected_mac: &Mac32,
+        root: &RootHeader,
+    ) -> Result<ClusterHeader, AeaError> {
+        let source_size = self.source.size();
+        if offset > source_size || header_size > source_size - offset {
+            return Err(AeaError::ClusterOutOfBounds);
+        }
+        let header_len = usize::try_from(header_size).map_err(|_| AeaError::ClusterOutOfBounds)?;
+        let mut data = read_vec(&self.source, offset, header_len, "AEA cluster header")?;
+        let header_key = derive_header_key(
+            &cluster_key(&self.main_key, cluster)?,
+            AEA_CLUSTER_HEADER_KEY_INFO,
+        )?;
+        let encrypted_len = SEGMENT_HEADER_SIZE * root.segments_per_cluster as usize;
+        let (encrypted, trailer) = data.split_at_mut(encrypted_len);
+        let next_mac: Mac32 = to_array(&trailer[..MAC_SIZE]);
+        if !verify_mac(&header_key.mac, encrypted, &[&trailer[..]], expected_mac) {
+            return Err(AeaError::ClusterAuthentication(cluster));
+        }
+        apply_ctr(encrypted, &header_key);
+        Ok(ClusterHeader {
+            index: cluster,
+            segment_headers: encrypted.to_vec(),
+            next_mac,
+            segment_macs: trailer[MAC_SIZE..].to_vec(),
+        })
+    }
+
+    fn index_segments(
+        &mut self,
+        header: &ClusterHeader,
+        mut data_offset: u64,
+        root: &RootHeader,
+        output_size: &mut u64,
+    ) -> Result<u64, AeaError> {
+        for index in 0..root.segments_per_cluster {
+            let fault = |reason| invalid_segment(header.index, index, reason);
+            let Some(segment) = self.parse_segment(header, index, data_offset, root)? else {
+                continue;
+            };
+            let global =
+                u64::from(header.index) * u64::from(root.segments_per_cluster) + u64::from(index);
+            let slot = usize::try_from(global).ok();
+            let slot = slot.and_then(|slot| self.segments.get_mut(slot));
+            let slot = slot.ok_or_else(|| fault("is outside the declared output"))?;
+            let output_offset = global * u64::from(root.segment_size);
+            if output_offset + u64::from(segment.decompressed_size) > root.file_size {
+                return Err(fault("extends beyond the declared output"));
+            }
+            *slot = Some(Segment {
+                output_offset,
+                ..segment
+            });
+            data_offset += u64::from(segment.compressed_size);
+            *output_size += u64::from(segment.decompressed_size);
+            if *output_size > root.file_size {
+                return Err(AeaError::OutputOverflow);
+            }
+        }
+        Ok(data_offset)
+    }
+
+    fn parse_segment(
+        &self,
+        header: &ClusterHeader,
+        index: u32,
+        data_offset: u64,
+        root: &RootHeader,
+    ) -> Result<Option<Segment>, AeaError> {
+        let fault = |reason| invalid_segment(header.index, index, reason);
+        let start = index as usize * SEGMENT_HEADER_SIZE;
+        let raw = &header.segment_headers[start..start + SEGMENT_HEADER_SIZE];
+        let decompressed_size = le_u32(&raw[0..4]);
+        let compressed_size = le_u32(&raw[4..8]);
+        if decompressed_size == 0 {
+            if compressed_size != 0 {
+                return Err(fault("has compressed data without output"));
+            }
+            return Ok(None);
+        }
+        if decompressed_size > root.segment_size || compressed_size == 0 {
+            return Err(fault("has invalid sizes"));
+        }
+        if u64::from(compressed_size) > self.source.size().saturating_sub(data_offset) {
+            return Err(fault("extends beyond the encrypted image"));
+        }
+        let mac_start = index as usize * MAC_SIZE;
+        Ok(Some(Segment {
+            input_offset: data_offset,
+            output_offset: 0,
+            compressed_size,
+            decompressed_size,
+            checksum: to_array(&raw[8..]),
+            mac: to_array(&header.segment_macs[mac_start..mac_start + MAC_SIZE]),
+            cluster: header.index,
+            index,
+        }))
+    }
+
+    fn lock_cache(&self) -> MutexGuard<'_, SegmentCache> {
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn decode_segment(&self, slot: u64, segment: &Segment) -> Result<Arc<Vec<u8>>, AeaError> {
+        let mut cache = self.lock_cache();
+        if let Some(decoded) = cache.entries.get(&slot) {
+            return Ok(Arc::clone(decoded));
+        }
+        let decoded = Arc::new(self.decode_uncached(segment)?);
+        if cache.order.len() == AEA_DECODED_SEGMENT_CACHE_COUNT
+            && let Some(evicted) = cache.order.pop_front()
+        {
+            cache.entries.remove(&evicted);
+        }
+        cache.entries.insert(slot, Arc::clone(&decoded));
+        cache.order.push_back(slot);
+        Ok(decoded)
+    }
+
+    fn decode_uncached(&self, segment: &Segment) -> Result<Vec<u8>, AeaError> {
+        let length = segment.compressed_size as usize;
+        let mut data = read_vec(&self.source, segment.input_offset, length, "AEA segment")?;
+        let info = indexed_info(AEA_SEGMENT_KEY_INFO, segment.index);
+        let key = derive_header_key(&cluster_key(&self.main_key, segment.cluster)?, &info)?;
+        if !verify_mac(&key.mac, &data, &[], &segment.mac) {
+            return Err(AeaError::SegmentAuthentication {
+                cluster: segment.cluster,
+                segment: segment.index,
+            });
+        }
+        apply_ctr(&mut data, &key);
+        let decoded = if segment.compressed_size == segment.decompressed_size {
+            data
+        } else {
+            decompress_segment(&data, segment)?
+        };
+        if Sha256::digest(&decoded).as_slice() != segment.checksum {
+            return Err(AeaError::Checksum {
+                cluster: segment.cluster,
+                segment: segment.index,
+            });
+        }
+        Ok(decoded)
+    }
+
+    fn read_plain(&self, buf: &mut [u8], offset: u64) -> Result<(), AeaError> {
+        let mut written = 0;
+        while written < buf.len() {
+            let position = offset + written as u64;
+            let slot = position / u64::from(self.segment_size);
+            let segment = usize::try_from(slot)
+                .ok()
+                .and_then(|slot| self.segments.get(slot).copied().flatten())
+                .ok_or(AeaError::MissingSegment(slot))?;
+            let decoded = self.decode_segment(slot, &segment)?;
+            let inside = usize::try_from(position - segment.output_offset).unwrap_or(usize::MAX);
+            let available = decoded.get(inside..).filter(|rest| !rest.is_empty());
+            let available = available.ok_or(AeaError::MissingSegment(slot))?;
+            let count = available.len().min(buf.len() - written);
+            buf[written..written + count].copy_from_slice(&available[..count]);
+            written += count;
+        }
+        Ok(())
+    }
+}
+
+impl<R: ReadAt> ReadAt for AeaReader<R> {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+        if buf.is_empty() || offset >= self.size {
+            return Ok(0);
+        }
+        let wanted = clamp_len(buf.len(), self.size - offset);
+        self.read_plain(&mut buf[..wanted], offset)
+            .map_err(io::Error::other)?;
+        Ok(wanted)
+    }
+
+    fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+struct ClusterHeader {
+    index: u32,
+    segment_headers: Vec<u8>,
+    next_mac: Mac32,
+    segment_macs: Vec<u8>,
+}
+
+fn invalid_segment(cluster: u32, segment: u32, reason: &'static str) -> AeaError {
+    AeaError::InvalidSegment {
+        cluster,
+        segment,
+        reason,
+    }
+}
+
+fn read_prologue(source: &impl ReadAt) -> Result<Prologue, AeaError> {
+    let header: [u8; AEA_HEADER_SIZE] = read_array(source, 0, "AEA header")?;
+    let magic: [u8; 4] = to_array(&header[..4]);
+    if &magic != AEA_MAGIC {
+        return Err(AeaError::InvalidMagic(magic));
+    }
+    let profile_and_scrypt = le_u32(&header[4..8]);
+    if profile_and_scrypt & AEA_PROFILE_MASK != AEA_SYMMETRIC_PROFILE {
+        return Err(AeaError::UnsupportedProfile(
+            profile_and_scrypt & AEA_PROFILE_MASK,
+        ));
+    }
+    let auth_length = le_u32(&header[8..12]);
+    if auth_length > MAX_AEA_AUTH_DATA_SIZE {
+        return Err(AeaError::AuthDataTooLarge(auth_length));
+    }
+    let auth_data = read_vec(
+        source,
+        AEA_HEADER_SIZE as u64,
+        auth_length as usize,
+        "AEA authentication data",
+    )?;
+    let metadata = parse_metadata(&auth_data)?;
+    Ok(Prologue {
+        profile_and_scrypt,
+        auth_data,
+        metadata,
+    })
+}
+
+fn read_root(
+    source: &impl ReadAt,
+    offset: u64,
+    main_key: &[u8],
+    prologue: &Prologue,
+) -> Result<(RootHeader, Mac32), AeaError> {
+    let encrypted: [u8; ENCRYPTED_ROOT_SIZE] =
+        read_array(source, offset, "encrypted AEA root header")?;
+    let (mac, rest) = encrypted.split_at(MAC_SIZE);
+    let (data, cluster_mac) = rest.split_at(ROOT_DATA_SIZE);
+    let root_key = derive_header_key(main_key, AEA_ROOT_KEY_INFO)?;
+    if !verify_mac(
+        &root_key.mac,
+        data,
+        &[cluster_mac, &prologue.auth_data],
+        mac,
+    ) {
+        return Err(AeaError::RootAuthentication);
+    }
+    let mut plain: [u8; ROOT_DATA_SIZE] = to_array(data);
+    apply_ctr(&mut plain, &root_key);
+    let root = RootHeader {
+        file_size: le_u64(&plain[0..8]),
+        encrypted_size: le_u64(&plain[8..16]),
+        segment_size: le_u32(&plain[16..20]),
+        segments_per_cluster: le_u32(&plain[20..24]),
+        compression: plain[24],
+        checksum: plain[25],
+    };
+    validate_root(&root, source.size())?;
+    Ok((root, to_array(cluster_mac)))
+}
+
+fn validate_root(root: &RootHeader, source_size: u64) -> Result<(), AeaError> {
+    if root.file_size == 0 || root.file_size > u64::MAX >> 1 {
+        return Err(AeaError::InvalidOutputSize(root.file_size));
+    }
+    if root.encrypted_size != source_size {
+        return Err(AeaError::EncryptedSizeMismatch {
+            actual: root.encrypted_size,
+            expected: source_size,
+        });
+    }
+    if root.segment_size == 0 || root.segments_per_cluster == 0 {
+        return Err(AeaError::InvalidSegmentLayout);
+    }
+    if root.compression != AEA_LZFSE_COMPRESSION || root.checksum != AEA_SHA256_CHECKSUM {
+        return Err(AeaError::UnsupportedEncoding {
+            compression: char::from(root.compression),
+            checksum: root.checksum,
+        });
+    }
+    Ok(())
+}
+
+/// Parses length-prefixed `key\0value` AEA authentication-data records.
+///
+/// # Errors
+/// Rejects records whose length leaves the block or that lack a key.
+pub fn parse_metadata(data: &[u8]) -> Result<AeaMetadata, AeaError> {
+    let mut metadata = AeaMetadata::new();
+    let mut rest = data;
+    while !rest.is_empty() {
+        let Some((length, body)) = rest.split_first_chunk::<METADATA_LENGTH_SIZE>() else {
+            return Err(AeaError::InvalidMetadataRecordLength(0));
+        };
+        let length = u32::from_le_bytes(*length);
+        let record_length = (length as usize).wrapping_sub(METADATA_LENGTH_SIZE);
+        if length < MIN_METADATA_RECORD_LENGTH || record_length > body.len() {
+            return Err(AeaError::InvalidMetadataRecordLength(length));
+        }
+        let (record, remaining) = body.split_at(record_length);
+        let separator = record.iter().position(|&byte| byte == 0);
+        let Some(separator) = separator.filter(|&separator| separator > 0) else {
+            return Err(AeaError::InvalidMetadataRecord);
+        };
+        metadata.insert(
+            record[..separator].to_vec(),
+            record[separator + 1..].to_vec(),
+        );
+        rest = remaining;
+    }
+    Ok(metadata)
+}
+
+/// Validates the FCS key URL in `metadata` and downloads its PEM body.
+///
+/// # Errors
+/// Fails when the URL is missing or not Apple's WKMS host, or on HTTP errors.
+pub fn fetch_fcs_key(http: &BlockingHttp, metadata: &AeaMetadata) -> Result<Vec<u8>, AeaError> {
+    let raw = metadata
+        .get(FCS_KEY_URL_FIELD)
+        .ok_or(AeaError::MissingMetadata("an FCS key URL"))?;
+    let text = String::from_utf8_lossy(raw).into_owned();
+    let url = reqwest::Url::parse(&text).map_err(|_| AeaError::InvalidKeyUrl(text.clone()))?;
+    if url.scheme() != FCS_KEY_SCHEME || url.host_str() != Some(FCS_KEY_HOST) {
+        return Err(AeaError::InvalidKeyUrl(text));
+    }
+    Ok(http.get_limited(url.as_str(), MAX_FCS_KEY_SIZE, "download Apple FCS key")?)
+}
+
+#[derive(Deserialize)]
+struct FcsResponse {
+    #[serde(rename = "enc-request", default)]
+    enc_request: String,
+    #[serde(rename = "wrapped-key", default)]
+    wrapped_key: String,
+}
+
+/// HPKE-unwraps the archive symmetric key with the FCS private key `pem`.
+///
+/// # Errors
+/// Fails on a malformed key or FCS response, or when HPKE `Open` fails.
+pub fn unwrap_symmetric_key(pem: &[u8], metadata: &AeaMetadata) -> Result<Vec<u8>, AeaError> {
+    let pem =
+        std::str::from_utf8(pem).map_err(|error| AeaError::InvalidPrivateKey(error.to_string()))?;
+    let secret = SecretKey::from_pkcs8_pem(pem)
+        .map_err(|error| AeaError::InvalidPrivateKey(error.to_string()))?;
+    let response = metadata
+        .get(FCS_RESPONSE_FIELD)
+        .ok_or(AeaError::MissingMetadata("an FCS response"))?;
+    let response: FcsResponse = serde_json::from_slice(response)
+        .map_err(|error| AeaError::InvalidFcsResponse(error.to_string()))?;
+    let encapsulation = decode_base64(&response.enc_request)?;
+    let wrapped_key = decode_base64(&response.wrapped_key)?;
+    hpke_open(&secret, &encapsulation, &wrapped_key)
+}
+
+fn decode_base64(value: &str) -> Result<Vec<u8>, AeaError> {
+    BASE64
+        .decode(value)
+        .map_err(|error| AeaError::InvalidFcsResponse(error.to_string()))
+}
+
+/// RFC 9180 base-mode single-shot `Open` with empty info and AAD.
+fn hpke_open(
+    secret: &SecretKey,
+    encapsulation: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, AeaError> {
+    let shared_secret = dhkem_decapsulate(secret, encapsulation)?;
+    let psk_id_hash = labeled_extract(HPKE_SUITE, b"", b"psk_id_hash", b"");
+    let info_hash = labeled_extract(HPKE_SUITE, b"", b"info_hash", b"");
+    let context = [&[HPKE_MODE_BASE][..], &psk_id_hash, &info_hash].concat();
+    let secret = labeled_extract(HPKE_SUITE, &shared_secret, b"secret", b"");
+    let key = labeled_expand(HPKE_SUITE, &secret, b"key", &context, HPKE_KEY_SIZE)?;
+    let nonce = labeled_expand(
+        HPKE_SUITE,
+        &secret,
+        b"base_nonce",
+        &context,
+        HPKE_NONCE_SIZE,
+    )?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| AeaError::Hpke("invalid AEAD key"))?;
+    cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext)
+        .map_err(|_| AeaError::Hpke("message authentication failed"))
+}
+
+fn dhkem_decapsulate(secret: &SecretKey, encapsulation: &[u8]) -> Result<Vec<u8>, AeaError> {
+    if encapsulation.len() != P256_UNCOMPRESSED_POINT_SIZE
+        || encapsulation[0] != SEC1_UNCOMPRESSED_TAG
+    {
+        return Err(AeaError::Hpke("invalid encapsulated key"));
+    }
+    let ephemeral = PublicKey::from_sec1_bytes(encapsulation)
+        .map_err(|_| AeaError::Hpke("invalid encapsulated key"))?;
+    let shared = secret.diffie_hellman(&ephemeral);
+    let recipient = secret.public_key().to_sec1_bytes();
+    let kem_context = [encapsulation, &recipient].concat();
+    let prk = labeled_extract(
+        HPKE_KEM_SUITE,
+        b"",
+        b"eae_prk",
+        shared.raw_secret_bytes().as_slice(),
+    );
+    labeled_expand(
+        HPKE_KEM_SUITE,
+        &prk,
+        b"shared_secret",
+        &kem_context,
+        HPKE_SECRET_SIZE,
+    )
+}
+
+fn labeled_extract(suite: &[u8], salt: &[u8], label: &[u8], ikm: &[u8]) -> Vec<u8> {
+    let labeled = [HPKE_VERSION_LABEL, suite, label, ikm].concat();
+    Hkdf::<Sha256>::extract(Some(salt), &labeled).0.to_vec()
+}
+
+fn labeled_expand(
+    suite: &[u8],
+    prk: &[u8],
+    label: &[u8],
+    info: &[u8],
+    length: usize,
+) -> Result<Vec<u8>, AeaError> {
+    let encoded_length = u16::try_from(length).map_err(|_| AeaError::KeyDerivation(length))?;
+    let labeled = [
+        &encoded_length.to_be_bytes()[..],
+        HPKE_VERSION_LABEL,
+        suite,
+        label,
+        info,
+    ]
+    .concat();
+    let hkdf = Hkdf::<Sha256>::from_prk(prk).map_err(|_| AeaError::KeyDerivation(length))?;
+    let mut output = vec![0; length];
+    hkdf.expand(&labeled, &mut output)
+        .map_err(|_| AeaError::KeyDerivation(length))?;
+    Ok(output)
+}
+
+fn derive_key(
+    key: &[u8],
+    salt: Option<&[u8]>,
+    info: &[u8],
+    length: usize,
+) -> Result<Vec<u8>, AeaError> {
+    let mut output = vec![0; length];
+    Hkdf::<Sha256>::new(salt, key)
+        .expand(info, &mut output)
+        .map_err(|_| AeaError::KeyDerivation(length))?;
+    Ok(output)
+}
+
+fn derive_header_key(key: &[u8], info: &[u8]) -> Result<HeaderKey, AeaError> {
+    let derived = derive_key(key, None, info, HEADER_KEY_SIZE)?;
+    Ok(HeaderKey {
+        mac: to_array(&derived[..MAC_SIZE]),
+        key: to_array(&derived[MAC_SIZE..MAC_SIZE + 32]),
+        iv: to_array(&derived[MAC_SIZE + 32..]),
+    })
+}
+
+fn cluster_key(main_key: &[u8], cluster: u32) -> Result<Vec<u8>, AeaError> {
+    derive_key(
+        main_key,
+        None,
+        &indexed_info(AEA_CLUSTER_KEY_INFO, cluster),
+        main_key.len(),
+    )
+}
+
+fn indexed_info(label: &[u8], index: u32) -> Vec<u8> {
+    [label, &index.to_le_bytes()].concat()
+}
+
+/// HMAC-SHA256 over `salt || data || le64(len(salt))`, compared in constant time.
+fn verify_mac(key: &[u8], data: &[u8], salt: &[&[u8]], expected: &[u8]) -> bool {
+    let Ok(mut mac) = <HmacSha256 as Mac>::new_from_slice(key) else {
+        return false;
+    };
+    let mut salt_length = 0_u64;
+    for part in salt {
+        mac.update(part);
+        salt_length += part.len() as u64;
+    }
+    mac.update(data);
+    mac.update(&salt_length.to_le_bytes());
+    mac.verify_slice(expected).is_ok()
+}
+
+fn apply_ctr(data: &mut [u8], key: &HeaderKey) {
+    Aes256Ctr::new(&key.key.into(), &key.iv.into()).apply_keystream(data);
+}
+
+fn decompress_segment(compressed: &[u8], segment: &Segment) -> Result<Vec<u8>, AeaError> {
+    let failure = |reason: String| AeaError::Decompress {
+        cluster: segment.cluster,
+        segment: segment.index,
+        reason,
+    };
+    let mut decoded = Vec::with_capacity(segment.decompressed_size as usize);
+    lzfse_rust::decode_bytes(compressed, &mut decoded)
+        .map_err(|error| failure(error.to_string()))?;
+    if decoded.len() != segment.decompressed_size as usize {
+        return Err(failure(format!(
+            "produced {} bytes, expected {}",
+            decoded.len(),
+            segment.decompressed_size
+        )));
+    }
+    Ok(decoded)
+}
+
+fn read_vec(
+    source: &impl ReadAt,
+    offset: u64,
+    length: usize,
+    context: &'static str,
+) -> Result<Vec<u8>, AeaError> {
+    let mut data = vec![0; length];
+    source
+        .read_exact_at(&mut data, offset)
+        .map_err(|source| AeaError::Io { context, source })?;
+    Ok(data)
+}
+
+fn read_array<const N: usize>(
+    source: &impl ReadAt,
+    offset: u64,
+    context: &'static str,
+) -> Result<[u8; N], AeaError> {
+    let mut data = [0; N];
+    source
+        .read_exact_at(&mut data, offset)
+        .map_err(|source| AeaError::Io { context, source })?;
+    Ok(data)
+}
+
+fn to_array<const N: usize>(slice: &[u8]) -> [u8; N] {
+    let mut array = [0; N];
+    array.copy_from_slice(&slice[..N]);
+    array
+}
+
+fn le_u32(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes(to_array(bytes))
+}
+
+fn le_u64(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(to_array(bytes))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/apple_sap/A/",
+                $name
+            ))
+        };
+    }
+
+    fn json(data: &[u8]) -> Value {
+        serde_json::from_slice(data).unwrap()
+    }
+
+    fn hex_field(value: &Value, key: &str) -> Vec<u8> {
+        hex::decode(value[key].as_str().unwrap()).unwrap()
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        hex::encode(Sha256::digest(data))
+    }
+
+    fn record(key: &str, value: &str) -> Vec<u8> {
+        let body = [key.as_bytes(), &[0], value.as_bytes()].concat();
+        let length = u32::try_from(body.len() + METADATA_LENGTH_SIZE).unwrap();
+        [&length.to_le_bytes()[..], &body].concat()
+    }
+
+    #[test]
+    fn parses_bounded_metadata_records() {
+        let data = [record("first", "value"), record("second", "another")].concat();
+        let metadata = parse_metadata(&data).unwrap();
+        assert_eq!(metadata[&b"first".to_vec()], b"value");
+        assert_eq!(metadata[&b"second".to_vec()], b"another");
+    }
+
+    #[test]
+    fn rejects_metadata_record_outside_block() {
+        let mut data = vec![0; 8];
+        data[..4].copy_from_slice(&32_u32.to_le_bytes());
+        assert!(matches!(
+            parse_metadata(&data),
+            Err(AeaError::InvalidMetadataRecordLength(32))
+        ));
+        assert!(matches!(
+            parse_metadata(&record("", "value")),
+            Err(AeaError::InvalidMetadataRecord)
+        ));
+    }
+
+    fn synthetic() -> AeaReader<Vec<u8>> {
+        AeaReader::open_with_fcs_key(
+            fixture!("synthetic.aea").to_vec(),
+            fixture!("synthetic_fcs_key.pem"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn hpke_unwraps_go_sealed_key() {
+        let golden = json(fixture!("synthetic.json"));
+        let prologue = read_prologue(&fixture!("synthetic.aea").to_vec()).unwrap();
+        let key =
+            unwrap_symmetric_key(fixture!("synthetic_fcs_key.pem"), &prologue.metadata).unwrap();
+        assert_eq!(key, hex_field(&golden, "symmetric_key"));
+        let secret = SecretKey::from_pkcs8_pem(
+            std::str::from_utf8(fixture!("synthetic_fcs_key.pem")).unwrap(),
+        )
+        .unwrap();
+        let mut tampered = hex_field(&golden, "hpke_ct");
+        tampered[0] ^= 1;
+        assert!(matches!(
+            hpke_open(&secret, &hex_field(&golden, "hpke_enc"), &tampered),
+            Err(AeaError::Hpke(_))
+        ));
+    }
+
+    #[test]
+    fn decrypts_synthetic_archive_like_go() {
+        let golden = json(fixture!("synthetic.json"));
+        let reader = synthetic();
+        assert_eq!(reader.main_key, hex_field(&golden, "main_key"));
+        assert_eq!(reader.size(), golden["output_size"].as_u64().unwrap());
+        assert_eq!(
+            reader.segments.len() as u64,
+            golden["segments"].as_u64().unwrap()
+        );
+        let mut output = vec![0; fixture!("synthetic.out").len() + 7];
+        assert_eq!(
+            reader.read_at(&mut output, 0).unwrap(),
+            fixture!("synthetic.out").len()
+        );
+        assert_eq!(
+            &output[..fixture!("synthetic.out").len()],
+            fixture!("synthetic.out")
+        );
+        assert_eq!(
+            sha256_hex(fixture!("synthetic.out")),
+            golden["output_sha256"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn serves_random_access_reads_across_segments() {
+        let reader = synthetic();
+        let expected = fixture!("synthetic.out");
+        for (offset, length) in [(4090_usize, 20_usize), (12_000, 5000), (19_470, 10)] {
+            let mut data = vec![0; length];
+            reader.read_exact_at(&mut data, offset as u64).unwrap();
+            assert_eq!(data, expected[offset..offset + length]);
+        }
+        let mut tail = [0; 32];
+        assert_eq!(
+            reader
+                .read_at(&mut tail, expected.len() as u64 - 4)
+                .unwrap(),
+            4
+        );
+        assert_eq!(reader.read_at(&mut tail, expected.len() as u64).unwrap(), 0);
+    }
+
+    #[test]
+    fn rejects_tampered_root_cluster_and_segment() {
+        let original = fixture!("synthetic.aea").to_vec();
+        let pem = fixture!("synthetic_fcs_key.pem");
+        let root_offset = original.len() - 1;
+        let mut tampered = original.clone();
+        tampered[root_offset] ^= 1;
+        let reader = AeaReader::open_with_fcs_key(tampered, pem).unwrap();
+        let mut data = vec![0; 32];
+        let error = reader.read_at(&mut data, reader.size() - 32).unwrap_err();
+        assert!(
+            error.to_string().contains("failed authentication"),
+            "{error}"
+        );
+        let salt_end = AEA_HEADER_SIZE + le_u32(&original[8..12]) as usize + MAIN_SALT_SIZE;
+        for (offset, expected) in [
+            (salt_end + MAC_SIZE, "root header"),
+            (salt_end + ENCRYPTED_ROOT_SIZE, "cluster 0"),
+        ] {
+            let mut tampered = original.clone();
+            tampered[offset] ^= 1;
+            let error = AeaReader::open_with_fcs_key(tampered, pem).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_symmetric_key_and_magic() {
+        let source = fixture!("synthetic.aea").to_vec();
+        assert!(matches!(
+            AeaReader::open_with_symmetric_key(source.clone(), &[0; 32]),
+            Err(AeaError::RootAuthentication)
+        ));
+        let mut bad = source;
+        bad[0] = b'X';
+        assert!(matches!(
+            AeaReader::open_with_symmetric_key(bad, &[0; 32]),
+            Err(AeaError::InvalidMagic(_))
+        ));
+    }
+
+    /// Offline replay of the byte ranges Go's reader touched in the real
+    /// macOS 27.0.1 `SystemOS` cryptex (see `real.json`).
+    struct SparseImage {
+        ranges: Vec<(u64, Vec<u8>)>,
+        size: u64,
+    }
+
+    impl SparseImage {
+        fn load(data: &[u8], size: u64) -> Self {
+            let mut ranges = Vec::new();
+            let mut rest = data;
+            while !rest.is_empty() {
+                let offset = u64::from_le_bytes(rest[..8].try_into().unwrap());
+                let length = u32::from_le_bytes(rest[8..12].try_into().unwrap()) as usize;
+                ranges.push((offset, rest[12..12 + length].to_vec()));
+                rest = &rest[12 + length..];
+            }
+            Self { ranges, size }
+        }
+    }
+
+    impl ReadAt for SparseImage {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+            let end = offset + buf.len() as u64;
+            let (start, data) = self
+                .ranges
+                .iter()
+                .find(|(start, data)| *start <= offset && end <= start + data.len() as u64)
+                .ok_or_else(|| io::Error::other(format!("range {offset}-{end} not recorded")))?;
+            let inside = usize::try_from(offset - start).unwrap();
+            buf.copy_from_slice(&data[inside..inside + buf.len()]);
+            Ok(buf.len())
+        }
+
+        fn size(&self) -> u64 {
+            self.size
+        }
+    }
+
+    #[test]
+    fn decrypts_recorded_real_systemos_cryptex_like_go() {
+        let golden = json(fixture!("real.json"));
+        let image = SparseImage::load(
+            fixture!("systemos_sparse.bin"),
+            golden["source_size"].as_u64().unwrap(),
+        );
+        let prologue = read_prologue(&image).unwrap();
+        let key = unwrap_symmetric_key(fixture!("wkms_fcs_key.pem"), &prologue.metadata).unwrap();
+        assert_eq!(key, hex_field(&golden, "symmetric_key"));
+        let reader = AeaReader::open_with_fcs_key(image, fixture!("wkms_fcs_key.pem")).unwrap();
+        assert_eq!(reader.main_key, hex_field(&golden, "main_key"));
+        assert_eq!(reader.size(), golden["output_size"].as_u64().unwrap());
+        assert_eq!(
+            u64::from(reader.segment_size()),
+            golden["segment_size"].as_u64().unwrap()
+        );
+        assert_eq!(
+            reader.segments.len() as u64,
+            golden["segments"].as_u64().unwrap()
+        );
+        assert_real_reads(&reader, &golden);
+    }
+
+    pub(crate) fn assert_real_reads(reader: &impl ReadAt, golden: &Value) {
+        let segment = golden["segment_size"].as_u64().unwrap();
+        let mut first = vec![0; usize::try_from(segment).unwrap()];
+        reader.read_exact_at(&mut first, 0).unwrap();
+        assert_eq!(
+            sha256_hex(&first),
+            golden["segment0_plain_sha256"].as_str().unwrap()
+        );
+        let last = &golden["last_segment"];
+        let mut tail = vec![0; usize::try_from(last["decompressed"].as_u64().unwrap()).unwrap()];
+        reader
+            .read_exact_at(&mut tail, last["output_offset"].as_u64().unwrap())
+            .unwrap();
+        assert_eq!(
+            sha256_hex(&tail),
+            golden["last_segment_plain_sha256"].as_str().unwrap()
+        );
+        let mut straddle = vec![0; 4096];
+        reader.read_exact_at(&mut straddle, segment - 2048).unwrap();
+        assert_eq!(
+            sha256_hex(&straddle),
+            golden["straddle_sha256"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn lzfse_decoder_accepts_short_entropy_streams() {
+        let mut decoded = Vec::new();
+        lzfse_rust::decode_bytes(fixture!("lzfse_short.bin"), &mut decoded).unwrap();
+        assert_eq!(decoded, vec![0; 65536]);
+    }
+}
