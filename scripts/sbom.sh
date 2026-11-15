@@ -8,6 +8,7 @@ tmp="$(mktemp -d)"
 raw="$root/.sbom-raw.json"
 go_bom="$tmp/modern-anisette.cdx.json"
 go_binary="$tmp/ipakeep-anisette-helper"
+go_toolchain="go$(awk '$1 == "go" { print $2; exit }' "$root/tools/modern-anisette/go.mod")"
 go_hashes="$tmp/go-module-hashes.tsv"
 go_licenses="$tmp/go-module-licenses.tsv"
 go_graph="$tmp/go-module-graph.txt"
@@ -31,11 +32,11 @@ mkdir -p "$(dirname "$out")"
 
 (
     cd "$root/tools/modern-anisette"
-    GOOS=darwin GOARCH=arm64 go build -mod=readonly -trimpath -ldflags='-s -w' -o "$go_binary" .
-    go run github.com/google/go-licenses/v2@v2.0.1 report ./...
+    GOTOOLCHAIN="$go_toolchain" GOOS=darwin GOARCH=arm64 go build -mod=readonly -trimpath -ldflags='-s -w' -o "$go_binary" .
+    GOTOOLCHAIN="$go_toolchain" go run github.com/google/go-licenses/v2@v2.0.1 report ./...
 ) | awk -F, 'NF >= 3 { print $1 "\t" $3 "\t" $2 }' > "$go_licenses"
 syft "file:$go_binary" -o cyclonedx-json > "$go_bom"
-(cd "$root/tools/modern-anisette" && go mod graph) > "$go_graph"
+(cd "$root/tools/modern-anisette" && GOTOOLCHAIN="$go_toolchain" go mod graph) > "$go_graph"
 
 # Go's h1 checksums are base64-encoded SHA-256 hashes of module file trees.
 : > "$go_hashes"
@@ -120,6 +121,10 @@ jq \
         go_license_choices(.name) as $choices
         | if ($choices | length) > 0 then .licenses = $choices else . end
       else . end;
+    def normalize_go_stdlib_version:
+      if .name == "stdlib" and ((.version // "") | startswith("go")) then
+        .version |= sub("^go"; "")
+      else . end;
     def go_components:
       ($go_bom[0].components // [])
       | group_by(.purl // ."bom-ref")
@@ -151,7 +156,7 @@ jq \
       else . end;
 
     scrub_paths
-    | .components += (go_components | map(select(.name != "/go.mod") | add_go_hash | add_go_licenses))
+    | .components += (go_components | map(select(.name != "/go.mod") | add_go_hash | add_go_licenses | normalize_go_stdlib_version))
     | (go_component_ref(go_root_name; go_root_version)) as $go_root_ref
     | .dependencies[0].dependsOn = ((.dependencies[0].dependsOn // []) + [$go_root_ref] | map(select(. != null)) | unique)
     | .dependencies += go_graph_edges
