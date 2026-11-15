@@ -102,6 +102,9 @@ jobs:
   sbom-quality:
     name: SBOM quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
 
@@ -113,4 +116,28 @@ jobs:
           version: 0.4.0
           command: quality
           profile: comprehensive
-          args: sbom/ipakeep.cdx.json --metrics --recommendations
+          args: sbom/ipakeep.cdx.json --metrics --recommendations --min-score 85
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        name: Sign SBOM with Sigstore keyless
+        run: cosign sign-blob --yes --bundle sbom/ipakeep.cdx.json.sigstore.json sbom/ipakeep.cdx.json
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        name: Verify SBOM signature
+        run: >-
+          cosign verify-blob sbom/ipakeep.cdx.json
+          --bundle sbom/ipakeep.cdx.json.sigstore.json
+          --certificate-identity-regexp '^https://github.com/seifreed/ipakeep/.github/workflows/ci.yml@refs/heads/main$'
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-sbom
+          path: |
+            sbom/ipakeep.cdx.json
+            sbom/ipakeep.cdx.json.sigstore.json
+          if-no-files-found: error

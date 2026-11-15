@@ -1,19 +1,19 @@
 {
   "bomFormat": "CycloneDX",
-  "specVersion": "1.5",
+  "specVersion": "1.7",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T08:26:49.000000000Z",
+    "timestamp": "2026-11-15T08:47:14.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
         "name": "cargo-cyclonedx",
-        "version": "0.5.9"
+        "version": "0.5.10"
       }
     ],
     "component": {
       "type": "application",
-      "bom-ref": "path+file:///Users/seifreed/tools/DEVEL/ipakeep#0.1.1",
+      "bom-ref": "pkg:cargo/ipakeep@0.1.1",
       "name": "ipakeep",
       "version": "0.1.1",
       "description": "Download IPA files from the Apple App Store",
@@ -23,8 +23,16 @@
           "expression": "MIT"
         }
       ],
-      "purl": "pkg:cargo/ipakeep@0.1.1?download_url=file://.",
+      "purl": "pkg:cargo/ipakeep@0.1.1",
       "externalReferences": [
+        {
+          "type": "advisories",
+          "url": "https://github.com/seifreed/ipakeep/security/advisories/new"
+        },
+        {
+          "type": "security-contact",
+          "url": "mailto:mriverolopez@gmail.com"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/seifreed/ipakeep"
@@ -33,21 +41,21 @@
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///Users/seifreed/tools/DEVEL/ipakeep#0.1.1 bin-target-0",
+          "bom-ref": "pkg:cargo/ipakeep@0.1.1#src/lib.rs",
           "name": "ipakeep",
           "version": "0.1.1",
-          "purl": "pkg:cargo/ipakeep@0.1.1?download_url=file://.#src/lib.rs",
+          "licenses": [
+            {
+              "expression": "MIT"
+            }
+          ],
+          "purl": "pkg:cargo/ipakeep@0.1.1#src/lib.rs",
           "supplier": {
             "name": "seifreed",
             "url": [
               "https://github.com/seifreed"
             ]
           },
-          "licenses": [
-            {
-              "expression": "MIT"
-            }
-          ],
           "hashes": [
             {
               "alg": "SHA-256",
@@ -70,21 +78,21 @@
         },
         {
           "type": "application",
-          "bom-ref": "path+file:///Users/seifreed/tools/DEVEL/ipakeep#0.1.1 bin-target-1",
+          "bom-ref": "pkg:cargo/ipakeep@0.1.1#src/main.rs",
           "name": "ipakeep",
           "version": "0.1.1",
-          "purl": "pkg:cargo/ipakeep@0.1.1?download_url=file://.#src/main.rs",
+          "licenses": [
+            {
+              "expression": "MIT"
+            }
+          ],
+          "purl": "pkg:cargo/ipakeep@0.1.1#src/main.rs",
           "supplier": {
             "name": "seifreed",
             "url": [
               "https://github.com/seifreed"
             ]
           },
-          "licenses": [
-            {
-              "expression": "MIT"
-            }
-          ],
           "hashes": [
             {
               "alg": "SHA-256",
@@ -135,7 +143,8 @@
     ],
     "authors": [
       {
-        "name": "seifreed"
+        "name": "seifreed",
+        "email": "mriverolopez@gmail.com"
       }
     ],
     "supplier": {
@@ -163,11 +172,11 @@
       "hashes": [
         {
           "alg": "SHA-1",
-          "content": "ef8fa8eb2ca0a5c87d1cd8ed4c5059a206ea20d9"
+          "content": "943b1a5d88c54c83ec39411150c7e32284a4e230"
         },
         {
           "alg": "SHA-256",
-          "content": "fba43ca944c6326ce5b5de01ca0b69ccb83ddb9df09d042ae6810d5922cecb86"
+          "content": "e6e62312132cad31e75adca38c9ad2a1cd23557442b9faa4c28d74f4fc6d151b"
         }
       ],
       "supplier": {
@@ -177,7 +186,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#adler2@2.0.1",
-      "author": "Jonas Schievink <jonasschievink@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>",
       "name": "adler2",
       "version": "2.0.1",
       "description": "A simple clean-room implementation of the Adler-32 checksum",
@@ -204,6 +212,16 @@
           "url": "https://github.com/oyvindln/adler2"
         }
       ],
+      "authors": [
+        {
+          "name": "Jonas Schievink",
+          "email": "jonasschievink@gmail.com"
+        },
+        {
+          "name": "oyvindln",
+          "email": "oyvindln@users.noreply.github.com"
+        }
+      ],
       "supplier": {
         "name": "oyvindln"
       },
@@ -218,7 +236,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#aead@0.5.2",
-      "author": "RustCrypto Developers",
       "name": "aead",
       "version": "0.5.2",
       "description": "Traits for Authenticated Encryption with Associated Data (AEAD) algorithms, such as AES-GCM as ChaCha20Poly1305, which provide a high-level API ",
@@ -245,6 +262,11 @@
           "url": "https://github.com/RustCrypto/traits"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -259,7 +281,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
-      "author": "RustCrypto Developers",
       "name": "aes-gcm",
       "version": "0.10.3",
       "description": "Pure Rust implementation of the AES-GCM (Galois/Counter Mode) Authenticated Encryption with Associated Data (AEAD) Cipher with optional architecture-specific hardware acceleration ",
@@ -286,6 +307,11 @@
           "url": "https://github.com/RustCrypto/AEADs"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -300,7 +326,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
-      "author": "RustCrypto Developers",
       "name": "aes",
       "version": "0.8.4",
       "description": "Pure Rust implementation of the Advanced Encryption Standard (a.k.a. Rijndael)",
@@ -327,6 +352,11 @@
           "url": "https://github.com/RustCrypto/block-ciphers"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -341,7 +371,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#aho-corasick@1.1.4",
-      "author": "Andrew Gallant <jamslam@gmail.com>",
       "name": "aho-corasick",
       "version": "1.1.4",
       "description": "Fast multiple substring searching.",
@@ -366,6 +395,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/BurntSushi/aho-corasick"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com"
         }
       ],
       "supplier": {
@@ -562,7 +597,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#anyhow@1.0.104",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "anyhow",
       "version": "1.0.104",
       "description": "Flexible concrete Error type built on std::error::Error",
@@ -589,6 +623,12 @@
           "url": "https://github.com/dtolnay/anyhow"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -603,7 +643,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "async-trait",
       "version": "0.1.89",
       "description": "Type erasure for async trait methods",
@@ -630,6 +669,12 @@
           "url": "https://github.com/dtolnay/async-trait"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -644,7 +689,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#atomic-waker@1.1.2",
-      "author": "Stjepan Glavina <stjepang@gmail.com>, Contributors to futures-rs",
       "name": "atomic-waker",
       "version": "1.1.2",
       "description": "A synchronization primitive for task wakeup",
@@ -667,6 +711,15 @@
           "url": "https://github.com/smol-rs/atomic-waker"
         }
       ],
+      "authors": [
+        {
+          "name": "Stjepan Glavina",
+          "email": "stjepang@gmail.com"
+        },
+        {
+          "name": "Contributors to futures-rs"
+        }
+      ],
       "supplier": {
         "name": "smol-rs"
       },
@@ -681,7 +734,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#autocfg@1.5.1",
-      "author": "Josh Stone <cuviper@gmail.com>",
       "name": "autocfg",
       "version": "1.5.1",
       "description": "Automatic cfg for Rust compiler features",
@@ -708,6 +760,12 @@
           "url": "https://github.com/cuviper/autocfg"
         }
       ],
+      "authors": [
+        {
+          "name": "Josh Stone",
+          "email": "cuviper@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "cuviper"
       },
@@ -722,7 +780,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
-      "author": "Marshall Pierce <marshall@mpierce.org>",
       "name": "base64",
       "version": "0.22.1",
       "description": "encodes and decodes base64 as bytes or utf8",
@@ -749,6 +806,12 @@
           "url": "https://github.com/marshallpierce/rust-base64"
         }
       ],
+      "authors": [
+        {
+          "name": "Marshall Pierce",
+          "email": "marshall@mpierce.org"
+        }
+      ],
       "supplier": {
         "name": "marshallpierce"
       },
@@ -763,7 +826,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#base64@0.23.1",
-      "author": "Marshall Pierce <marshall@mpierce.org>",
       "name": "base64",
       "version": "0.23.1",
       "description": "encodes and decodes base64 as bytes or utf8",
@@ -790,6 +852,12 @@
           "url": "https://github.com/marshallpierce/rust-base64"
         }
       ],
+      "authors": [
+        {
+          "name": "Marshall Pierce",
+          "email": "marshall@mpierce.org"
+        }
+      ],
       "supplier": {
         "name": "marshallpierce"
       },
@@ -804,7 +872,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bitflags@2.12.1",
-      "author": "The Rust Project Developers",
       "name": "bitflags",
       "version": "2.12.1",
       "description": "A macro to generate structures which behave like bitflags. ",
@@ -835,6 +902,11 @@
           "url": "https://github.com/bitflags/bitflags"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "bitflags"
       },
@@ -849,7 +921,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#block-buffer@0.10.4",
-      "author": "RustCrypto Developers",
       "name": "block-buffer",
       "version": "0.10.4",
       "description": "Buffer type for block processing of data",
@@ -876,6 +947,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -890,7 +966,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#block-padding@0.3.3",
-      "author": "RustCrypto Developers",
       "name": "block-padding",
       "version": "0.3.3",
       "description": "Padding and unpadding of messages divided into blocks.",
@@ -917,6 +992,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -931,7 +1011,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bumpalo@3.20.3",
-      "author": "Nick Fitzgerald <fitzgen@gmail.com>",
       "name": "bumpalo",
       "version": "3.20.3",
       "description": "A fast bump allocation arena for Rust.",
@@ -958,6 +1037,12 @@
           "url": "https://github.com/fitzgen/bumpalo"
         }
       ],
+      "authors": [
+        {
+          "name": "Nick Fitzgerald",
+          "email": "fitzgen@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "fitzgen"
       },
@@ -972,7 +1057,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#bytes@1.11.1",
-      "author": "Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com>",
       "name": "bytes",
       "version": "1.11.1",
       "description": "Types and traits for working with bytes",
@@ -995,6 +1079,16 @@
           "url": "https://github.com/tokio-rs/bytes"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -1009,7 +1103,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cbc@0.1.2",
-      "author": "RustCrypto Developers",
       "name": "cbc",
       "version": "0.1.2",
       "description": "Cipher Block Chaining (CBC) block cipher mode of operation",
@@ -1036,6 +1129,11 @@
           "url": "https://github.com/RustCrypto/block-modes"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1050,7 +1148,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cc@1.2.63",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "cc",
       "version": "1.2.63",
       "description": "A build-time dependency for Cargo build scripts to assist in invoking the native C compiler to compile native C code into a static archive to be linked into Rust code. ",
@@ -1081,6 +1178,12 @@
           "url": "https://github.com/rust-lang/cc-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -1095,7 +1198,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cfg-if@1.0.4",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "cfg-if",
       "version": "1.0.4",
       "description": "A macro to ergonomically define an item depending on a large number of #[cfg] parameters. Structured like an if-else chain, the first matching branch is the item that gets emitted. ",
@@ -1118,6 +1220,12 @@
           "url": "https://github.com/rust-lang/cfg-if"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -1132,7 +1240,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cfg_aliases@0.2.1",
-      "author": "Zicklag <zicklag@katharostech.com>",
       "name": "cfg_aliases",
       "version": "0.2.1",
       "description": "A tiny utility to help save you a lot of effort with long winded `#[cfg()]` checks.",
@@ -1163,6 +1270,12 @@
           "url": "https://github.com/katharostech/cfg_aliases"
         }
       ],
+      "authors": [
+        {
+          "name": "Zicklag",
+          "email": "zicklag@katharostech.com"
+        }
+      ],
       "supplier": {
         "name": "katharostech"
       },
@@ -1177,7 +1290,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#chacha20@0.10.2",
-      "author": "RustCrypto Developers",
       "name": "chacha20",
       "version": "0.10.2",
       "description": "The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits from the RustCrypto `cipher` crate, with optional architecture-specific hardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12, XChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional rand_core-compatible RNGs based on those ciphers. ",
@@ -1204,6 +1316,11 @@
           "url": "https://github.com/RustCrypto/stream-ciphers"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1218,7 +1335,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cipher@0.4.4",
-      "author": "RustCrypto Developers",
       "name": "cipher",
       "version": "0.4.4",
       "description": "Traits for describing block ciphers and stream ciphers",
@@ -1243,6 +1359,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/traits"
+        }
+      ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
         }
       ],
       "supplier": {
@@ -1483,7 +1604,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#constant_time_eq@0.6.1",
-      "author": "Cesar Eduardo Barros <cesarb@cesarb.eti.br>",
       "name": "constant_time_eq",
       "version": "0.6.1",
       "description": "Compares two equal-sized byte strings in constant time.",
@@ -1510,6 +1630,12 @@
           "url": "https://codeberg.org/cesarb/constant_time_eq"
         }
       ],
+      "authors": [
+        {
+          "name": "Cesar Eduardo Barros",
+          "email": "cesarb@cesarb.eti.br"
+        }
+      ],
       "supplier": {
         "name": "codeberg.org"
       },
@@ -1524,7 +1650,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cookie@0.18.1",
-      "author": "Sergio Benitez <sb@sergio.bz>, Alex Crichton <alex@alexcrichton.com>",
       "name": "cookie",
       "version": "0.18.1",
       "description": "HTTP cookie parsing and cookie jar management. Supports signed and private (encrypted, authenticated) jars. ",
@@ -1551,6 +1676,16 @@
           "url": "https://github.com/SergioBenitez/cookie-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Sergio Benitez",
+          "email": "sb@sergio.bz"
+        },
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "SergioBenitez"
       },
@@ -1565,7 +1700,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cookie_store@0.22.1",
-      "author": "Patrick Fernie <patrick.fernie@gmail.com>",
       "name": "cookie_store",
       "version": "0.22.1",
       "description": "Implementation of Cookie storage and retrieval",
@@ -1592,6 +1726,12 @@
           "url": "https://github.com/pfernie/cookie_store"
         }
       ],
+      "authors": [
+        {
+          "name": "Patrick Fernie",
+          "email": "patrick.fernie@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "pfernie"
       },
@@ -1606,7 +1746,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#core-foundation-sys@0.8.7",
-      "author": "The Servo Project Developers",
       "name": "core-foundation-sys",
       "version": "0.8.7",
       "description": "Bindings to Core Foundation for macOS",
@@ -1633,6 +1772,11 @@
           "url": "https://github.com/servo/core-foundation-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "The Servo Project Developers"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -1647,7 +1791,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#core-foundation@0.10.1",
-      "author": "The Servo Project Developers",
       "name": "core-foundation",
       "version": "0.10.1",
       "description": "Bindings to Core Foundation for macOS",
@@ -1670,6 +1813,11 @@
           "url": "https://github.com/servo/core-foundation-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "The Servo Project Developers"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -1684,7 +1832,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.2.17",
-      "author": "RustCrypto Developers",
       "name": "cpufeatures",
       "version": "0.2.17",
       "description": "Lightweight runtime CPU feature detection for aarch64, loongarch64, and x86/x86_64 targets,  with no_std support and support for mobile targets including Android and iOS ",
@@ -1711,6 +1858,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1725,7 +1877,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#cpufeatures@0.3.0",
-      "author": "RustCrypto Developers",
       "name": "cpufeatures",
       "version": "0.3.0",
       "description": "Lightweight runtime CPU feature detection for aarch64, loongarch64, and x86/x86_64 targets, with no_std support and support for mobile targets including Android and iOS ",
@@ -1752,6 +1903,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1766,7 +1922,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#crc32fast@1.5.0",
-      "author": "Sam Rijs <srijs@airpost.net>, Alex Crichton <alex@alexcrichton.com>",
       "name": "crc32fast",
       "version": "1.5.0",
       "description": "Fast, SIMD-accelerated CRC32 (IEEE) checksum computation",
@@ -1789,6 +1944,16 @@
           "url": "https://github.com/srijs/rust-crc32fast"
         }
       ],
+      "authors": [
+        {
+          "name": "Sam Rijs",
+          "email": "srijs@airpost.net"
+        },
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "srijs"
       },
@@ -1803,7 +1968,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#crypto-common@0.1.7",
-      "author": "RustCrypto Developers",
       "name": "crypto-common",
       "version": "0.1.7",
       "description": "Common cryptographic traits",
@@ -1830,6 +1994,11 @@
           "url": "https://github.com/RustCrypto/traits"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1844,7 +2013,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#ctr@0.9.2",
-      "author": "RustCrypto Developers",
       "name": "ctr",
       "version": "0.9.2",
       "description": "CTR block modes of operation",
@@ -1871,6 +2039,11 @@
           "url": "https://github.com/RustCrypto/block-modes"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -1885,7 +2058,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#deranged@0.5.8",
-      "author": "Jacob Pratt <jacob@jhpratt.dev>",
       "name": "deranged",
       "version": "0.5.8",
       "description": "Ranged integers",
@@ -1906,6 +2078,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/jhpratt/deranged"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "jacob@jhpratt.dev"
         }
       ],
       "supplier": {
@@ -1966,7 +2144,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#digest@0.10.7",
-      "author": "RustCrypto Developers",
       "name": "digest",
       "version": "0.10.7",
       "description": "Traits for cryptographic hash functions and message authentication codes",
@@ -1993,6 +2170,11 @@
           "url": "https://github.com/RustCrypto/traits"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -2007,7 +2189,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs-sys@0.5.0",
-      "author": "Simon Ochsenreither <simon@ochsenreither.de>",
       "name": "dirs-sys",
       "version": "0.5.0",
       "description": "System-level helper functions for the dirs and directories crates.",
@@ -2030,6 +2211,12 @@
           "url": "https://github.com/dirs-dev/dirs-sys-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Simon Ochsenreither",
+          "email": "simon@ochsenreither.de"
+        }
+      ],
       "supplier": {
         "name": "dirs-dev"
       },
@@ -2044,7 +2231,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#dirs@6.0.0",
-      "author": "Simon Ochsenreither <simon@ochsenreither.de>",
       "name": "dirs",
       "version": "6.0.0",
       "description": "A tiny low-level library that provides platform-specific standard locations of directories for config, cache and other data on Linux, Windows, macOS and Redox by leveraging the mechanisms defined by the XDG base/user directory specifications on Linux, the Known Folder API on Windows, and the Standard Directory guidelines on macOS.",
@@ -2067,6 +2253,12 @@
           "url": "https://github.com/soc/dirs-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Simon Ochsenreither",
+          "email": "simon@ochsenreither.de"
+        }
+      ],
       "supplier": {
         "name": "soc"
       },
@@ -2081,7 +2273,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#displaydoc@0.2.6",
-      "author": "Jane Lusby <jlusby@yaah.dev>",
       "name": "displaydoc",
       "version": "0.2.6",
       "description": "A derive macro for implementing the display Trait via a doc comment and string interpolation ",
@@ -2112,6 +2303,12 @@
           "url": "https://github.com/yaahc/displaydoc"
         }
       ],
+      "authors": [
+        {
+          "name": "Jane Lusby",
+          "email": "jlusby@yaah.dev"
+        }
+      ],
       "supplier": {
         "name": "yaahc"
       },
@@ -2126,7 +2323,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#document-features@0.2.12",
-      "author": "Slint Developers <info@slint.dev>",
       "name": "document-features",
       "version": "0.2.12",
       "description": "Extract documentation for the feature flags from comments in Cargo.toml",
@@ -2153,6 +2349,12 @@
           "url": "https://github.com/slint-ui/document-features"
         }
       ],
+      "authors": [
+        {
+          "name": "Slint Developers",
+          "email": "info@slint.dev"
+        }
+      ],
       "supplier": {
         "name": "slint-ui"
       },
@@ -2167,7 +2369,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#encode_unicode@1.0.0",
-      "author": "Torbjørn Birch Moltu <t.b.moltu@lyse.net>",
       "name": "encode_unicode",
       "version": "1.0.0",
       "description": "UTF-8 and UTF-16 character types, iterators and related methods for char, u8 and u16. ",
@@ -2192,6 +2393,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/tormol/encode_unicode"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Torbjørn Birch Moltu",
+          "email": "t.b.moltu@lyse.net"
         }
       ],
       "supplier": {
@@ -2244,7 +2451,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#errno@0.3.14",
-      "author": "Chris Wong <lambda.fairy@gmail.com>, Dan Gohman <dev@sunfishcode.online>",
       "name": "errno",
       "version": "0.3.14",
       "description": "Cross-platform interface to the `errno` variable.",
@@ -2271,6 +2477,16 @@
           "url": "https://github.com/lambda-fairy/rust-errno"
         }
       ],
+      "authors": [
+        {
+          "name": "Chris Wong",
+          "email": "lambda.fairy@gmail.com"
+        },
+        {
+          "name": "Dan Gohman",
+          "email": "dev@sunfishcode.online"
+        }
+      ],
       "supplier": {
         "name": "lambda-fairy"
       },
@@ -2285,7 +2501,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#fastrand@2.4.1",
-      "author": "Stjepan Glavina <stjepang@gmail.com>",
       "name": "fastrand",
       "version": "2.4.1",
       "description": "A simple and fast random number generator",
@@ -2306,6 +2521,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/smol-rs/fastrand"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Stjepan Glavina",
+          "email": "stjepang@gmail.com"
         }
       ],
       "supplier": {
@@ -2362,7 +2583,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#flate2@1.1.9",
-      "author": "Alex Crichton <alex@alexcrichton.com>, Josh Triplett <josh@joshtriplett.org>",
       "name": "flate2",
       "version": "1.1.9",
       "description": "DEFLATE compression and decompression exposed as Read/BufRead/Write streams. Supports miniz_oxide and multiple zlib implementations. Supports zlib, gzip, and raw deflate streams. ",
@@ -2393,6 +2613,16 @@
           "url": "https://github.com/rust-lang/flate2-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        },
+        {
+          "name": "Josh Triplett",
+          "email": "josh@joshtriplett.org"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -2407,7 +2637,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#fnv@1.0.7",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "fnv",
       "version": "1.0.7",
       "description": "Fowler–Noll–Vo hash function",
@@ -2434,6 +2663,12 @@
           "url": "https://github.com/servo/rust-fnv"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -2448,7 +2683,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#foldhash@0.1.5",
-      "author": "Orson Peters <orsonpeters@gmail.com>",
       "name": "foldhash",
       "version": "0.1.5",
       "description": "A fast, non-cryptographic, minimally DoS-resistant hashing algorithm.",
@@ -2471,6 +2705,12 @@
           "url": "https://github.com/orlp/foldhash"
         }
       ],
+      "authors": [
+        {
+          "name": "Orson Peters",
+          "email": "orsonpeters@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "orlp"
       },
@@ -2485,7 +2725,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types-shared@0.1.1",
-      "author": "Steven Fackler <sfackler@gmail.com>",
       "name": "foreign-types-shared",
       "version": "0.1.1",
       "description": "An internal crate used by foreign-types",
@@ -2508,6 +2747,12 @@
           "url": "https://github.com/sfackler/foreign-types"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "sfackler"
       },
@@ -2522,7 +2767,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#foreign-types@0.3.2",
-      "author": "Steven Fackler <sfackler@gmail.com>",
       "name": "foreign-types",
       "version": "0.3.2",
       "description": "A framework for Rust wrappers over C APIs",
@@ -2545,6 +2789,12 @@
           "url": "https://github.com/sfackler/foreign-types"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "sfackler"
       },
@@ -2559,7 +2809,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#form_urlencoded@1.2.2",
-      "author": "The rust-url developers",
       "name": "form_urlencoded",
       "version": "1.2.2",
       "description": "Parser and serializer for the application/x-www-form-urlencoded syntax, as used by HTML forms.",
@@ -2580,6 +2829,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/servo/rust-url"
+        }
+      ],
+      "authors": [
+        {
+          "name": "The rust-url developers"
         }
       ],
       "supplier": {
@@ -2876,7 +3130,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#generic-array@0.14.7",
-      "author": "Bartłomiej Kamiński <fizyk20@gmail.com>, Aaron Trent <novacrazy@gmail.com>",
       "name": "generic-array",
       "version": "0.14.7",
       "description": "Generic types implementing functionality of arrays",
@@ -2903,6 +3156,16 @@
           "url": "https://github.com/fizyk20/generic-array.git"
         }
       ],
+      "authors": [
+        {
+          "name": "Bartłomiej Kamiński",
+          "email": "fizyk20@gmail.com"
+        },
+        {
+          "name": "Aaron Trent",
+          "email": "novacrazy@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "fizyk20"
       },
@@ -2917,7 +3180,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.2.17",
-      "author": "The Rand Project Developers",
       "name": "getrandom",
       "version": "0.2.17",
       "description": "A small cross-platform library for retrieving random data from system source",
@@ -2944,6 +3206,11 @@
           "url": "https://github.com/rust-random/getrandom"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rand Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-random"
       },
@@ -2958,7 +3225,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.4.2",
-      "author": "The Rand Project Developers",
       "name": "getrandom",
       "version": "0.4.2",
       "description": "A small cross-platform library for retrieving random data from system source",
@@ -2985,6 +3251,11 @@
           "url": "https://github.com/rust-random/getrandom"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rand Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-random"
       },
@@ -2999,7 +3270,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#ghash@0.5.1",
-      "author": "RustCrypto Developers",
       "name": "ghash",
       "version": "0.5.1",
       "description": "Universal hash over GF(2^128) useful for constructing a Message Authentication Code (MAC), as in the AES-GCM authenticated encryption cipher. ",
@@ -3026,6 +3296,11 @@
           "url": "https://github.com/RustCrypto/universal-hashes"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -3040,7 +3315,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#h2@0.4.20",
-      "author": "Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com>",
       "name": "h2",
       "version": "0.4.20",
       "description": "An HTTP/2 client and server",
@@ -3067,6 +3341,16 @@
           "url": "https://github.com/hyperium/h2"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3081,7 +3365,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hashbrown@0.15.5",
-      "author": "Amanieu d'Antras <amanieu@gmail.com>",
       "name": "hashbrown",
       "version": "0.15.5",
       "description": "A Rust port of Google's SwissTable hash map",
@@ -3102,6 +3385,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/rust-lang/hashbrown"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Amanieu d'Antras",
+          "email": "amanieu@gmail.com"
         }
       ],
       "supplier": {
@@ -3190,7 +3479,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hex@0.4.3",
-      "author": "KokaKiwi <kokakiwi@kokakiwi.net>",
       "name": "hex",
       "version": "0.4.3",
       "description": "Encoding and decoding data into/from hexadecimal representation.",
@@ -3217,6 +3505,12 @@
           "url": "https://github.com/KokaKiwi/rust-hex"
         }
       ],
+      "authors": [
+        {
+          "name": "KokaKiwi",
+          "email": "kokakiwi@kokakiwi.net"
+        }
+      ],
       "supplier": {
         "name": "KokaKiwi"
       },
@@ -3231,7 +3525,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hmac@0.12.1",
-      "author": "RustCrypto Developers",
       "name": "hmac",
       "version": "0.12.1",
       "description": "Generic implementation of Hash-based Message Authentication Code (HMAC)",
@@ -3258,6 +3551,11 @@
           "url": "https://github.com/RustCrypto/MACs"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -3272,7 +3570,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.3",
-      "author": "Carl Lerche <me@carllerche.com>, Lucio Franco <luciofranco14@gmail.com>, Sean McArthur <sean@seanmonstar.com>",
       "name": "http-body-util",
       "version": "0.1.3",
       "description": "Combinators and adapters for HTTP request or response bodies. ",
@@ -3299,6 +3596,20 @@
           "url": "https://github.com/hyperium/http-body"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Lucio Franco",
+          "email": "luciofranco14@gmail.com"
+        },
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3313,7 +3624,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#http-body@1.0.1",
-      "author": "Carl Lerche <me@carllerche.com>, Lucio Franco <luciofranco14@gmail.com>, Sean McArthur <sean@seanmonstar.com>",
       "name": "http-body",
       "version": "1.0.1",
       "description": "Trait representing an asynchronous, streaming, HTTP request or response body. ",
@@ -3340,6 +3650,20 @@
           "url": "https://github.com/hyperium/http-body"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Lucio Franco",
+          "email": "luciofranco14@gmail.com"
+        },
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3354,7 +3678,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#http@1.4.1",
-      "author": "Alex Crichton <alex@alexcrichton.com>, Carl Lerche <me@carllerche.com>, Sean McArthur <sean@seanmonstar.com>",
       "name": "http",
       "version": "1.4.1",
       "description": "A set of types for representing HTTP requests and responses. ",
@@ -3381,6 +3704,20 @@
           "url": "https://github.com/hyperium/http"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        },
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3395,7 +3732,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#httparse@1.10.1",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "httparse",
       "version": "1.10.1",
       "description": "A tiny, safe, speedy, zero-copy HTTP/1.x parser.",
@@ -3422,6 +3758,12 @@
           "url": "https://github.com/seanmonstar/httparse"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "seanmonstar"
       },
@@ -3436,7 +3778,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#httpdate@1.0.3",
-      "author": "Pyfisch <pyfisch@posteo.org>",
       "name": "httpdate",
       "version": "1.0.3",
       "description": "HTTP date parsing and formatting",
@@ -3459,6 +3800,12 @@
           "url": "https://github.com/pyfisch/httpdate"
         }
       ],
+      "authors": [
+        {
+          "name": "Pyfisch",
+          "email": "pyfisch@posteo.org"
+        }
+      ],
       "supplier": {
         "name": "pyfisch"
       },
@@ -3473,7 +3820,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hyper-tls@0.6.0",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "hyper-tls",
       "version": "0.6.0",
       "description": "Default TLS implementation for use with hyper",
@@ -3504,6 +3850,12 @@
           "url": "https://github.com/hyperium/hyper-tls"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3518,7 +3870,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hyper-util@0.1.20",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "hyper-util",
       "version": "0.1.20",
       "description": "hyper utilities",
@@ -3549,6 +3900,12 @@
           "url": "https://github.com/hyperium/hyper-util"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3563,7 +3920,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#hyper@1.10.1",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "hyper",
       "version": "1.10.1",
       "description": "A protective and efficient HTTP library for all.",
@@ -3594,6 +3950,12 @@
           "url": "https://github.com/hyperium/hyper"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "hyperium"
       },
@@ -3608,7 +3970,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_collections@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_collections",
       "version": "2.2.0",
       "description": "Collection of API for use in ICU libraries.",
@@ -3635,6 +3996,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3649,7 +4015,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_locale_core@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_locale_core",
       "version": "2.2.0",
       "description": "API for managing Unicode Language and Locale Identifiers",
@@ -3676,6 +4041,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3690,7 +4060,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_normalizer@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_normalizer",
       "version": "2.2.0",
       "description": "API for normalizing text into Unicode Normalization Forms",
@@ -3717,6 +4086,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3731,7 +4105,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_normalizer_data@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_normalizer_data",
       "version": "2.2.0",
       "description": "Data for the icu_normalizer crate",
@@ -3758,6 +4131,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3772,7 +4150,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_properties@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_properties",
       "version": "2.2.0",
       "description": "Definitions for Unicode properties",
@@ -3799,6 +4176,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3813,7 +4195,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_properties_data@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_properties_data",
       "version": "2.2.0",
       "description": "Data for the icu_properties crate",
@@ -3840,6 +4221,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3854,7 +4240,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#icu_provider@2.2.0",
-      "author": "The ICU4X Project Developers",
       "name": "icu_provider",
       "version": "2.2.0",
       "description": "Trait and struct definitions for the ICU data provider",
@@ -3881,6 +4266,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -3895,7 +4285,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#id-arena@2.3.0",
-      "author": "Nick Fitzgerald <fitzgen@gmail.com>, Aleksey Kladov <aleksey.kladov@gmail.com>",
       "name": "id-arena",
       "version": "2.3.0",
       "description": "A simple, id-based arena.",
@@ -3922,6 +4311,16 @@
           "url": "https://github.com/fitzgen/id-arena"
         }
       ],
+      "authors": [
+        {
+          "name": "Nick Fitzgerald",
+          "email": "fitzgen@gmail.com"
+        },
+        {
+          "name": "Aleksey Kladov",
+          "email": "aleksey.kladov@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "fitzgen"
       },
@@ -3936,7 +4335,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#idna@1.1.0",
-      "author": "The rust-url developers",
       "name": "idna",
       "version": "1.1.0",
       "description": "IDNA (Internationalizing Domain Names in Applications) and Punycode.",
@@ -3959,6 +4357,11 @@
           "url": "https://github.com/servo/rust-url/"
         }
       ],
+      "authors": [
+        {
+          "name": "The rust-url developers"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -3973,7 +4376,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#idna_adapter@1.2.2",
-      "author": "The rust-url developers",
       "name": "idna_adapter",
       "version": "1.2.2",
       "description": "Back end adapter for idna",
@@ -4002,6 +4404,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/hsivonen/idna_adapter"
+        }
+      ],
+      "authors": [
+        {
+          "name": "The rust-url developers"
         }
       ],
       "supplier": {
@@ -4058,7 +4465,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#inout@0.1.4",
-      "author": "RustCrypto Developers",
       "name": "inout",
       "version": "0.1.4",
       "description": "Custom reference types for code generic over in-place and buffer-to-buffer modes of operation.",
@@ -4085,6 +4491,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -4099,7 +4510,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#ipnet@2.12.0",
-      "author": "Kris Price <kris@krisprice.nz>",
       "name": "ipnet",
       "version": "2.12.0",
       "description": "Provides types and useful methods for working with IPv4 and IPv6 network addresses, commonly called IP prefixes. The new `IpNet`, `Ipv4Net`, and `Ipv6Net` types build on the existing `IpAddr`, `Ipv4Addr`, and `Ipv6Addr` types already provided in Rust's standard library and align to their design to stay consistent. The module also provides useful traits that extend `Ipv4Addr` and `Ipv6Addr` with methods for `Add`, `Sub`, `BitAnd`, and `BitOr` operations. The module only uses stable feature so it is guaranteed to compile using the stable toolchain.",
@@ -4124,6 +4534,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/krisprice/ipnet"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Kris Price",
+          "email": "kris@krisprice.nz"
         }
       ],
       "supplier": {
@@ -4176,7 +4592,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#itoa@1.0.18",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "itoa",
       "version": "1.0.18",
       "description": "Fast integer primitive to string conversion",
@@ -4203,6 +4618,12 @@
           "url": "https://github.com/dtolnay/itoa"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -4217,7 +4638,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#js-sys@0.3.99",
-      "author": "The wasm-bindgen Developers",
       "name": "js-sys",
       "version": "0.3.99",
       "description": "Bindings for all JS global objects and functions in all JS environments like Node.js and browsers, built on `#[wasm_bindgen]` using the `wasm-bindgen` crate. ",
@@ -4248,6 +4668,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -4262,7 +4687,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#lazy_static@1.5.0",
-      "author": "Marvin Löbel <loebel.marvin@gmail.com>",
       "name": "lazy_static",
       "version": "1.5.0",
       "description": "A macro for declaring lazily evaluated statics in Rust.",
@@ -4289,6 +4713,12 @@
           "url": "https://github.com/rust-lang-nursery/lazy-static.rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Marvin Löbel",
+          "email": "loebel.marvin@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang-nursery"
       },
@@ -4303,7 +4733,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#leb128fmt@0.1.0",
-      "author": "Bryant Luk <code@bryantluk.com>",
       "name": "leb128fmt",
       "version": "0.1.0",
       "description": "A library to encode and decode LEB128 compressed integers.",
@@ -4330,6 +4759,12 @@
           "url": "https://github.com/bluk/leb128fmt"
         }
       ],
+      "authors": [
+        {
+          "name": "Bryant Luk",
+          "email": "code@bryantluk.com"
+        }
+      ],
       "supplier": {
         "name": "bluk"
       },
@@ -4344,7 +4779,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#libc@0.2.186",
-      "author": "The Rust Project Developers",
       "name": "libc",
       "version": "0.2.186",
       "description": "Raw FFI bindings to platform libraries like libc.",
@@ -4367,6 +4801,11 @@
           "url": "https://github.com/rust-lang/libc"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -4381,7 +4820,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#libredox@0.1.17",
-      "author": "4lDO2 <4lDO2@protonmail.com>",
       "name": "libredox",
       "version": "0.1.17",
       "description": "Redox stable ABI",
@@ -4404,6 +4842,12 @@
           "url": "https://gitlab.redox-os.org/redox-os/libredox.git"
         }
       ],
+      "authors": [
+        {
+          "name": "4lDO2",
+          "email": "4lDO2@protonmail.com"
+        }
+      ],
       "supplier": {
         "name": "gitlab.redox-os.org"
       },
@@ -4418,7 +4862,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#linux-raw-sys@0.12.1",
-      "author": "Dan Gohman <dev@sunfishcode.online>",
       "name": "linux-raw-sys",
       "version": "0.12.1",
       "description": "Generated bindings for Linux's userspace API",
@@ -4445,6 +4888,12 @@
           "url": "https://github.com/sunfishcode/linux-raw-sys"
         }
       ],
+      "authors": [
+        {
+          "name": "Dan Gohman",
+          "email": "dev@sunfishcode.online"
+        }
+      ],
       "supplier": {
         "name": "sunfishcode"
       },
@@ -4459,7 +4908,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#litemap@0.8.2",
-      "author": "The ICU4X Project Developers",
       "name": "litemap",
       "version": "0.8.2",
       "description": "A key-value Map implementation based on a flat, sorted Vec.",
@@ -4486,6 +4934,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -4500,7 +4953,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#litrs@1.0.0",
-      "author": "Lukas Kalbertodt <lukas.kalbertodt@gmail.com>",
       "name": "litrs",
       "version": "1.0.0",
       "description": "Parse and inspect Rust literals (i.e. tokens in the Rust programming language representing fixed values). Particularly useful for proc macros, but can also be used outside of a proc-macro context. ",
@@ -4527,6 +4979,12 @@
           "url": "https://github.com/LukasKalbertodt/litrs"
         }
       ],
+      "authors": [
+        {
+          "name": "Lukas Kalbertodt",
+          "email": "lukas.kalbertodt@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "LukasKalbertodt"
       },
@@ -4541,7 +4999,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#log@0.4.31",
-      "author": "The Rust Project Developers",
       "name": "log",
       "version": "0.4.31",
       "description": "A lightweight logging facade for Rust ",
@@ -4568,6 +5025,11 @@
           "url": "https://github.com/rust-lang/log"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -4582,7 +5044,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#mac_address@1.1.8",
-      "author": "rep-nop <repnop@outlook.com>",
       "name": "mac_address",
       "version": "1.1.8",
       "description": "Cross-platform retrieval of a network interface MAC address.",
@@ -4605,6 +5066,12 @@
           "url": "https://github.com/rep-nop/mac_address"
         }
       ],
+      "authors": [
+        {
+          "name": "rep-nop",
+          "email": "repnop@outlook.com"
+        }
+      ],
       "supplier": {
         "name": "rep-nop"
       },
@@ -4619,7 +5086,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#malloc_buf@0.0.6",
-      "author": "Steven Sheldon",
       "name": "malloc_buf",
       "version": "0.0.6",
       "description": "Structs for handling malloc'd memory passed to Rust.",
@@ -4646,6 +5112,11 @@
           "url": "https://github.com/SSheldon/malloc_buf"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Sheldon"
+        }
+      ],
       "supplier": {
         "name": "SSheldon"
       },
@@ -4660,7 +5131,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#matchers@0.2.0",
-      "author": "Eliza Weisman <eliza@buoyant.io>",
       "name": "matchers",
       "version": "0.2.0",
       "description": "Regex matching on character and byte streams. ",
@@ -4691,6 +5161,12 @@
           "url": "https://github.com/hawkw/matchers"
         }
       ],
+      "authors": [
+        {
+          "name": "Eliza Weisman",
+          "email": "eliza@buoyant.io"
+        }
+      ],
       "supplier": {
         "name": "hawkw"
       },
@@ -4705,7 +5181,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#md5@0.8.0",
-      "author": "Ivan Ukhov <ivan.ukhov@gmail.com>, Kamal Ahmad <shibe@openmailbox.org>, Konstantin Stepanov <milezv@gmail.com>, Lukas Kalbertodt <lukas.kalbertodt@gmail.com>, Nathan Musoke <nathan.musoke@gmail.com>, Scott Mabin <scott@mabez.dev>, Tony Arcieri <bascule@gmail.com>, Wim de With <register@dewith.io>, Yosef Dinerstein <yosefdi@gmail.com>",
       "name": "md5",
       "version": "0.8.0",
       "description": "The package provides the MD5 hash function.",
@@ -4736,6 +5211,44 @@
           "url": "https://github.com/stainless-steel/md5"
         }
       ],
+      "authors": [
+        {
+          "name": "Ivan Ukhov",
+          "email": "ivan.ukhov@gmail.com"
+        },
+        {
+          "name": "Kamal Ahmad",
+          "email": "shibe@openmailbox.org"
+        },
+        {
+          "name": "Konstantin Stepanov",
+          "email": "milezv@gmail.com"
+        },
+        {
+          "name": "Lukas Kalbertodt",
+          "email": "lukas.kalbertodt@gmail.com"
+        },
+        {
+          "name": "Nathan Musoke",
+          "email": "nathan.musoke@gmail.com"
+        },
+        {
+          "name": "Scott Mabin",
+          "email": "scott@mabez.dev"
+        },
+        {
+          "name": "Tony Arcieri",
+          "email": "bascule@gmail.com"
+        },
+        {
+          "name": "Wim de With",
+          "email": "register@dewith.io"
+        },
+        {
+          "name": "Yosef Dinerstein",
+          "email": "yosefdi@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "stainless-steel"
       },
@@ -4750,7 +5263,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#memchr@2.8.1",
-      "author": "Andrew Gallant <jamslam@gmail.com>, bluss",
       "name": "memchr",
       "version": "2.8.1",
       "description": "Provides extremely fast (uses SIMD on x86_64, aarch64 and wasm32) routines for 1, 2 or 3 byte search and single substring search. ",
@@ -4781,6 +5293,15 @@
           "url": "https://github.com/BurntSushi/memchr"
         }
       ],
+      "authors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com"
+        },
+        {
+          "name": "bluss"
+        }
+      ],
       "supplier": {
         "name": "BurntSushi"
       },
@@ -4795,7 +5316,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#memoffset@0.9.1",
-      "author": "Gilad Naaman <gilad.naaman@gmail.com>",
       "name": "memoffset",
       "version": "0.9.1",
       "description": "offset_of functionality for Rust structs.",
@@ -4818,6 +5338,12 @@
           "url": "https://github.com/Gilnaa/memoffset"
         }
       ],
+      "authors": [
+        {
+          "name": "Gilad Naaman",
+          "email": "gilad.naaman@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "Gilnaa"
       },
@@ -4832,7 +5358,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#miniz_oxide@0.8.9",
-      "author": "Frommi <daniil.liferenko@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>, Rich Geldreich richgel99@gmail.com",
       "name": "miniz_oxide",
       "version": "0.8.9",
       "description": "DEFLATE compression and decompression library rewritten in Rust based on miniz",
@@ -4863,6 +5388,19 @@
           "url": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide"
         }
       ],
+      "authors": [
+        {
+          "name": "Frommi",
+          "email": "daniil.liferenko@gmail.com"
+        },
+        {
+          "name": "oyvindln",
+          "email": "oyvindln@users.noreply.github.com"
+        },
+        {
+          "name": "Rich Geldreich richgel99@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "Frommi"
       },
@@ -4877,7 +5415,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#mio@1.2.1",
-      "author": "Carl Lerche <me@carllerche.com>, Thomas de Zeeuw <thomasdezeeuw@gmail.com>, Tokio Contributors <team@tokio.rs>",
       "name": "mio",
       "version": "1.2.1",
       "description": "Lightweight non-blocking I/O.",
@@ -4904,6 +5441,20 @@
           "url": "https://github.com/tokio-rs/mio"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        },
+        {
+          "name": "Thomas de Zeeuw",
+          "email": "thomasdezeeuw@gmail.com"
+        },
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -4918,7 +5469,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#native-tls@0.2.18",
-      "author": "Steven Fackler <sfackler@gmail.com>",
       "name": "native-tls",
       "version": "0.2.18",
       "description": "A wrapper over a platform's native TLS implementation",
@@ -4945,6 +5495,12 @@
           "url": "https://github.com/rust-native-tls/rust-native-tls"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-native-tls"
       },
@@ -4959,7 +5515,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#nix@0.29.0",
-      "author": "The nix-rust Project Developers",
       "name": "nix",
       "version": "0.29.0",
       "description": "Rust friendly bindings to *nix APIs",
@@ -4980,6 +5535,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/nix-rust/nix"
+        }
+      ],
+      "authors": [
+        {
+          "name": "The nix-rust Project Developers"
         }
       ],
       "supplier": {
@@ -5032,7 +5592,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#nu-ansi-term@0.50.3",
-      "author": "ogham@bsago.me, Ryan Scheel (Havvy) <ryan.havvy@gmail.com>, Josh Triplett <josh@joshtriplett.org>, The Nushell Project Developers",
       "name": "nu-ansi-term",
       "version": "0.50.3",
       "description": "Library for ANSI terminal colors and styles (bold, underline)",
@@ -5055,6 +5614,22 @@
           "url": "https://github.com/nushell/nu-ansi-term"
         }
       ],
+      "authors": [
+        {
+          "name": "ogham@bsago.me"
+        },
+        {
+          "name": "Ryan Scheel (Havvy)",
+          "email": "ryan.havvy@gmail.com"
+        },
+        {
+          "name": "Josh Triplett",
+          "email": "josh@joshtriplett.org"
+        },
+        {
+          "name": "The Nushell Project Developers"
+        }
+      ],
       "supplier": {
         "name": "nushell"
       },
@@ -5069,7 +5644,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#num-bigint@0.4.6",
-      "author": "The Rust Project Developers",
       "name": "num-bigint",
       "version": "0.4.6",
       "description": "Big integer implementation for Rust",
@@ -5100,6 +5674,11 @@
           "url": "https://github.com/rust-num/num-bigint"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-num"
       },
@@ -5114,7 +5693,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#num-conv@0.2.2",
-      "author": "Jacob Pratt <jacob@jhpratt.dev>",
       "name": "num-conv",
       "version": "0.2.2",
       "description": "`num_conv` is a crate to convert between integer types without using `as` casts. This provides better certainty when refactoring, makes the exact behavior of code more explicit, and allows using turbofish syntax. ",
@@ -5137,6 +5715,12 @@
           "url": "https://github.com/jhpratt/num-conv"
         }
       ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "jacob@jhpratt.dev"
+        }
+      ],
       "supplier": {
         "name": "jhpratt"
       },
@@ -5151,7 +5735,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#num-integer@0.1.46",
-      "author": "The Rust Project Developers",
       "name": "num-integer",
       "version": "0.1.46",
       "description": "Integer traits and functions",
@@ -5182,6 +5765,11 @@
           "url": "https://github.com/rust-num/num-integer"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-num"
       },
@@ -5196,7 +5784,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#num-traits@0.2.19",
-      "author": "The Rust Project Developers",
       "name": "num-traits",
       "version": "0.2.19",
       "description": "Numeric traits for generic mathematics",
@@ -5227,6 +5814,11 @@
           "url": "https://github.com/rust-num/num-traits"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-num"
       },
@@ -5241,7 +5833,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#objc@0.2.7",
-      "author": "Steven Sheldon",
       "name": "objc",
       "version": "0.2.7",
       "description": "Objective-C Runtime bindings and wrapper for Rust.",
@@ -5268,6 +5859,11 @@
           "url": "http://github.com/SSheldon/rust-objc"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Sheldon"
+        }
+      ],
       "supplier": {
         "name": "SSheldon"
       },
@@ -5282,7 +5878,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#once_cell@1.21.4",
-      "author": "Aleksey Kladov <aleksey.kladov@gmail.com>",
       "name": "once_cell",
       "version": "1.21.4",
       "description": "Single assignment cells and lazy values.",
@@ -5307,6 +5902,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/matklad/once_cell"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Aleksey Kladov",
+          "email": "aleksey.kladov@gmail.com"
         }
       ],
       "supplier": {
@@ -5359,7 +5960,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#opaque-debug@0.3.1",
-      "author": "RustCrypto Developers",
       "name": "opaque-debug",
       "version": "0.3.1",
       "description": "Macro for opaque Debug trait implementation",
@@ -5384,6 +5984,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/utils"
+        }
+      ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
         }
       ],
       "supplier": {
@@ -5436,7 +6041,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-probe@0.2.1",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "openssl-probe",
       "version": "0.2.1",
       "description": "A library for helping to find system-wide trust anchor (\"root\") certificate locations based on paths typically used by `openssl`. ",
@@ -5463,6 +6067,12 @@
           "url": "https://github.com/rustls/openssl-probe"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "rustls"
       },
@@ -5477,7 +6087,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl-sys@0.9.116",
-      "author": "Alex Crichton <alex@alexcrichton.com>, Steven Fackler <sfackler@gmail.com>",
       "name": "openssl-sys",
       "version": "0.9.116",
       "description": "FFI bindings to OpenSSL",
@@ -5504,6 +6113,16 @@
           "url": "https://github.com/rust-openssl/rust-openssl"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        },
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-openssl"
       },
@@ -5518,7 +6137,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#openssl@0.10.80",
-      "author": "Steven Fackler <sfackler@gmail.com>",
       "name": "openssl",
       "version": "0.10.80",
       "description": "OpenSSL bindings",
@@ -5541,6 +6159,12 @@
           "url": "https://github.com/rust-openssl/rust-openssl"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-openssl"
       },
@@ -5555,7 +6179,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#option-ext@0.2.0",
-      "author": "Simon Ochsenreither <simon@ochsenreither.de>",
       "name": "option-ext",
       "version": "0.2.0",
       "description": "Extends `Option` with additional operations",
@@ -5586,6 +6209,12 @@
           "url": "https://github.com/soc/option-ext.git"
         }
       ],
+      "authors": [
+        {
+          "name": "Simon Ochsenreither",
+          "email": "simon@ochsenreither.de"
+        }
+      ],
       "supplier": {
         "name": "soc"
       },
@@ -5600,7 +6229,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pbkdf2@0.12.2",
-      "author": "RustCrypto Developers",
       "name": "pbkdf2",
       "version": "0.12.2",
       "description": "Generic implementation of PBKDF2",
@@ -5627,6 +6255,11 @@
           "url": "https://github.com/RustCrypto/password-hashes/tree/master/pbkdf2"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -5641,7 +6274,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#percent-encoding@2.3.2",
-      "author": "The rust-url developers",
       "name": "percent-encoding",
       "version": "2.3.2",
       "description": "Percent encoding and decoding",
@@ -5662,6 +6294,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/servo/rust-url/"
+        }
+      ],
+      "authors": [
+        {
+          "name": "The rust-url developers"
         }
       ],
       "supplier": {
@@ -5714,7 +6351,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#pkg-config@0.3.33",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "pkg-config",
       "version": "0.3.33",
       "description": "A library to run the pkg-config system tool at build time in order to be used in Cargo build scripts. ",
@@ -5741,6 +6377,12 @@
           "url": "https://github.com/rust-lang/pkg-config-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -5755,7 +6397,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#plist@1.10.3",
-      "author": "Ed Barnard <eabarnard@gmail.com>",
       "name": "plist",
       "version": "1.10.3",
       "description": "A rusty plist parser. Supports Serde serialization.",
@@ -5782,6 +6423,12 @@
           "url": "https://github.com/ebarnard/rust-plist/"
         }
       ],
+      "authors": [
+        {
+          "name": "Ed Barnard",
+          "email": "eabarnard@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "ebarnard"
       },
@@ -5796,7 +6443,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#polyval@0.6.2",
-      "author": "RustCrypto Developers",
       "name": "polyval",
       "version": "0.6.2",
       "description": "POLYVAL is a GHASH-like universal hash over GF(2^128) useful for constructing a Message Authentication Code (MAC) ",
@@ -5823,6 +6469,11 @@
           "url": "https://github.com/RustCrypto/universal-hashes"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -5837,7 +6488,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#potential_utf@0.1.5",
-      "author": "The ICU4X Project Developers",
       "name": "potential_utf",
       "version": "0.1.5",
       "description": "Unvalidated string and character types",
@@ -5864,6 +6514,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -5878,7 +6533,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#powerfmt@0.2.0",
-      "author": "Jacob Pratt <jacob@jhpratt.dev>",
       "name": "powerfmt",
       "version": "0.2.0",
       "description": "    `powerfmt` is a library that provides utilities for formatting values. This crate makes it     significantly easier to support filling to a minimum width with alignment, avoid heap     allocation, and avoid repetitive calculations. ",
@@ -5901,6 +6555,12 @@
           "url": "https://github.com/jhpratt/powerfmt"
         }
       ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "jacob@jhpratt.dev"
+        }
+      ],
       "supplier": {
         "name": "jhpratt"
       },
@@ -5915,7 +6575,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#prettyplease@0.2.37",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "prettyplease",
       "version": "0.2.37",
       "description": "A minimal `syn` syntax tree pretty-printer",
@@ -5946,6 +6605,12 @@
           "url": "https://github.com/dtolnay/prettyplease"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -5960,7 +6625,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.106",
-      "author": "David Tolnay <dtolnay@gmail.com>, Alex Crichton <alex@alexcrichton.com>",
       "name": "proc-macro2",
       "version": "1.0.106",
       "description": "A substitute implementation of the compiler's `proc_macro` API to decouple token-based libraries from the procedural macro use case.",
@@ -5987,6 +6651,16 @@
           "url": "https://github.com/dtolnay/proc-macro2"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        },
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -6001,7 +6675,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#psl-types@2.0.11",
-      "author": "rushmorem <rushmore@webenchanter.com>",
       "name": "psl-types",
       "version": "2.0.11",
       "description": "Common types for the public suffix implementation crates",
@@ -6028,6 +6701,12 @@
           "url": "https://github.com/addr-rs/psl-types"
         }
       ],
+      "authors": [
+        {
+          "name": "rushmorem",
+          "email": "rushmore@webenchanter.com"
+        }
+      ],
       "supplier": {
         "name": "addr-rs"
       },
@@ -6042,7 +6721,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#publicsuffix@2.3.0",
-      "author": "rushmorem <rushmore@webenchanter.com>",
       "name": "publicsuffix",
       "version": "2.3.0",
       "description": "Extract root domain and suffix from a domain name",
@@ -6067,6 +6745,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/rushmorem/publicsuffix"
+        }
+      ],
+      "authors": [
+        {
+          "name": "rushmorem",
+          "email": "rushmore@webenchanter.com"
         }
       ],
       "supplier": {
@@ -6123,7 +6807,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "quote",
       "version": "1.0.45",
       "description": "Quasi-quoting macro quote!(...)",
@@ -6148,6 +6831,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/dtolnay/quote"
+        }
+      ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
         }
       ],
       "supplier": {
@@ -6204,7 +6893,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#rand@0.10.1",
-      "author": "The Rand Project Developers, The Rust Project Developers",
       "name": "rand",
       "version": "0.10.1",
       "description": "Random number generators and other randomness functionality. ",
@@ -6235,6 +6923,14 @@
           "url": "https://github.com/rust-random/rand"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rand Project Developers"
+        },
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-random"
       },
@@ -6249,7 +6945,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#rand_core@0.10.1",
-      "author": "The Rand Project Developers",
       "name": "rand_core",
       "version": "0.10.1",
       "description": "Core random number generation traits and tools for implementation.",
@@ -6280,6 +6975,11 @@
           "url": "https://github.com/rust-random/rand_core"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rand Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-random"
       },
@@ -6294,7 +6994,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#rand_core@0.6.4",
-      "author": "The Rand Project Developers, The Rust Project Developers",
       "name": "rand_core",
       "version": "0.6.4",
       "description": "Core random number generator traits and tools for implementation. ",
@@ -6325,6 +7024,14 @@
           "url": "https://github.com/rust-random/rand"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rand Project Developers"
+        },
+        {
+          "name": "The Rust Project Developers"
+        }
+      ],
       "supplier": {
         "name": "rust-random"
       },
@@ -6339,7 +7046,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#redox_users@0.5.2",
-      "author": "Jose Narvaez <goyox86@gmail.com>, Wesley Hershberger <mggmugginsmc@gmail.com>",
       "name": "redox_users",
       "version": "0.5.2",
       "description": "A Rust library to access Redox users and groups functionality",
@@ -6366,6 +7072,16 @@
           "url": "https://gitlab.redox-os.org/redox-os/users"
         }
       ],
+      "authors": [
+        {
+          "name": "Jose Narvaez",
+          "email": "goyox86@gmail.com"
+        },
+        {
+          "name": "Wesley Hershberger",
+          "email": "mggmugginsmc@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "gitlab.redox-os.org"
       },
@@ -6380,7 +7096,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#regex-automata@0.4.14",
-      "author": "The Rust Project Developers, Andrew Gallant <jamslam@gmail.com>",
       "name": "regex-automata",
       "version": "0.4.14",
       "description": "Automata construction and matching using regular expressions.",
@@ -6411,6 +7126,15 @@
           "url": "https://github.com/rust-lang/regex"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        },
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -6425,7 +7149,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#regex-syntax@0.8.10",
-      "author": "The Rust Project Developers, Andrew Gallant <jamslam@gmail.com>",
       "name": "regex-syntax",
       "version": "0.8.10",
       "description": "A regular expression parser.",
@@ -6456,6 +7179,15 @@
           "url": "https://github.com/rust-lang/regex"
         }
       ],
+      "authors": [
+        {
+          "name": "The Rust Project Developers"
+        },
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -6470,7 +7202,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#reqwest@0.13.4",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "reqwest",
       "version": "0.13.4",
       "description": "higher level HTTP client library",
@@ -6497,6 +7228,12 @@
           "url": "https://github.com/seanmonstar/reqwest"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "seanmonstar"
       },
@@ -6511,7 +7248,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#rustix@1.1.6",
-      "author": "Dan Gohman <dev@sunfishcode.online>, Jakub Konka <kubkon@jakubkonka.com>",
       "name": "rustix",
       "version": "1.1.6",
       "description": "Safe Rust bindings to POSIX/Unix/Linux/Winsock-like syscalls",
@@ -6536,6 +7272,16 @@
         {
           "type": "vcs",
           "url": "https://github.com/bytecodealliance/rustix"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Dan Gohman",
+          "email": "dev@sunfishcode.online"
+        },
+        {
+          "name": "Jakub Konka",
+          "email": "kubkon@jakubkonka.com"
         }
       ],
       "supplier": {
@@ -6596,7 +7342,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#rustversion@1.0.22",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "rustversion",
       "version": "1.0.22",
       "description": "Conditional compilation according to rustc compiler version",
@@ -6623,6 +7368,12 @@
           "url": "https://github.com/dtolnay/rustversion"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -6637,7 +7388,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#ryu@1.0.23",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "ryu",
       "version": "1.0.23",
       "description": "Fast floating point to string conversion",
@@ -6664,6 +7414,12 @@
           "url": "https://github.com/dtolnay/ryu"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -6678,7 +7434,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#schannel@0.1.29",
-      "author": "Steven Fackler <sfackler@gmail.com>, Steffen Butzer <steffen.butzer@outlook.com>",
       "name": "schannel",
       "version": "0.1.29",
       "description": "Schannel bindings for rust, allowing SSL/TLS (e.g. https) without openssl",
@@ -6705,6 +7460,16 @@
           "url": "https://github.com/steffengy/schannel-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        },
+        {
+          "name": "Steffen Butzer",
+          "email": "steffen.butzer@outlook.com"
+        }
+      ],
       "supplier": {
         "name": "steffengy"
       },
@@ -6719,7 +7484,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#security-framework-sys@2.17.0",
-      "author": "Steven Fackler <sfackler@gmail.com>, Kornel <kornel@geekhood.net>",
       "name": "security-framework-sys",
       "version": "2.17.0",
       "description": "Apple `Security.framework` low-level FFI bindings",
@@ -6746,6 +7510,16 @@
           "url": "https://github.com/kornelski/rust-security-framework"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        },
+        {
+          "name": "Kornel",
+          "email": "kornel@geekhood.net"
+        }
+      ],
       "supplier": {
         "name": "kornelski"
       },
@@ -6760,7 +7534,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#security-framework@3.7.0",
-      "author": "Steven Fackler <sfackler@gmail.com>, Kornel <kornel@geekhood.net>",
       "name": "security-framework",
       "version": "3.7.0",
       "description": "Security.framework bindings for macOS and iOS",
@@ -6791,6 +7564,16 @@
           "url": "https://github.com/kornelski/rust-security-framework"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Fackler",
+          "email": "sfackler@gmail.com"
+        },
+        {
+          "name": "Kornel",
+          "email": "kornel@geekhood.net"
+        }
+      ],
       "supplier": {
         "name": "kornelski"
       },
@@ -6805,7 +7588,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#semver@1.0.28",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "semver",
       "version": "1.0.28",
       "description": "Parser and evaluator for Cargo's flavor of Semantic Versioning",
@@ -6832,6 +7614,12 @@
           "url": "https://github.com/dtolnay/semver"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -6846,7 +7634,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.228",
-      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
       "name": "serde",
       "version": "1.0.228",
       "description": "A generic serialization/deserialization framework",
@@ -6877,6 +7664,16 @@
           "url": "https://github.com/serde-rs/serde"
         }
       ],
+      "authors": [
+        {
+          "name": "Erick Tryzelaar",
+          "email": "erick.tryzelaar@gmail.com"
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "serde-rs"
       },
@@ -6891,7 +7688,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#serde_core@1.0.228",
-      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
       "name": "serde_core",
       "version": "1.0.228",
       "description": "Serde traits only, with no support for derive -- use the `serde` crate instead",
@@ -6922,6 +7718,16 @@
           "url": "https://github.com/serde-rs/serde"
         }
       ],
+      "authors": [
+        {
+          "name": "Erick Tryzelaar",
+          "email": "erick.tryzelaar@gmail.com"
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "serde-rs"
       },
@@ -6936,7 +7742,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#serde_derive@1.0.228",
-      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
       "name": "serde_derive",
       "version": "1.0.228",
       "description": "Macros 1.1 implementation of #[derive(Serialize, Deserialize)]",
@@ -6967,6 +7772,16 @@
           "url": "https://github.com/serde-rs/serde"
         }
       ],
+      "authors": [
+        {
+          "name": "Erick Tryzelaar",
+          "email": "erick.tryzelaar@gmail.com"
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "serde-rs"
       },
@@ -6981,7 +7796,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.150",
-      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
       "name": "serde_json",
       "version": "1.0.150",
       "description": "A JSON serialization file format",
@@ -7008,6 +7822,16 @@
           "url": "https://github.com/serde-rs/json"
         }
       ],
+      "authors": [
+        {
+          "name": "Erick Tryzelaar",
+          "email": "erick.tryzelaar@gmail.com"
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "serde-rs"
       },
@@ -7022,7 +7846,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#serde_urlencoded@0.7.1",
-      "author": "Anthony Ramine <n.oxyde@gmail.com>",
       "name": "serde_urlencoded",
       "version": "0.7.1",
       "description": "`x-www-form-urlencoded` meets Serde",
@@ -7049,6 +7872,12 @@
           "url": "https://github.com/nox/serde_urlencoded"
         }
       ],
+      "authors": [
+        {
+          "name": "Anthony Ramine",
+          "email": "n.oxyde@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "nox"
       },
@@ -7063,7 +7892,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#sha2@0.10.9",
-      "author": "RustCrypto Developers",
       "name": "sha2",
       "version": "0.10.9",
       "description": "Pure Rust implementation of the SHA-2 hash function family including SHA-224, SHA-256, SHA-384, and SHA-512. ",
@@ -7090,6 +7918,11 @@
           "url": "https://github.com/RustCrypto/hashes"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -7104,7 +7937,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#sharded-slab@0.1.7",
-      "author": "Eliza Weisman <eliza@buoyant.io>",
       "name": "sharded-slab",
       "version": "0.1.7",
       "description": "A lock-free concurrent slab. ",
@@ -7135,6 +7967,12 @@
           "url": "https://github.com/hawkw/sharded-slab"
         }
       ],
+      "authors": [
+        {
+          "name": "Eliza Weisman",
+          "email": "eliza@buoyant.io"
+        }
+      ],
       "supplier": {
         "name": "hawkw"
       },
@@ -7149,7 +7987,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#shell-words@1.1.1",
-      "author": "Tomasz Miąsko <tomasz.miasko@gmail.com>",
       "name": "shell-words",
       "version": "1.1.1",
       "description": "Process command line according to parsing rules of UNIX shell",
@@ -7172,6 +8009,12 @@
           "url": "https://github.com/tmiasko/shell-words"
         }
       ],
+      "authors": [
+        {
+          "name": "Tomasz Miąsko",
+          "email": "tomasz.miasko@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "tmiasko"
       },
@@ -7186,7 +8029,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#shlex@2.0.1",
-      "author": "comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com>",
       "name": "shlex",
       "version": "2.0.1",
       "description": "Split a string into shell words, like Python's shlex.",
@@ -7209,6 +8051,32 @@
           "url": "https://github.com/comex/rust-shlex"
         }
       ],
+      "authors": [
+        {
+          "name": "comex",
+          "email": "comexk@gmail.com"
+        },
+        {
+          "name": "Fenhl",
+          "email": "fenhl@fenhl.net"
+        },
+        {
+          "name": "Adrian Taylor",
+          "email": "adetaylor@chromium.org"
+        },
+        {
+          "name": "Alex Touchet",
+          "email": "alextouchet@outlook.com"
+        },
+        {
+          "name": "Daniel Parks",
+          "email": "dp+git@oxidized.org"
+        },
+        {
+          "name": "Garrett Berg",
+          "email": "googberg@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "comex"
       },
@@ -7223,7 +8091,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#signal-hook-registry@1.4.8",
-      "author": "Michal 'vorner' Vaner <vorner@vorner.cz>, Masaki Hara <ackie.h.gmai@gmail.com>",
       "name": "signal-hook-registry",
       "version": "1.4.8",
       "description": "Backend crate for signal-hook",
@@ -7250,6 +8117,16 @@
           "url": "https://github.com/vorner/signal-hook"
         }
       ],
+      "authors": [
+        {
+          "name": "Michal 'vorner' Vaner",
+          "email": "vorner@vorner.cz"
+        },
+        {
+          "name": "Masaki Hara",
+          "email": "ackie.h.gmai@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "vorner"
       },
@@ -7264,7 +8141,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#simd-adler32@0.3.9",
-      "author": "Marvin Countryman <me@maar.vin>",
       "name": "simd-adler32",
       "version": "0.3.9",
       "description": "A SIMD-accelerated Adler-32 hash algorithm implementation.",
@@ -7287,6 +8163,12 @@
           "url": "https://github.com/mcountryman/simd-adler32"
         }
       ],
+      "authors": [
+        {
+          "name": "Marvin Countryman",
+          "email": "me@maar.vin"
+        }
+      ],
       "supplier": {
         "name": "mcountryman"
       },
@@ -7301,7 +8183,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#slab@0.4.12",
-      "author": "Carl Lerche <me@carllerche.com>",
       "name": "slab",
       "version": "0.4.12",
       "description": "Pre-allocated storage for a uniform data type",
@@ -7324,6 +8205,12 @@
           "url": "https://github.com/tokio-rs/slab"
         }
       ],
+      "authors": [
+        {
+          "name": "Carl Lerche",
+          "email": "me@carllerche.com"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -7338,7 +8225,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#smallvec@1.15.1",
-      "author": "The Servo Project Developers",
       "name": "smallvec",
       "version": "1.15.1",
       "description": "'Small vector' optimization: store up to a small number of items on the stack",
@@ -7365,6 +8251,11 @@
           "url": "https://github.com/servo/rust-smallvec"
         }
       ],
+      "authors": [
+        {
+          "name": "The Servo Project Developers"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -7379,7 +8270,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#socket2@0.6.4",
-      "author": "Alex Crichton <alex@alexcrichton.com>, Thomas de Zeeuw <thomasdezeeuw@gmail.com>",
       "name": "socket2",
       "version": "0.6.4",
       "description": "Utilities for handling networking sockets with a maximal amount of configuration possible intended. ",
@@ -7410,6 +8300,16 @@
           "url": "https://github.com/rust-lang/socket2"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        },
+        {
+          "name": "Thomas de Zeeuw",
+          "email": "thomasdezeeuw@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "rust-lang"
       },
@@ -7424,7 +8324,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#srp@0.6.0",
-      "author": "RustCrypto Developers",
       "name": "srp",
       "version": "0.6.0",
       "description": "Secure Remote Password (SRP) protocol implementation",
@@ -7451,6 +8350,11 @@
           "url": "https://github.com/RustCrypto/PAKEs"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -7465,7 +8369,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#stable_deref_trait@1.2.1",
-      "author": "Robert Grosse <n210241048576@gmail.com>",
       "name": "stable_deref_trait",
       "version": "1.2.1",
       "description": "An unsafe marker trait for types like Box and Rc that dereference to a stable address even when moved, and hence can be used with libraries such as owning_ref and rental. ",
@@ -7492,6 +8395,12 @@
           "url": "https://github.com/storyyeller/stable_deref_trait"
         }
       ],
+      "authors": [
+        {
+          "name": "Robert Grosse",
+          "email": "n210241048576@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "storyyeller"
       },
@@ -7506,7 +8415,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#strsim@0.11.1",
-      "author": "Danny Guo <danny@dannyguo.com>, maxbachmann <oss@maxbachmann.de>",
       "name": "strsim",
       "version": "0.11.1",
       "description": "Implementations of string similarity metrics. Includes Hamming, Levenshtein, OSA, Damerau-Levenshtein, Jaro, Jaro-Winkler, and Sørensen-Dice. ",
@@ -7537,6 +8445,16 @@
           "url": "https://github.com/rapidfuzz/strsim-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Danny Guo",
+          "email": "danny@dannyguo.com"
+        },
+        {
+          "name": "maxbachmann",
+          "email": "oss@maxbachmann.de"
+        }
+      ],
       "supplier": {
         "name": "rapidfuzz"
       },
@@ -7551,7 +8469,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-      "author": "Isis Lovecruft <isis@patternsinthevoid.net>, Henry de Valence <hdevalence@hdevalence.ca>",
       "name": "subtle",
       "version": "2.6.1",
       "description": "Pure-Rust traits and utilities for constant-time cryptographic implementations.",
@@ -7582,6 +8499,16 @@
           "url": "https://github.com/dalek-cryptography/subtle"
         }
       ],
+      "authors": [
+        {
+          "name": "Isis Lovecruft",
+          "email": "isis@patternsinthevoid.net"
+        },
+        {
+          "name": "Henry de Valence",
+          "email": "hdevalence@hdevalence.ca"
+        }
+      ],
       "supplier": {
         "name": "dalek-cryptography"
       },
@@ -7596,7 +8523,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.117",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "syn",
       "version": "2.0.117",
       "description": "Parser for Rust source code",
@@ -7623,6 +8549,12 @@
           "url": "https://github.com/dtolnay/syn"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -7637,7 +8569,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#sync_wrapper@1.0.2",
-      "author": "Actyx AG <developer@actyx.io>",
       "name": "sync_wrapper",
       "version": "1.0.2",
       "description": "A tool for enlisting the compiler's help in proving the absence of concurrency",
@@ -7668,6 +8599,12 @@
           "url": "https://github.com/Actyx/sync_wrapper"
         }
       ],
+      "authors": [
+        {
+          "name": "Actyx AG",
+          "email": "developer@actyx.io"
+        }
+      ],
       "supplier": {
         "name": "Actyx"
       },
@@ -7682,7 +8619,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#synstructure@0.13.2",
-      "author": "Nika Layzell <nika@thelayzells.com>",
       "name": "synstructure",
       "version": "0.13.2",
       "description": "Helper methods and macros for custom derives",
@@ -7709,6 +8645,12 @@
           "url": "https://github.com/mystor/synstructure"
         }
       ],
+      "authors": [
+        {
+          "name": "Nika Layzell",
+          "email": "nika@thelayzells.com"
+        }
+      ],
       "supplier": {
         "name": "mystor"
       },
@@ -7723,7 +8665,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tempfile@3.27.0",
-      "author": "Steven Allen <steven@stebalien.com>, The Rust Project Developers, Ashley Mannix <ashleymannix@live.com.au>, Jason White <me@jasonwhite.io>",
       "name": "tempfile",
       "version": "3.27.0",
       "description": "A library for managing temporary files and directories.",
@@ -7754,6 +8695,23 @@
           "url": "https://github.com/Stebalien/tempfile"
         }
       ],
+      "authors": [
+        {
+          "name": "Steven Allen",
+          "email": "steven@stebalien.com"
+        },
+        {
+          "name": "The Rust Project Developers"
+        },
+        {
+          "name": "Ashley Mannix",
+          "email": "ashleymannix@live.com.au"
+        },
+        {
+          "name": "Jason White",
+          "email": "me@jasonwhite.io"
+        }
+      ],
       "supplier": {
         "name": "Stebalien"
       },
@@ -7768,7 +8726,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#thiserror-impl@2.0.18",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "thiserror-impl",
       "version": "2.0.18",
       "description": "Implementation detail of the `thiserror` crate",
@@ -7791,6 +8748,12 @@
           "url": "https://github.com/dtolnay/thiserror"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -7805,7 +8768,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#thiserror@2.0.18",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "thiserror",
       "version": "2.0.18",
       "description": "derive(Error)",
@@ -7832,6 +8794,12 @@
           "url": "https://github.com/dtolnay/thiserror"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -7846,7 +8814,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#thread_local@1.1.9",
-      "author": "Amanieu d'Antras <amanieu@gmail.com>",
       "name": "thread_local",
       "version": "1.1.9",
       "description": "Per-object thread-local storage",
@@ -7873,6 +8840,12 @@
           "url": "https://github.com/Amanieu/thread_local-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Amanieu d'Antras",
+          "email": "amanieu@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "Amanieu"
       },
@@ -7887,7 +8860,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#time-core@0.1.8",
-      "author": "Jacob Pratt <open-source@jhpratt.dev>, Time contributors",
       "name": "time-core",
       "version": "0.1.8",
       "description": "This crate is an implementation detail and should not be relied upon directly.",
@@ -7910,6 +8882,15 @@
           "url": "https://github.com/time-rs/time"
         }
       ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "open-source@jhpratt.dev"
+        },
+        {
+          "name": "Time contributors"
+        }
+      ],
       "supplier": {
         "name": "time-rs"
       },
@@ -7924,7 +8905,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#time-macros@0.2.27",
-      "author": "Jacob Pratt <open-source@jhpratt.dev>, Time contributors",
       "name": "time-macros",
       "version": "0.2.27",
       "description": "    Procedural macros for the time crate.     This crate is an implementation detail and should not be relied upon directly. ",
@@ -7947,6 +8927,15 @@
           "url": "https://github.com/time-rs/time"
         }
       ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "open-source@jhpratt.dev"
+        },
+        {
+          "name": "Time contributors"
+        }
+      ],
       "supplier": {
         "name": "time-rs"
       },
@@ -7961,7 +8950,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#time@0.3.47",
-      "author": "Jacob Pratt <open-source@jhpratt.dev>, Time contributors",
       "name": "time",
       "version": "0.3.47",
       "description": "Date and time library. Fully interoperable with the standard library. Mostly compatible with #![no_std].",
@@ -7988,6 +8976,15 @@
           "url": "https://github.com/time-rs/time"
         }
       ],
+      "authors": [
+        {
+          "name": "Jacob Pratt",
+          "email": "open-source@jhpratt.dev"
+        },
+        {
+          "name": "Time contributors"
+        }
+      ],
       "supplier": {
         "name": "time-rs"
       },
@@ -8002,7 +8999,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tinystr@0.8.3",
-      "author": "The ICU4X Project Developers",
       "name": "tinystr",
       "version": "0.8.3",
       "description": "A small ASCII-only bounded length string representation.",
@@ -8025,6 +9021,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -8039,7 +9040,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tokio-macros@2.7.0",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tokio-macros",
       "version": "2.7.0",
       "description": "Tokio's proc macros. ",
@@ -8066,6 +9066,12 @@
           "url": "https://github.com/tokio-rs/tokio"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8080,7 +9086,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tokio-native-tls@0.3.1",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tokio-native-tls",
       "version": "0.3.1",
       "description": "An implementation of TLS/SSL streams for Tokio using native-tls giving an implementation of TLS for nonblocking I/O streams. ",
@@ -8111,6 +9116,12 @@
           "url": "https://github.com/tokio-rs/tls"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8125,7 +9136,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tokio-util@0.7.18",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tokio-util",
       "version": "0.7.18",
       "description": "Additional utilities for working with Tokio. ",
@@ -8152,6 +9162,12 @@
           "url": "https://github.com/tokio-rs/tokio"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8166,7 +9182,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.54.1",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tokio",
       "version": "1.54.1",
       "description": "An event-driven, non-blocking I/O platform for writing asynchronous I/O backed applications. ",
@@ -8193,6 +9208,12 @@
           "url": "https://github.com/tokio-rs/tokio"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8207,7 +9228,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tower-http@0.6.11",
-      "author": "Tower Maintainers <team@tower-rs.com>",
       "name": "tower-http",
       "version": "0.6.11",
       "description": "Tower middleware and utilities for HTTP clients and servers",
@@ -8234,6 +9254,12 @@
           "url": "https://github.com/tower-rs/tower-http"
         }
       ],
+      "authors": [
+        {
+          "name": "Tower Maintainers",
+          "email": "team@tower-rs.com"
+        }
+      ],
       "supplier": {
         "name": "tower-rs"
       },
@@ -8248,7 +9274,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tower-layer@0.3.3",
-      "author": "Tower Maintainers <team@tower-rs.com>",
       "name": "tower-layer",
       "version": "0.3.3",
       "description": "Decorates a `Service` to allow easy composition between `Service`s. ",
@@ -8279,6 +9304,12 @@
           "url": "https://github.com/tower-rs/tower"
         }
       ],
+      "authors": [
+        {
+          "name": "Tower Maintainers",
+          "email": "team@tower-rs.com"
+        }
+      ],
       "supplier": {
         "name": "tower-rs"
       },
@@ -8293,7 +9324,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tower-service@0.3.3",
-      "author": "Tower Maintainers <team@tower-rs.com>",
       "name": "tower-service",
       "version": "0.3.3",
       "description": "Trait representing an asynchronous, request / response based, client or server. ",
@@ -8324,6 +9354,12 @@
           "url": "https://github.com/tower-rs/tower"
         }
       ],
+      "authors": [
+        {
+          "name": "Tower Maintainers",
+          "email": "team@tower-rs.com"
+        }
+      ],
       "supplier": {
         "name": "tower-rs"
       },
@@ -8338,7 +9374,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tower@0.5.3",
-      "author": "Tower Maintainers <team@tower-rs.com>",
       "name": "tower",
       "version": "0.5.3",
       "description": "Tower is a library of modular and reusable components for building robust clients and servers. ",
@@ -8365,6 +9400,12 @@
           "url": "https://github.com/tower-rs/tower"
         }
       ],
+      "authors": [
+        {
+          "name": "Tower Maintainers",
+          "email": "team@tower-rs.com"
+        }
+      ],
       "supplier": {
         "name": "tower-rs"
       },
@@ -8379,7 +9420,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing-attributes@0.1.31",
-      "author": "Tokio Contributors <team@tokio.rs>, Eliza Weisman <eliza@buoyant.io>, David Barsky <dbarsky@amazon.com>",
       "name": "tracing-attributes",
       "version": "0.1.31",
       "description": "Procedural macro attributes for automatically instrumenting functions. ",
@@ -8406,6 +9446,20 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        },
+        {
+          "name": "Eliza Weisman",
+          "email": "eliza@buoyant.io"
+        },
+        {
+          "name": "David Barsky",
+          "email": "dbarsky@amazon.com"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8420,7 +9474,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing-core@0.1.36",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tracing-core",
       "version": "0.1.36",
       "description": "Core primitives for application-level tracing. ",
@@ -8447,6 +9500,12 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8461,7 +9520,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing-log@0.2.0",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tracing-log",
       "version": "0.2.0",
       "description": "Provides compatibility between `tracing` and the `log` crate. ",
@@ -8488,6 +9546,12 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8502,7 +9566,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing-serde@0.2.0",
-      "author": "Tokio Contributors <team@tokio.rs>",
       "name": "tracing-serde",
       "version": "0.2.0",
       "description": "A compatibility layer for serializing trace data with `serde` ",
@@ -8529,6 +9592,12 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8543,7 +9612,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing-subscriber@0.3.23",
-      "author": "Eliza Weisman <eliza@buoyant.io>, David Barsky <me@davidbarsky.com>, Tokio Contributors <team@tokio.rs>",
       "name": "tracing-subscriber",
       "version": "0.3.23",
       "description": "Utilities for implementing and composing `tracing` subscribers. ",
@@ -8570,6 +9638,20 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Eliza Weisman",
+          "email": "eliza@buoyant.io"
+        },
+        {
+          "name": "David Barsky",
+          "email": "me@davidbarsky.com"
+        },
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8584,7 +9666,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#tracing@0.1.44",
-      "author": "Eliza Weisman <eliza@buoyant.io>, Tokio Contributors <team@tokio.rs>",
       "name": "tracing",
       "version": "0.1.44",
       "description": "Application-level tracing for Rust. ",
@@ -8611,6 +9692,16 @@
           "url": "https://github.com/tokio-rs/tracing"
         }
       ],
+      "authors": [
+        {
+          "name": "Eliza Weisman",
+          "email": "eliza@buoyant.io"
+        },
+        {
+          "name": "Tokio Contributors",
+          "email": "team@tokio.rs"
+        }
+      ],
       "supplier": {
         "name": "tokio-rs"
       },
@@ -8625,7 +9716,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#try-lock@0.2.5",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "try-lock",
       "version": "0.2.5",
       "description": "A lightweight atomic lock.",
@@ -8656,6 +9746,12 @@
           "url": "https://github.com/seanmonstar/try-lock"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "seanmonstar"
       },
@@ -8670,7 +9766,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#typed-path@0.13.0",
-      "author": "Chip Senkbeil <chip@senkbeil.org>",
       "name": "typed-path",
       "version": "0.13.0",
       "description": "Provides typed variants of Path and PathBuf for Unix and Windows",
@@ -8695,6 +9790,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/chipsenkbeil/typed-path"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Chip Senkbeil",
+          "email": "chip@senkbeil.org"
         }
       ],
       "supplier": {
@@ -8751,7 +9852,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "unicode-ident",
       "version": "1.0.24",
       "description": "Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31",
@@ -8778,6 +9878,12 @@
           "url": "https://github.com/dtolnay/unicode-ident"
         }
       ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "dtolnay"
       },
@@ -8792,7 +9898,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-width@0.2.2",
-      "author": "kwantam <kwantam@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>",
       "name": "unicode-width",
       "version": "0.2.2",
       "description": "Determine displayed width of `char` and `str` types according to Unicode Standard Annex #11 rules. ",
@@ -8819,6 +9924,16 @@
           "url": "https://github.com/unicode-rs/unicode-width"
         }
       ],
+      "authors": [
+        {
+          "name": "kwantam",
+          "email": "kwantam@gmail.com"
+        },
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-rs"
       },
@@ -8833,7 +9948,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#unicode-xid@0.2.6",
-      "author": "erick.tryzelaar <erick.tryzelaar@gmail.com>, kwantam <kwantam@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>",
       "name": "unicode-xid",
       "version": "0.2.6",
       "description": "Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31. ",
@@ -8864,6 +9978,20 @@
           "url": "https://github.com/unicode-rs/unicode-xid"
         }
       ],
+      "authors": [
+        {
+          "name": "erick.tryzelaar",
+          "email": "erick.tryzelaar@gmail.com"
+        },
+        {
+          "name": "kwantam",
+          "email": "kwantam@gmail.com"
+        },
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-rs"
       },
@@ -8878,7 +10006,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#universal-hash@0.5.1",
-      "author": "RustCrypto Developers",
       "name": "universal-hash",
       "version": "0.5.1",
       "description": "Traits which describe the functionality of universal hash functions (UHFs)",
@@ -8905,6 +10032,11 @@
           "url": "https://github.com/RustCrypto/traits"
         }
       ],
+      "authors": [
+        {
+          "name": "RustCrypto Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -8919,7 +10051,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#url@2.5.8",
-      "author": "The rust-url developers",
       "name": "url",
       "version": "2.5.8",
       "description": "URL library for Rust, based on the WHATWG URL Standard",
@@ -8946,6 +10077,11 @@
           "url": "https://github.com/servo/rust-url"
         }
       ],
+      "authors": [
+        {
+          "name": "The rust-url developers"
+        }
+      ],
       "supplier": {
         "name": "servo"
       },
@@ -8960,7 +10096,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#utf8_iter@1.0.4",
-      "author": "Henri Sivonen <hsivonen@hsivonen.fi>",
       "name": "utf8_iter",
       "version": "1.0.4",
       "description": "Iterator by char over potentially-invalid UTF-8 in &[u8]",
@@ -8991,6 +10126,12 @@
           "url": "https://github.com/hsivonen/utf8_iter"
         }
       ],
+      "authors": [
+        {
+          "name": "Henri Sivonen",
+          "email": "hsivonen@hsivonen.fi"
+        }
+      ],
       "supplier": {
         "name": "hsivonen"
       },
@@ -9005,7 +10146,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#utf8parse@0.2.2",
-      "author": "Joe Wilm <joe@jwilm.com>, Christian Duerr <contact@christianduerr.com>",
       "name": "utf8parse",
       "version": "0.2.2",
       "description": "Table-driven UTF-8 parser",
@@ -9030,6 +10170,16 @@
         {
           "type": "vcs",
           "url": "https://github.com/alacritty/vte"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Joe Wilm",
+          "email": "joe@jwilm.com"
+        },
+        {
+          "name": "Christian Duerr",
+          "email": "contact@christianduerr.com"
         }
       ],
       "supplier": {
@@ -9082,7 +10232,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#vcpkg@0.2.15",
-      "author": "Jim McGrath <jimmc2@gmail.com>",
       "name": "vcpkg",
       "version": "0.2.15",
       "description": "A library to find native dependencies in a vcpkg tree at build time in order to be used in Cargo build scripts. ",
@@ -9109,6 +10258,12 @@
           "url": "https://github.com/mcgoo/vcpkg-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Jim McGrath",
+          "email": "jimmc2@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "mcgoo"
       },
@@ -9123,7 +10278,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#version_check@0.9.5",
-      "author": "Sergio Benitez <sb@sergio.bz>",
       "name": "version_check",
       "version": "0.9.5",
       "description": "Tiny crate to check the version of the installed/running rustc.",
@@ -9150,6 +10304,12 @@
           "url": "https://github.com/SergioBenitez/version_check"
         }
       ],
+      "authors": [
+        {
+          "name": "Sergio Benitez",
+          "email": "sb@sergio.bz"
+        }
+      ],
       "supplier": {
         "name": "SergioBenitez"
       },
@@ -9164,7 +10324,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#want@0.3.1",
-      "author": "Sean McArthur <sean@seanmonstar.com>",
       "name": "want",
       "version": "0.3.1",
       "description": "Detect when another Future wants a result.",
@@ -9191,6 +10350,12 @@
           "url": "https://github.com/seanmonstar/want"
         }
       ],
+      "authors": [
+        {
+          "name": "Sean McArthur",
+          "email": "sean@seanmonstar.com"
+        }
+      ],
       "supplier": {
         "name": "seanmonstar"
       },
@@ -9205,7 +10370,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasi@0.11.1+wasi-snapshot-preview1",
-      "author": "The Cranelift Project Developers",
       "name": "wasi",
       "version": "0.11.1+wasi-snapshot-preview1",
       "description": "Experimental WASI API bindings for Rust",
@@ -9230,6 +10394,11 @@
         {
           "type": "vcs",
           "url": "https://github.com/bytecodealliance/wasi"
+        }
+      ],
+      "authors": [
+        {
+          "name": "The Cranelift Project Developers"
         }
       ],
       "supplier": {
@@ -9326,7 +10495,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen-futures@0.4.72",
-      "author": "The wasm-bindgen Developers",
       "name": "wasm-bindgen-futures",
       "version": "0.4.72",
       "description": "Bridging the gap between Rust Futures and JavaScript Promises",
@@ -9357,6 +10525,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9371,7 +10544,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen-macro-support@0.2.122",
-      "author": "The wasm-bindgen Developers",
       "name": "wasm-bindgen-macro-support",
       "version": "0.2.122",
       "description": "Implementation APIs for the `#[wasm_bindgen]` attribute",
@@ -9402,6 +10574,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro-support"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9416,7 +10593,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen-macro@0.2.122",
-      "author": "The wasm-bindgen Developers",
       "name": "wasm-bindgen-macro",
       "version": "0.2.122",
       "description": "Definition of the `#[wasm_bindgen]` attribute, an internal dependency ",
@@ -9447,6 +10623,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9461,7 +10642,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen-shared@0.2.122",
-      "author": "The wasm-bindgen Developers",
       "name": "wasm-bindgen-shared",
       "version": "0.2.122",
       "description": "Shared support between wasm-bindgen and wasm-bindgen cli, an internal dependency. ",
@@ -9496,6 +10676,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9510,7 +10695,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-bindgen@0.2.122",
-      "author": "The wasm-bindgen Developers",
       "name": "wasm-bindgen",
       "version": "0.2.122",
       "description": "Easy support for interacting between JS and Rust. ",
@@ -9541,6 +10725,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9555,7 +10744,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasm-encoder@0.244.0",
-      "author": "Nick Fitzgerald <fitzgen@gmail.com>",
       "name": "wasm-encoder",
       "version": "0.244.0",
       "description": "A low-level WebAssembly encoder. ",
@@ -9584,6 +10772,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-encoder"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Nick Fitzgerald",
+          "email": "fitzgen@gmail.com"
         }
       ],
       "supplier": {
@@ -9636,7 +10830,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wasmparser@0.244.0",
-      "author": "Yury Delendik <ydelendik@mozilla.com>",
       "name": "wasmparser",
       "version": "0.244.0",
       "description": "A simple event-driven library for parsing WebAssembly binary files. ",
@@ -9663,6 +10856,12 @@
           "url": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser"
         }
       ],
+      "authors": [
+        {
+          "name": "Yury Delendik",
+          "email": "ydelendik@mozilla.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -9677,7 +10876,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#web-sys@0.3.99",
-      "author": "The wasm-bindgen Developers",
       "name": "web-sys",
       "version": "0.3.99",
       "description": "Bindings for all Web APIs, a procedurally generated crate from WebIDL ",
@@ -9708,6 +10906,11 @@
           "url": "https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys"
         }
       ],
+      "authors": [
+        {
+          "name": "The wasm-bindgen Developers"
+        }
+      ],
       "supplier": {
         "name": "wasm-bindgen"
       },
@@ -9722,7 +10925,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#winapi-i686-pc-windows-gnu@0.4.0",
-      "author": "Peter Atashian <retep998@gmail.com>",
       "name": "winapi-i686-pc-windows-gnu",
       "version": "0.4.0",
       "description": "Import libraries for the i686-pc-windows-gnu target. Please don't use this crate directly, depend on winapi instead.",
@@ -9745,6 +10947,12 @@
           "url": "https://github.com/retep998/winapi-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Peter Atashian",
+          "email": "retep998@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "retep998"
       },
@@ -9759,7 +10967,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#winapi-x86_64-pc-windows-gnu@0.4.0",
-      "author": "Peter Atashian <retep998@gmail.com>",
       "name": "winapi-x86_64-pc-windows-gnu",
       "version": "0.4.0",
       "description": "Import libraries for the x86_64-pc-windows-gnu target. Please don't use this crate directly, depend on winapi instead.",
@@ -9782,6 +10989,12 @@
           "url": "https://github.com/retep998/winapi-rs"
         }
       ],
+      "authors": [
+        {
+          "name": "Peter Atashian",
+          "email": "retep998@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "retep998"
       },
@@ -9796,7 +11009,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#winapi@0.3.9",
-      "author": "Peter Atashian <retep998@gmail.com>",
       "name": "winapi",
       "version": "0.3.9",
       "description": "Raw FFI bindings for all of Windows API.",
@@ -9821,6 +11033,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/retep998/winapi-rs"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Peter Atashian",
+          "email": "retep998@gmail.com"
         }
       ],
       "supplier": {
@@ -9909,7 +11127,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-bindgen-core@0.51.0",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-bindgen-core",
       "version": "0.51.0",
       "description": "Low-level support for bindings generation based on WIT files for use with `wit-bindgen-cli` and other languages. ",
@@ -9936,6 +11153,12 @@
           "url": "https://github.com/bytecodealliance/wit-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -9950,7 +11173,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-bindgen-rust-macro@0.51.0",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-bindgen-rust-macro",
       "version": "0.51.0",
       "description": "Procedural macro paired with the `wit-bindgen` crate. ",
@@ -9977,6 +11199,12 @@
           "url": "https://github.com/bytecodealliance/wit-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -9991,7 +11219,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-bindgen-rust@0.51.0",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-bindgen-rust",
       "version": "0.51.0",
       "description": "Rust bindings generator for WIT and the component model, typically used through the `wit-bindgen` crate's `generate!` macro. ",
@@ -10018,6 +11245,12 @@
           "url": "https://github.com/bytecodealliance/wit-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -10032,7 +11265,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-bindgen@0.51.0",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-bindgen",
       "version": "0.51.0",
       "description": "Rust bindings generator and runtime support for WIT and the component model. Used when compiling Rust programs to the component model. ",
@@ -10059,6 +11291,12 @@
           "url": "https://github.com/bytecodealliance/wit-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -10073,7 +11311,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-bindgen@0.57.1",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-bindgen",
       "version": "0.57.1",
       "description": "Rust bindings generator and runtime support for WIT and the component model. Used when compiling Rust programs to the component model. ",
@@ -10100,6 +11337,12 @@
           "url": "https://github.com/bytecodealliance/wit-bindgen"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -10114,7 +11357,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-component@0.244.0",
-      "author": "Peter Huene <peter@huene.dev>",
       "name": "wit-component",
       "version": "0.244.0",
       "description": "Tooling for working with `*.wit` and component files together. ",
@@ -10145,6 +11387,12 @@
           "url": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wit-component"
         }
       ],
+      "authors": [
+        {
+          "name": "Peter Huene",
+          "email": "peter@huene.dev"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -10159,7 +11407,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#wit-parser@0.244.0",
-      "author": "Alex Crichton <alex@alexcrichton.com>",
       "name": "wit-parser",
       "version": "0.244.0",
       "description": "Tooling for parsing `*.wit` files and working with their contents. ",
@@ -10190,6 +11437,12 @@
           "url": "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wit-parser"
         }
       ],
+      "authors": [
+        {
+          "name": "Alex Crichton",
+          "email": "alex@alexcrichton.com"
+        }
+      ],
       "supplier": {
         "name": "bytecodealliance"
       },
@@ -10204,7 +11457,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#writeable@0.6.3",
-      "author": "The ICU4X Project Developers",
       "name": "writeable",
       "version": "0.6.3",
       "description": "A more efficient alternative to fmt::Display",
@@ -10227,6 +11479,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10241,7 +11498,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#yoke-derive@0.8.2",
-      "author": "Manish Goregaokar <manishsmail@gmail.com>",
       "name": "yoke-derive",
       "version": "0.8.2",
       "description": "Custom derive for the yoke crate",
@@ -10264,6 +11520,12 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10278,7 +11540,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#yoke@0.8.3",
-      "author": "Manish Goregaokar <manishsmail@gmail.com>",
       "name": "yoke",
       "version": "0.8.3",
       "description": "Abstraction allowing borrowed data to be carried along with the backing data it borrows from",
@@ -10301,6 +11562,12 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10315,7 +11582,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zerofrom-derive@0.1.7",
-      "author": "Manish Goregaokar <manishsmail@gmail.com>",
       "name": "zerofrom-derive",
       "version": "0.1.7",
       "description": "Custom derive for the zerofrom crate",
@@ -10338,6 +11604,12 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10352,7 +11624,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zerofrom@0.1.8",
-      "author": "The ICU4X Project Developers",
       "name": "zerofrom",
       "version": "0.1.8",
       "description": "ZeroFrom trait for constructing",
@@ -10375,6 +11646,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10389,7 +11665,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.9.1",
-      "author": "The RustCrypto Project Developers",
       "name": "zeroize",
       "version": "1.9.1",
       "description": "Securely clear secrets from memory with a simple trait built on stable Rust primitives which guarantee memory is zeroed using an operation will not be 'optimized away' by the compiler. Uses a portable pure Rust implementation that works everywhere, even WASM! ",
@@ -10416,6 +11691,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "The RustCrypto Project Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -10430,7 +11710,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zeroize_derive@1.5.0",
-      "author": "The RustCrypto Project Developers",
       "name": "zeroize_derive",
       "version": "1.5.0",
       "description": "Custom derive support for zeroize",
@@ -10457,6 +11736,11 @@
           "url": "https://github.com/RustCrypto/utils"
         }
       ],
+      "authors": [
+        {
+          "name": "The RustCrypto Project Developers"
+        }
+      ],
       "supplier": {
         "name": "RustCrypto"
       },
@@ -10471,7 +11755,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zerotrie@0.2.4",
-      "author": "The ICU4X Project Developers",
       "name": "zerotrie",
       "version": "0.2.4",
       "description": "A data structure that efficiently maps strings to integers",
@@ -10498,6 +11781,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10512,7 +11800,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zerovec-derive@0.11.3",
-      "author": "Manish Goregaokar <manishsmail@gmail.com>",
       "name": "zerovec-derive",
       "version": "0.11.3",
       "description": "Custom derive for the zerovec crate",
@@ -10535,6 +11822,12 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "Manish Goregaokar",
+          "email": "manishsmail@gmail.com"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10549,7 +11842,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zerovec@0.11.6",
-      "author": "The ICU4X Project Developers",
       "name": "zerovec",
       "version": "0.11.6",
       "description": "Zero-copy vector backed by a byte array",
@@ -10572,6 +11864,11 @@
           "url": "https://github.com/unicode-org/icu4x"
         }
       ],
+      "authors": [
+        {
+          "name": "The ICU4X Project Developers"
+        }
+      ],
       "supplier": {
         "name": "unicode-org"
       },
@@ -10586,7 +11883,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zip@9.5.1",
-      "author": "Mathijs van de Nes <git@mathijs.vd-nes.nl>, Marli Frost <marli@frost.red>, Ryan Levick <ryan.levick@gmail.com>, Chris Hennick <hennickc@amazon.com>",
       "name": "zip",
       "version": "9.5.1",
       "description": "Library to support the reading and writing of zip files.",
@@ -10607,6 +11903,24 @@
         {
           "type": "vcs",
           "url": "https://github.com/zip-rs/zip2"
+        }
+      ],
+      "authors": [
+        {
+          "name": "Mathijs van de Nes",
+          "email": "git@mathijs.vd-nes.nl"
+        },
+        {
+          "name": "Marli Frost",
+          "email": "marli@frost.red"
+        },
+        {
+          "name": "Ryan Levick",
+          "email": "ryan.levick@gmail.com"
+        },
+        {
+          "name": "Chris Hennick",
+          "email": "hennickc@amazon.com"
         }
       ],
       "supplier": {
@@ -10663,7 +11977,6 @@
     {
       "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#zmij@1.0.21",
-      "author": "David Tolnay <dtolnay@gmail.com>",
       "name": "zmij",
       "version": "1.0.21",
       "description": "A double-to-string conversion algorithm based on Schubfach and yy",
@@ -10688,6 +12001,12 @@
         {
           "type": "vcs",
           "url": "https://github.com/dtolnay/zmij"
+        }
+      ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
         }
       ],
       "supplier": {
@@ -10790,12 +12109,28 @@
           "value": "github.com/majd/ipatool/v2/ipakeep-anisette-helper"
         }
       ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b1575d4e40065660d725b64a829f96d730bb84de252f3f4dbacd579a36d8edea"
+        }
+      ],
       "licenses": [
         {
           "license": {
             "id": "MIT",
             "url": "https://github.com/1Password/connect-sdk-go/blob/c154b387248b/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/1Password/connect-sdk-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/1Password/connect-sdk-go"
         }
       ],
       "supplier": {
@@ -10875,6 +12210,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/1password/onepassword-sdk-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/1password/onepassword-sdk-go"
+        }
+      ],
       "supplier": {
         "name": "1password"
       },
@@ -10934,12 +12279,28 @@
           "value": "github.com/majd/ipatool/v2/ipakeep-anisette-helper"
         }
       ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7f9f12688cdc0d7ad2cb791668736fb89809dcd9b3e7d6638ba5e8251fead68c"
+        }
+      ],
       "licenses": [
         {
           "license": {
             "id": "MIT",
             "url": "https://github.com/VividCortex/ewma/blob/v1.2.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/VividCortex/ewma"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/VividCortex/ewma"
         }
       ],
       "supplier": {
@@ -11015,6 +12376,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/acarl005/stripansi"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/acarl005/stripansi"
+        }
+      ],
       "supplier": {
         "name": "acarl005"
       },
@@ -11086,6 +12457,16 @@
             "id": "MIT",
             "url": "https://github.com/apex/log/blob/v1.9.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/apex/log"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/apex/log"
         }
       ],
       "supplier": {
@@ -11171,6 +12552,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/blacktop/go-dwarf"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/blacktop/go-dwarf"
+        }
+      ],
       "supplier": {
         "name": "blacktop"
       },
@@ -11252,6 +12643,16 @@
             "id": "MIT",
             "url": "https://github.com/blacktop/go-macho/blob/v1.1.282/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/blacktop/go-macho"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/blacktop/go-macho"
         }
       ],
       "supplier": {
@@ -11337,6 +12738,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/blacktop/go-plist"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/blacktop/go-plist"
+        }
+      ],
       "supplier": {
         "name": "blacktop"
       },
@@ -11420,6 +12831,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/byteness/go-keychain"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/byteness/go-keychain"
+        }
+      ],
       "supplier": {
         "name": "byteness"
       },
@@ -11491,6 +12912,16 @@
             "id": "MIT",
             "url": "https://github.com/byteness/keyring/blob/v1.9.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/byteness/keyring"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/byteness/keyring"
         }
       ],
       "supplier": {
@@ -11566,6 +12997,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/byteness/percent"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/byteness/percent"
+        }
+      ],
       "supplier": {
         "name": "byteness"
       },
@@ -11635,8 +13076,36 @@
           "content": "d696c26c5a626fb97301dbb41549c25b97eb858b63126a8ed62360d2420ab612"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT",
+            "url": "https://github.com/deploymenttheory/go-macos-pkg/blob/v0.3.0/LICENSE"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/deploymenttheory/go-macos-pkg"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/deploymenttheory/go-macos-pkg"
+        }
+      ],
       "supplier": {
         "name": "deploymenttheory"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "MIT",
+              "url": "https://github.com/deploymenttheory/go-macos-pkg/blob/v0.3.0/LICENSE"
+            }
+          }
+        ]
       }
     },
     {
@@ -11700,6 +13169,16 @@
             "id": "MIT",
             "url": "https://github.com/dustin/go-humanize/blob/v1.1.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dustin/go-humanize"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/dustin/go-humanize"
         }
       ],
       "supplier": {
@@ -11773,6 +13252,16 @@
             "id": "MIT",
             "url": "https://github.com/dvsekhvalnov/jose2go/blob/v1.8.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dvsekhvalnov/jose2go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/dvsekhvalnov/jose2go"
         }
       ],
       "supplier": {
@@ -11852,6 +13341,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dylibso/observe-sdk"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/dylibso/observe-sdk/go"
+        }
+      ],
       "supplier": {
         "name": "dylibso"
       },
@@ -11923,6 +13422,16 @@
             "id": "Apache-2.0",
             "url": "https://github.com/ebitengine/purego/blob/v0.10.2/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/ebitengine/purego"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/ebitengine/purego"
         }
       ],
       "supplier": {
@@ -12002,6 +13511,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/extism/go-sdk"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/extism/go-sdk"
+        }
+      ],
       "supplier": {
         "name": "extism"
       },
@@ -12073,6 +13592,16 @@
             "id": "MIT",
             "url": "https://github.com/fatih/color/blob/v1.19.0/LICENSE.md"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/fatih/color"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/fatih/color"
         }
       ],
       "supplier": {
@@ -12156,6 +13685,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/go-compressions/lzfse"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/go-compressions/lzfse"
+        }
+      ],
       "supplier": {
         "name": "go-compressions"
       },
@@ -12227,6 +13766,16 @@
             "id": "MIT",
             "url": "https://github.com/gobwas/glob/blob/v0.2.3/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/gobwas/glob"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/gobwas/glob"
         }
       ],
       "supplier": {
@@ -12301,9 +13850,25 @@
       "licenses": [
         {
           "license": {
+            "id": "BSD-3-Clause",
+            "url": "https://github.com/hashicorp/golang-lru/blob/v2.0.7/simplelru/LICENSE_list"
+          }
+        },
+        {
+          "license": {
             "id": "MPL-2.0",
             "url": "https://github.com/hashicorp/golang-lru/blob/v2.0.7/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/hashicorp/golang-lru"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/hashicorp/golang-lru/v2"
         }
       ],
       "supplier": {
@@ -12311,6 +13876,12 @@
       },
       "evidence": {
         "licenses": [
+          {
+            "license": {
+              "id": "BSD-3-Clause",
+              "url": "https://github.com/hashicorp/golang-lru/blob/v2.0.7/simplelru/LICENSE_list"
+            }
+          },
           {
             "license": {
               "id": "MPL-2.0",
@@ -12379,6 +13950,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/ianlancetaylor/demangle"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/ianlancetaylor/demangle"
+        }
+      ],
       "supplier": {
         "name": "ianlancetaylor"
       },
@@ -12444,8 +14025,36 @@
           "content": "e3926d0b2b8d604f9037d68fb91d480fdfbe05053e34c4ccb9d1d2b9a2b42dab"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "url": "https://github.com/juju/go4/blob/40d72ab9641a/LICENSE"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/juju/go4"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/juju/go4"
+        }
+      ],
       "supplier": {
         "name": "juju"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "Apache-2.0",
+              "url": "https://github.com/juju/go4/blob/40d72ab9641a/LICENSE"
+            }
+          }
+        ]
       }
     },
     {
@@ -12509,6 +14118,16 @@
             "id": "BSD-3-Clause",
             "url": "https://github.com/juju/persistent-cookiejar/blob/v1.0.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/juju/persistent-cookiejar"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/juju/persistent-cookiejar"
         }
       ],
       "supplier": {
@@ -12594,6 +14213,16 @@
             "id": "MIT",
             "url": "https://github.com/klauspost/compress/blob/v1.20.2/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/klauspost/compress"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/klauspost/compress"
         }
       ],
       "supplier": {
@@ -12685,6 +14314,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/majd/go-apfs"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/majd/go-apfs"
+        }
+      ],
       "supplier": {
         "name": "majd"
       },
@@ -12700,12 +14339,12 @@
       }
     },
     {
-      "bom-ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082256-2d91ba38329d?package-id=0eb87ec4f1700d56",
+      "bom-ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
       "type": "library",
       "name": "github.com/majd/ipatool/v2/ipakeep-anisette-helper",
-      "version": "v0.0.0-20261115082256-2d91ba38329d",
-      "cpe": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep-anisette-helper:v0.0.0-20261115082256-2d91ba38329d:*:*:*:*:*:*:*",
-      "purl": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082256-2d91ba38329d",
+      "version": "v0.0.0-20261115082715-19c0c35c4375",
+      "cpe": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep-anisette-helper:v0.0.0-20261115082715-19c0c35c4375:*:*:*:*:*:*:*",
+      "purl": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375",
       "properties": [
         {
           "name": "syft:package:foundBy",
@@ -12725,7 +14364,7 @@
         },
         {
           "name": "syft:cpe23",
-          "value": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep_anisette_helper:v0.0.0-20261115082256-2d91ba38329d:*:*:*:*:*:*:*"
+          "value": "cpe:2.3:a:majd:ipatool\\/v2\\/ipakeep_anisette_helper:v0.0.0-20261115082715-19c0c35c4375:*:*:*:*:*:*:*"
         },
         {
           "name": "syft:location:0:path",
@@ -12744,11 +14383,23 @@
           "value": "github.com/majd/ipatool/v2/ipakeep-anisette-helper"
         }
       ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e6e62312132cad31e75adca38c9ad2a1cd23557442b9faa4c28d74f4fc6d151b"
+        }
+      ],
       "licenses": [
         {
           "license": {
             "id": "MIT"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/majd/ipatool/v2/ipakeep-anisette-helper"
         }
       ],
       "supplier": {
@@ -12821,6 +14472,16 @@
             "id": "MIT",
             "url": "https://github.com/majd/ipatool/blob/v2.8.1/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/majd/ipatool"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/majd/ipatool/v2"
         }
       ],
       "supplier": {
@@ -12900,6 +14561,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mattn/go-colorable"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/mattn/go-colorable"
+        }
+      ],
       "supplier": {
         "name": "mattn"
       },
@@ -12975,6 +14646,16 @@
             "id": "MIT",
             "url": "https://github.com/mattn/go-isatty/blob/v0.0.22/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mattn/go-isatty"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/mattn/go-isatty"
         }
       ],
       "supplier": {
@@ -13054,6 +14735,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mattn/go-runewidth"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/mattn/go-runewidth"
+        }
+      ],
       "supplier": {
         "name": "mattn"
       },
@@ -13125,6 +14816,16 @@
             "id": "MIT",
             "url": "https://github.com/mitchellh/colorstring/blob/d06e56a500db/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mitchellh/colorstring"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/mitchellh/colorstring"
         }
       ],
       "supplier": {
@@ -13204,6 +14905,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/noamcohen97/touchid-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/noamcohen97/touchid-go"
+        }
+      ],
       "supplier": {
         "name": "noamcohen97"
       },
@@ -13281,6 +14992,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/opentracing/opentracing-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/opentracing/opentracing-go"
+        }
+      ],
       "supplier": {
         "name": "opentracing"
       },
@@ -13352,6 +15073,16 @@
             "id": "BSD-2-Clause",
             "url": "https://github.com/pkg/errors/blob/v0.9.1/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/pkg/errors"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/pkg/errors"
         }
       ],
       "supplier": {
@@ -13427,6 +15158,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rivo/uniseg"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/rivo/uniseg"
+        }
+      ],
       "supplier": {
         "name": "rivo"
       },
@@ -13498,6 +15239,16 @@
             "id": "MIT",
             "url": "https://github.com/rs/zerolog/blob/v1.28.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rs/zerolog"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/rs/zerolog"
         }
       ],
       "supplier": {
@@ -13573,6 +15324,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/schollz/progressbar"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/schollz/progressbar/v3"
+        }
+      ],
       "supplier": {
         "name": "schollz"
       },
@@ -13646,6 +15407,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tetratelabs/wabin"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/tetratelabs/wabin"
+        }
+      ],
       "supplier": {
         "name": "tetratelabs"
       },
@@ -13717,6 +15488,16 @@
             "id": "Apache-2.0",
             "url": "https://github.com/tetratelabs/wazero/blob/v1.11.0/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tetratelabs/wazero"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/tetratelabs/wazero"
         }
       ],
       "supplier": {
@@ -13796,6 +15577,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/uber/jaeger-client-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/uber/jaeger-client-go"
+        }
+      ],
       "supplier": {
         "name": "uber"
       },
@@ -13865,8 +15656,36 @@
           "content": "b5de2376f2dc1316f8701212288a47b86a155e1f9d54a867d949baae30ac4ac8"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0",
+            "url": "https://github.com/uber/jaeger-lib/blob/v2.4.1/LICENSE"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/uber/jaeger-lib"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/uber/jaeger-lib"
+        }
+      ],
       "supplier": {
         "name": "uber"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "Apache-2.0",
+              "url": "https://github.com/uber/jaeger-lib/blob/v2.4.1/LICENSE"
+            }
+          }
+        ]
       }
     },
     {
@@ -13926,6 +15745,16 @@
             "id": "BSD-3-Clause",
             "url": "https://github.com/ulikunitz/xz/blob/v0.5.17/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/ulikunitz/xz"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/ulikunitz/xz"
         }
       ],
       "supplier": {
@@ -14001,6 +15830,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/vbauerster/mpb"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/vbauerster/mpb/v7"
+        }
+      ],
       "supplier": {
         "name": "vbauerster"
       },
@@ -14069,9 +15908,19 @@
       "licenses": [
         {
           "license": {
-            "id": "XZ",
+            "name": "Public domain dedication",
             "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/xi2/xz"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/github.com/xi2/xz"
         }
       ],
       "supplier": {
@@ -14081,7 +15930,7 @@
         "licenses": [
           {
             "license": {
-              "id": "XZ",
+              "name": "Public domain dedication",
               "url": "https://github.com/xi2/xz/blob/48954b6210f8/LICENSE"
             }
           }
@@ -14147,8 +15996,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/open-telemetry/opentelemetry-proto-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/go.opentelemetry.io/proto/otlp"
+        }
+      ],
       "supplier": {
-        "name": "go.opentelemetry.io"
+        "name": "open-telemetry"
       },
       "evidence": {
         "licenses": [
@@ -14219,8 +16078,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/uber-go/atomic"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/go.uber.org/atomic"
+        }
+      ],
       "supplier": {
-        "name": "go.uber.org"
+        "name": "uber-go"
       },
       "evidence": {
         "licenses": [
@@ -14288,8 +16157,36 @@
           "content": "c52da386a61bccdae9be458fd984c37f84c9c01cb7ca4474de2f2f143c4473b7"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "url": "https://cs.opensource.google/go/x/crypto/+/v0.59.0:LICENSE"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://go.googlesource.com/crypto"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/golang.org/x/crypto"
+        }
+      ],
       "supplier": {
         "name": "golang.org"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-3-Clause",
+              "url": "https://cs.opensource.google/go/x/crypto/+/v0.59.0:LICENSE"
+            }
+          }
+        ]
       }
     },
     {
@@ -14347,8 +16244,36 @@
           "content": "d7c10b6a57cce7e5cd470cccda762a5ec650f41c92d6e863d8efd4efee63a916"
         }
       ],
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause",
+            "url": "https://cs.opensource.google/go/x/net/+/v0.62.0:LICENSE"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://go.googlesource.com/net"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/golang.org/x/net"
+        }
+      ],
       "supplier": {
         "name": "golang.org"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "license": {
+              "id": "BSD-3-Clause",
+              "url": "https://cs.opensource.google/go/x/net/+/v0.62.0:LICENSE"
+            }
+          }
+        ]
       }
     },
     {
@@ -14408,6 +16333,16 @@
             "id": "BSD-3-Clause",
             "url": "https://cs.opensource.google/go/x/sys/+/v0.50.0:LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://go.googlesource.com/sys"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/golang.org/x/sys"
         }
       ],
       "supplier": {
@@ -14483,6 +16418,16 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://go.googlesource.com/term"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/golang.org/x/term"
+        }
+      ],
       "supplier": {
         "name": "golang.org"
       },
@@ -14554,6 +16499,16 @@
             "id": "BSD-3-Clause",
             "url": "https://cs.opensource.google/go/x/text/+/v0.44.0:LICENSE"
           }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://go.googlesource.com/text"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/golang.org/x/text"
         }
       ],
       "supplier": {
@@ -14629,8 +16584,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/protocolbuffers/protobuf-go"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/google.golang.org/protobuf"
+        }
+      ],
       "supplier": {
-        "name": "google.golang.org"
+        "name": "protocolbuffers"
       },
       "evidence": {
         "licenses": [
@@ -14701,8 +16666,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/go-errgo/errgo"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/gopkg.in/errgo.v1"
+        }
+      ],
       "supplier": {
-        "name": "gopkg.in"
+        "name": "go-errgo"
       },
       "evidence": {
         "licenses": [
@@ -14774,8 +16749,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/go-retry/retry"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/gopkg.in/retry.v1"
+        }
+      ],
       "supplier": {
-        "name": "gopkg.in"
+        "name": "go-retry"
       },
       "evidence": {
         "licenses": [
@@ -14853,8 +16838,18 @@
           }
         }
       ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/DHowett/go-plist.git"
+        },
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/howett.net/plist"
+        }
+      ],
       "supplier": {
-        "name": "howett.net"
+        "name": "DHowett"
       },
       "evidence": {
         "licenses": [
@@ -14913,6 +16908,12 @@
           "value": "go1.26.11"
         }
       ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://pkg.go.dev/std"
+        }
+      ],
       "supplier": {
         "name": "stdlib@1.26.11"
       },
@@ -14929,9 +16930,9 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///Users/seifreed/tools/DEVEL/ipakeep#0.1.1",
+      "ref": "pkg:cargo/ipakeep@0.1.1",
       "dependsOn": [
-        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082256-2d91ba38329d?package-id=0eb87ec4f1700d56",
+        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
@@ -15064,7 +17065,7 @@
       ]
     },
     {
-      "ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082256-2d91ba38329d?package-id=0eb87ec4f1700d56",
+      "ref": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
       "dependsOn": [
         "pkg:golang/github.com/1password/connect-sdk-go@v1.5.4-0.20250417152128-c154b387248b?package-id=056d879be41c9906",
         "pkg:golang/github.com/1password/onepassword-sdk-go@v0.4.1-beta.1?package-id=4b98598bfceb0e95",
@@ -17010,12 +19011,34 @@
     }
   ],
   "serialNumber": "urn:uuid:7f60c5df-047a-5ac1-9a38-4f2f7d88c0a1",
+  "citations": [
+    {
+      "bom-ref": "cargo-lock-source",
+      "pointers": [
+        "/components",
+        "/dependencies"
+      ],
+      "timestamp": "2026-11-15T08:47:14.000000000Z",
+      "attributedTo": "pkg:cargo/ipakeep@0.1.1",
+      "note": "Rust dependency inventory derived from Cargo.lock."
+    },
+    {
+      "bom-ref": "go-lock-source",
+      "pointers": [
+        "/components",
+        "/dependencies"
+      ],
+      "timestamp": "2026-11-15T08:47:14.000000000Z",
+      "attributedTo": "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
+      "note": "Go helper dependency inventory derived from tools/modern-anisette/go.mod and go.sum."
+    }
+  ],
   "compositions": [
     {
       "aggregate": "complete",
       "dependencies": [
-        "path+file:///Users/seifreed/tools/DEVEL/ipakeep#0.1.1",
-        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082256-2d91ba38329d?package-id=0eb87ec4f1700d56",
+        "pkg:cargo/ipakeep@0.1.1",
+        "pkg:golang/github.com/majd/ipatool/v2/ipakeep-anisette-helper@v0.0.0-20261115082715-19c0c35c4375?package-id=3be87d37112b8539",
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
         "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
