@@ -55,7 +55,9 @@ pub(crate) fn parse_symtab(
     let entries = linkedit(data, command.symbol_offset, length)
         .ok_or_else(|| MachoError::malformed(image, "symbol table exceeds image"))?;
     Ok(entries
-        .chunks_exact(NLIST_SIZE)
+        .as_chunks::<NLIST_SIZE>()
+        .0
+        .iter()
         .map(|entry| parse_nlist(entry, strings))
         .collect())
 }

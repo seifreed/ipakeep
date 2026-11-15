@@ -250,7 +250,10 @@ mod tests {
     struct Replay(serde_json::Value);
 
     impl SetupTransport for Replay {
-        async fn send(&self, request: SetupRequest) -> Result<SetupResponse, ProtocolError> {
+        fn send(
+            &self,
+            request: SetupRequest,
+        ) -> impl Future<Output = Result<SetupResponse, ProtocolError>> {
             let record = match request.method {
                 SetupMethod::Get => "/certificate_http",
                 SetupMethod::Post => "/setup_http",
@@ -261,10 +264,10 @@ mod tests {
                 request.body,
                 hex_at(&self.0, &format!("{record}/request_body_hex"))
             );
-            Ok(SetupResponse {
+            std::future::ready(Ok(SetupResponse {
                 status: 200,
                 body: hex_at(&self.0, &format!("{record}/response_body_hex")),
-            })
+            }))
         }
     }
 

@@ -237,7 +237,7 @@ mod tests {
         }));
 
         assert!(panic.is_err());
-        assert!(repository.search_calls().is_empty());
+        assert_eq!(repository.search_calls(), [] as [(String, String, u32); 0]);
     }
 
     fn account() -> Account {

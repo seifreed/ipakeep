@@ -3,7 +3,7 @@
   "specVersion": "1.7",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-15T14:24:42.000000000Z",
+    "timestamp": "2026-11-15T14:42:58.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -124,7 +124,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "a009ae69b657fbffe4c013cc6753016e56a12b7cbf20c1706c15b2a3241cb974"
+          "content": "e3a02f843e99fd59e284393121d3b560ae099be72a99435474d6a50b10429258"
         }
       ],
       "evidence": {
@@ -624,15 +624,15 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
       "name": "async-trait",
-      "version": "0.1.89",
+      "version": "0.1.92",
       "description": "Type erasure for async trait methods",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+          "content": "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
         }
       ],
       "licenses": [
@@ -640,7 +640,7 @@
           "expression": "MIT OR Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/async-trait@0.1.89",
+      "purl": "pkg:cargo/async-trait@0.1.92",
       "externalReferences": [
         {
           "type": "documentation",
@@ -11134,6 +11134,52 @@
     },
     {
       "type": "library",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#syn@3.0.10",
+      "name": "syn",
+      "version": "3.0.10",
+      "description": "Parser for Rust source code",
+      "scope": "required",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/syn@3.0.10",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/syn"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/syn"
+        }
+      ],
+      "authors": [
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com"
+        }
+      ],
+      "supplier": {
+        "name": "dtolnay"
+      },
+      "evidence": {
+        "licenses": [
+          {
+            "expression": "MIT OR Apache-2.0"
+          }
+        ]
+      }
+    },
+    {
+      "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#sync_wrapper@1.0.2",
       "name": "sync_wrapper",
       "version": "1.0.2",
@@ -15479,7 +15525,7 @@
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
-        "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
+        "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
         "registry+https://github.com/rust-lang/crates.io-index#cbc@0.1.2",
         "registry+https://github.com/rust-lang/crates.io-index#clap@4.6.1",
@@ -15594,11 +15640,11 @@
       "dependsOn": []
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.106",
         "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
-        "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.117"
+        "registry+https://github.com/rust-lang/crates.io-index#syn@3.0.10"
       ]
     },
     {
@@ -17186,6 +17232,14 @@
       ]
     },
     {
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#syn@3.0.10",
+      "dependsOn": [
+        "registry+https://github.com/rust-lang/crates.io-index#proc-macro2@1.0.106",
+        "registry+https://github.com/rust-lang/crates.io-index#quote@1.0.45",
+        "registry+https://github.com/rust-lang/crates.io-index#unicode-ident@1.0.24"
+      ]
+    },
+    {
       "ref": "registry+https://github.com/rust-lang/crates.io-index#sync_wrapper@1.0.2",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#futures-core@0.3.32"
@@ -17881,7 +17935,7 @@
         "/components",
         "/dependencies"
       ],
-      "timestamp": "2026-11-15T14:24:42.000000000Z",
+      "timestamp": "2026-11-15T14:42:58.000000000Z",
       "attributedTo": "pkg:cargo/ipakeep@0.1.1",
       "note": "Rust dependency inventory derived from Cargo.lock."
     }
@@ -17893,7 +17947,7 @@
         "pkg:cargo/ipakeep@0.1.1",
         "registry+https://github.com/rust-lang/crates.io-index#aes-gcm@0.10.3",
         "registry+https://github.com/rust-lang/crates.io-index#aes@0.8.4",
-        "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.89",
+        "registry+https://github.com/rust-lang/crates.io-index#async-trait@0.1.92",
         "registry+https://github.com/rust-lang/crates.io-index#base64@0.22.1",
         "registry+https://github.com/rust-lang/crates.io-index#cbc@0.1.2",
         "registry+https://github.com/rust-lang/crates.io-index#clap@4.6.1",

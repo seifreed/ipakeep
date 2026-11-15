@@ -313,7 +313,7 @@ impl<'src> DyldCache<'src> {
     /// Fails on a malformed image table or when the image is absent.
     pub fn image(&self, path: &str) -> Result<CachedImage, DyldError> {
         let table = self.image_table()?;
-        for entry in table.chunks_exact(IMAGE_INFO_SIZE) {
+        for entry in table.as_chunks::<IMAGE_INFO_SIZE>().0 {
             let (name, address) = self.image_entry(entry)?;
             if name == path.as_bytes() {
                 let mapping = self.mapping_for_address(address)?;
@@ -334,7 +334,9 @@ impl<'src> DyldCache<'src> {
     pub fn images(&self) -> Result<Vec<(String, u64)>, DyldError> {
         let table = self.image_table()?;
         table
-            .chunks_exact(IMAGE_INFO_SIZE)
+            .as_chunks::<IMAGE_INFO_SIZE>()
+            .0
+            .iter()
             .map(|entry| {
                 let (name, address) = self.image_entry(entry)?;
                 Ok((String::from_utf8_lossy(&name).into_owned(), address))
@@ -638,7 +640,9 @@ fn read_mappings(member: &Member, header: &[u8]) -> Result<Vec<Mapping>, DyldErr
     let mut table = vec![0; to_usize(count * MAPPING_SIZE as u64)?];
     member.read(&mut table, offset, "read shared-cache mappings")?;
     table
-        .chunks_exact(MAPPING_SIZE)
+        .as_chunks::<MAPPING_SIZE>()
+        .0
+        .iter()
         .map(|entry| parse_mapping(entry, size))
         .collect()
 }
@@ -688,12 +692,16 @@ fn subcache_entries(primary: &Member, header: &[u8]) -> Result<Vec<(String, [u8;
         primary.read(&mut table, offset, "read shared-cache subcache table")?;
     }
     table
-        .chunks_exact(SUBCACHE_ENTRY_SIZE)
+        .as_chunks::<SUBCACHE_ENTRY_SIZE>()
+        .0
+        .iter()
         .map(parse_subcache_entry)
         .collect()
 }
 
-fn parse_subcache_entry(entry: &[u8]) -> Result<(String, [u8; 16]), DyldError> {
+fn parse_subcache_entry(
+    entry: &[u8; SUBCACHE_ENTRY_SIZE],
+) -> Result<(String, [u8; 16]), DyldError> {
     let invalid = DyldError::Format("shared cache has an invalid subcache suffix");
     let suffix = trim_trailing_nul(&entry[SUBCACHE_SUFFIX_FIELD]);
     if suffix.is_empty() || suffix.iter().any(|&byte| byte == b'/' || byte == b'\\') {
@@ -788,7 +796,9 @@ fn read_page_starts(member: &Member, mapping: &Mapping, count: u32) -> Result<Ve
     let offset = mapping.slide_info_offset + SLIDE_INFO_5_SIZE as u64;
     member.read(&mut data, offset, "read shared-cache slide table")?;
     Ok(data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect())
 }
@@ -1076,7 +1086,7 @@ mod tests {
 
     #[test]
     fn subcache_suffix_validation() {
-        let mut entry = vec![0u8; SUBCACHE_ENTRY_SIZE];
+        let mut entry = [0u8; SUBCACHE_ENTRY_SIZE];
         entry[24..27].copy_from_slice(b".01");
         assert_eq!(parse_subcache_entry(&entry).expect("suffix").0, ".01");
         entry[24..27].copy_from_slice(b"../");

@@ -109,7 +109,9 @@ impl SymbolReader<'_> {
         self.cache
             .read_member(self.member, &mut encoded, u64::from(symtab.symbol_offset))?;
         let symbols = encoded
-            .chunks_exact(NLIST_ENTRY_BYTES)
+            .as_chunks::<NLIST_ENTRY_BYTES>()
+            .0
+            .iter()
             .map(|entry| self.symbol(&symtab, entry))
             .collect::<Result<_, _>>()?;
         Ok((symtab, symbols))
@@ -166,7 +168,9 @@ impl SymbolReader<'_> {
             u64::from(dysymtab.indirect_offset()),
         )?;
         let indirect = encoded
-            .chunks_exact(INDIRECT_ENTRY_BYTES)
+            .as_chunks::<INDIRECT_ENTRY_BYTES>()
+            .0
+            .iter()
             .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
             .collect();
         Ok((dysymtab, indirect))

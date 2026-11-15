@@ -536,7 +536,7 @@ fn verify_reports_malformed_macho_and_empty_encryption_ranges() {
     empty_range[48..52].copy_from_slice(&0_u32.to_le_bytes());
     let report = verify_ipa(&build_ipa(&empty_range)).unwrap();
     assert!(!report.ok);
-    assert!(report.still_encrypted.is_empty());
+    assert_eq!(report.still_encrypted, [] as [String; 0]);
     assert_eq!(report.machos[0].slices[0].looks_decrypted, Some(false));
 }
 
@@ -867,7 +867,7 @@ fn patch_accepts_matching_uuid_and_warns_without_one() {
     )
     .unwrap();
     let verified = patch_with_report(&ipa, dir.path(), false).unwrap();
-    assert!(verified.unverified_slices.is_empty());
+    assert_eq!(verified.unverified_slices, [] as [String; 0]);
     assert!(verify_ipa(&verified.ipa).unwrap().ok);
 }
 

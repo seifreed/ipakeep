@@ -74,7 +74,7 @@ fn key_handle(key_data: &[u8]) -> u32 {
 fn encrypt(cipher: &Aes128, source: &[u8], iv: [u8; AES_BLOCK_SIZE]) -> IoAesOutput {
     let mut data = Vec::with_capacity(source.len());
     let mut chain = iv;
-    for block in source.chunks_exact(AES_BLOCK_SIZE) {
+    for block in source.as_chunks::<AES_BLOCK_SIZE>().0 {
         let mut buffer = GenericArray::from(chain);
         for (byte, input) in buffer.iter_mut().zip(block) {
             *byte ^= input;
@@ -93,7 +93,7 @@ fn encrypt(cipher: &Aes128, source: &[u8], iv: [u8; AES_BLOCK_SIZE]) -> IoAesOut
 fn decrypt(cipher: &Aes128, source: &[u8], iv: [u8; AES_BLOCK_SIZE]) -> IoAesOutput {
     let mut data = Vec::with_capacity(source.len());
     let mut chain = iv;
-    for block in source.chunks_exact(AES_BLOCK_SIZE) {
+    for block in source.as_chunks::<AES_BLOCK_SIZE>().0 {
         let mut buffer = GenericArray::clone_from_slice(block);
         cipher.decrypt_block(&mut buffer);
         for (byte, previous) in buffer.iter_mut().zip(chain) {

@@ -640,7 +640,9 @@ pub fn read_indirect_symbols(
     let mut data = vec![0; to_usize(dysymtab.indirect_count())? * 4];
     memory.read_at(&mut data, u64::from(dysymtab.indirect_offset()))?;
     Ok(data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
         .collect())
 }
@@ -658,7 +660,9 @@ pub fn read_symbols(
     let mut entries = vec![0; to_usize(symtab.symbol_count)? * NLIST_64_SIZE];
     memory.read_at(&mut entries, u64::from(symtab.symbol_offset))?;
     entries
-        .chunks_exact(NLIST_64_SIZE)
+        .as_chunks::<NLIST_64_SIZE>()
+        .0
+        .iter()
         .map(|entry| {
             let nlist = Nlist::parse(entry)?;
             let name = strings

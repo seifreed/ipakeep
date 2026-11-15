@@ -1218,7 +1218,7 @@ mod tests {
             launcher_interpreters(Some(&path)),
             ["/opt/first/bin/python3", "python3.14", "/opt/second/python"]
         );
-        assert!(launcher_interpreters(None).is_empty());
+        assert_eq!(launcher_interpreters(None), [] as [String; 0]);
     }
 
     #[test]

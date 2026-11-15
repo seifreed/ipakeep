@@ -279,7 +279,10 @@ mod tests {
 
     #[test]
     fn empty_sinf_response_needs_no_app_archive() {
-        assert!(targets(&ipa(&[]), &sinfs(0)).unwrap().is_empty());
+        assert_eq!(
+            targets(&ipa(&[]), &sinfs(0)).unwrap(),
+            [] as [(String, Vec<u8>); 0]
+        );
     }
 
     #[test]
@@ -424,11 +427,13 @@ mod tests {
 
     #[test]
     fn manifest_helpers_cover_optional_arrays_single_sinf_replicas_and_mismatches() {
-        assert!(manifest_string_array(None, "SinfPaths").unwrap().is_empty());
-        assert!(
-            manifest_string_array(Some(&plist::Value::String("x".into())), "SinfPaths")
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            manifest_string_array(None, "SinfPaths").unwrap(),
+            [] as [String; 0]
+        );
+        assert_eq!(
+            manifest_string_array(Some(&plist::Value::String("x".into())), "SinfPaths").unwrap(),
+            [] as [String; 0]
         );
 
         let mut archive = zip::ZipArchive::new(Cursor::new(ipa(&[]))).unwrap();

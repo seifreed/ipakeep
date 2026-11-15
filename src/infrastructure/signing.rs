@@ -106,6 +106,6 @@ mod tests {
         let mut targets = Vec::new();
         collect_sign_targets(&socket_path, &mut targets, &|_| Ok(true)).unwrap();
 
-        assert!(targets.is_empty());
+        assert_eq!(targets, [] as [std::path::PathBuf; 0]);
     }
 }

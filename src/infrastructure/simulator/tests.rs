@@ -211,7 +211,7 @@ fn prepare_path_skips_symlinks() {
 
     let converted = prepare_path(dir.path()).unwrap();
 
-    assert!(converted.is_empty());
+    assert_eq!(converted, [] as [std::path::PathBuf; 0]);
     let mut file = File::open(outside).unwrap();
     let header = read_mach_header(&mut file).unwrap().unwrap();
     assert_eq!(header.ncmds, 0);
@@ -240,7 +240,7 @@ fn encrypted_macho_files_skips_symlinks() {
 
     let encrypted = encrypted_macho_files(link.parent().unwrap()).unwrap();
 
-    assert!(encrypted.is_empty());
+    assert_eq!(encrypted, [] as [std::path::PathBuf; 0]);
 }
 
 #[test]

@@ -165,12 +165,10 @@ fn sanitize_environment(value: &str) -> String {
 mod tests {
     use super::{
         LogFormat, LoggingConfig, environment, install_panic_hook, panic_location,
-        panic_payload_type, read_env_result, sanitize_environment,
+        panic_payload_type, sanitize_environment,
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::io::{self, Write};
-    #[cfg(unix)]
-    use std::os::unix::ffi::OsStringExt;
 
     struct FailingWriter;
 
@@ -236,6 +234,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn environment_reader_rejects_non_utf8_values() {
+        use super::read_env_result;
+        use std::os::unix::ffi::OsStringExt;
+
         let error = read_env_result(
             "IPAKEEP_TEST",
             Err(std::env::VarError::NotUnicode(
@@ -269,7 +270,7 @@ mod tests {
     #[test]
     fn environment_is_a_nonempty_sanitized_label() {
         let environment = environment();
-        assert!(!environment.is_empty());
+        assert_ne!(environment, "");
         assert!(environment.len() <= 64);
         assert!(
             environment

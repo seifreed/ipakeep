@@ -47,7 +47,7 @@ fn read_request_headers_stops_when_the_peer_closes_early() {
     let client = TcpStream::connect(address).unwrap();
     client.shutdown(std::net::Shutdown::Write).unwrap();
 
-    assert!(server.join().unwrap().is_empty());
+    assert_eq!(server.join().unwrap(), "");
 }
 
 fn read_request_headers(stream: &mut TcpStream) -> String {
@@ -107,7 +107,7 @@ fn parse_download_item_defaults_missing_optional_data_and_requires_url() {
         .unwrap()
         .unwrap();
     assert_eq!(item.url, "https://example.test/app");
-    assert!(item.md5.is_empty());
+    assert_eq!(item.md5, "");
     assert!(item.sinfs.is_empty());
     assert!(item.metadata.is_empty());
 }
@@ -128,8 +128,8 @@ fn parse_download_item_filters_invalid_sinfs_and_reports_bad_base64() {
     .unwrap();
     assert_eq!(item.sinfs.len(), 3);
     assert_eq!(item.sinfs[0].data, [1]);
-    assert!(item.sinfs[1].data.is_empty());
-    assert!(item.sinfs[2].data.is_empty());
+    assert_eq!(item.sinfs[1].data, [] as [u8; 0]);
+    assert_eq!(item.sinfs[2].data, [] as [u8; 0]);
     assert_eq!(item.metadata["bundleId"], "com.example.app");
 
     let error = parse_download_item(&serde_json::json!({

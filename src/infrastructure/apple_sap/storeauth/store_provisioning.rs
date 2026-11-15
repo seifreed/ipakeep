@@ -190,11 +190,9 @@ mod tests {
         assert_eq!(data.key_bag, vec![9, 8]);
         let text = parse_finish(200, &response(Some(plist::Value::String("CQg=".into())))).unwrap();
         assert_eq!(text.key_bag, vec![9, 8]);
-        assert!(
-            parse_finish(200, &response(None))
-                .unwrap()
-                .key_bag
-                .is_empty()
+        assert_eq!(
+            parse_finish(200, &response(None)).unwrap().key_bag,
+            [] as [u8; 0]
         );
     }
 

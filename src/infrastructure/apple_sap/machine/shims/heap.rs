@@ -174,7 +174,7 @@ mod tests {
         let second = heap.allocate(32).expect("second");
         heap.release(first).expect("first");
         heap.release(second).expect("second");
-        assert!(heap.free_blocks.is_empty());
+        assert_eq!(heap.free_blocks, [] as [FreeBlock; 0]);
         assert_eq!(heap.cursor, 0);
         assert_eq!(heap.allocate(64).expect("again"), HEAP_BASE);
     }

@@ -362,7 +362,9 @@ fn parse_segment_starts(payload: &[u8], at: usize) -> Option<SegmentStarts> {
         pointer_format: u16::from_le_bytes([fixed[6], fixed[7]]),
         segment_offset: le64(fixed, 8)?,
         page_starts: pages
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect(),
     })

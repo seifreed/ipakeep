@@ -530,7 +530,10 @@ fn dispatch_once_runs_the_block_once_and_resumes() {
     guest.put(block + 24, &[0; 8]);
     assert_eq!(guest.ok("_dispatch_once", &[DATA, block]), 0);
     assert_eq!(guest.u64_at(block + 24), 0);
-    assert!(guest.shims.state().borrow().callback_returns.is_empty());
+    assert_eq!(
+        guest.shims.state().borrow().callback_returns,
+        [] as [u64; 0]
+    );
 }
 
 #[test]

@@ -438,7 +438,7 @@ mod tests {
             .await
             .expect("serve");
 
-        assert!(output.is_empty());
+        assert_eq!(output, [] as [u8; 0]);
     }
 
     #[tokio::test]

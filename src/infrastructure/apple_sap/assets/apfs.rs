@@ -215,7 +215,7 @@ fn to_usize(value: u64) -> Result<usize> {
 fn fletcher64(block: &[u8]) -> u64 {
     const MODULUS: u64 = 0xffff_ffff;
     let (mut low, mut high) = (0u64, 0u64);
-    for word in block[8..].chunks_exact(4) {
+    for word in block[8..].as_chunks::<4>().0 {
         low = (low + u64::from(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))) % MODULUS;
         high = (high + low) % MODULUS;
     }
@@ -1224,7 +1224,9 @@ impl<'a, R: ReadAt> DecmpfsReader<'a, R> {
         let mut table = vec![0u8; to_usize(table_size)?];
         read_resource(&source, &mut table, 0)?;
         let offsets: Vec<u64> = table
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|entry| u64::from(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]])))
             .collect();
         validate_block_offsets(&offsets, table_size, source_size)?;

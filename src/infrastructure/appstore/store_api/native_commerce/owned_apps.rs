@@ -714,7 +714,7 @@ mod tests {
                 assert_eq!(header(request, name).as_deref(), Some(value), "{name}");
             }
         }
-        assert!(requests[0].body.is_empty());
+        assert_eq!(requests[0].body, [] as [u8; 0]);
         assert_eq!(header(&requests[0], "X-Apple-ActionSignature"), None);
         assert_eq!(requests[1].body, update.as_bytes());
         let expect = |index: usize, name: &str, value: &str| {

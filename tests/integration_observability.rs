@@ -18,7 +18,7 @@ fn json_logs_are_structured_on_stderr_and_correlated_to_the_command() {
         .expect("run CLI");
 
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let events: Vec<Value> = stderr
         .lines()

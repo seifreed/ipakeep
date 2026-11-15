@@ -101,20 +101,21 @@ mod tests {
 
     #[test]
     fn ignores_unknown_magic_and_non_arm64_architectures() {
-        assert!(arm64_fat_bases(&mut file(b"data"), 0).unwrap().is_empty());
-        assert!(
-            arm64_fat_bases(&mut file(&fat_header(FAT_MAGIC, 0)), FAT_MAGIC)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            arm64_fat_bases(&mut file(b"data"), 0).unwrap(),
+            [] as [u64; 0]
+        );
+        assert_eq!(
+            arm64_fat_bases(&mut file(&fat_header(FAT_MAGIC, 0)), FAT_MAGIC).unwrap(),
+            [] as [u64; 0]
         );
         let mut bytes = fat_header(FAT_MAGIC, 1);
         for word in [X86_64, 0, 0x100, 0x40, 0] {
             bytes.extend_from_slice(&word.to_be_bytes());
         }
-        assert!(
-            arm64_fat_bases(&mut file(&bytes), FAT_MAGIC)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            arm64_fat_bases(&mut file(&bytes), FAT_MAGIC).unwrap(),
+            [] as [u64; 0]
         );
     }
 

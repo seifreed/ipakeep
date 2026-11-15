@@ -131,7 +131,10 @@ async fn login_defaults_to_configurator_flow() {
     .expect("login should succeed");
 
     assert_eq!(app_store.authenticate_calls().len(), 1);
-    assert!(app_store.authenticate_grandslam_calls().is_empty());
+    assert_eq!(
+        app_store.authenticate_grandslam_calls(),
+        [] as [(String, String, String); 0]
+    );
 }
 
 #[tokio::test]
@@ -158,7 +161,10 @@ async fn login_grandslam_flag_selects_srp_flow() {
     .expect("login should succeed");
 
     assert_eq!(app_store.authenticate_grandslam_calls().len(), 1);
-    assert!(app_store.authenticate_calls().is_empty());
+    assert_eq!(
+        app_store.authenticate_calls(),
+        [] as [(String, String, String); 0]
+    );
 }
 
 #[test]

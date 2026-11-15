@@ -161,8 +161,10 @@ fn describe_patches(image: &MachImage, out: &mut String) -> std::fmt::Result {
     let original = super::arm64_slice(&original).unwrap_or_default();
     let mut patches = BTreeMap::new();
     for (index, (old, new)) in original
-        .chunks_exact(4)
-        .zip(image.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(image.data().as_chunks::<4>().0)
         .enumerate()
     {
         if old != new {

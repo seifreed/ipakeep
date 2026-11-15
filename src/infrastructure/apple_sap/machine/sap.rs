@@ -914,7 +914,7 @@ mod golden_tests {
                 &hex_at(&golden, "/exchange2_input_hex"),
             )
             .unwrap();
-        assert!(second.output.is_empty());
+        assert_eq!(second.output, [] as [u8; 0]);
         assert_eq!(second.state, 0);
         assert_signatures(&mut machine, context, &golden);
         machine.teardown(context).unwrap();

@@ -235,7 +235,7 @@ mod tests {
             read_arm64(&mut reader, fat.len()).ok(),
             Some(b"arm64e!".to_vec())
         );
-        assert!(reader.is_empty());
+        assert_eq!(reader, b"");
     }
 
     #[test]

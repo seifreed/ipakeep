@@ -13,7 +13,7 @@ fn compute_a_pub_is_deterministic() {
     let a_pub1 = compute_a_pub(&a);
     let a_pub2 = compute_a_pub(&a);
     assert_eq!(a_pub1, a_pub2);
-    assert!(!a_pub1.is_empty());
+    assert_ne!(a_pub1, [] as [u8; 0]);
 }
 
 #[test]

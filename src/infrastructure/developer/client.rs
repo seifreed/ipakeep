@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(result.certificate_der, [1, 2, 3]);
         assert_eq!(result.certificate_serial, "01");
         assert_eq!(result.mobileprovision, b"PROFILE");
-        assert!(!result.key_pem.is_empty());
+        assert_ne!(result.key_pem, [] as [u8; 0]);
 
         let automatic_request = super::super::ProvisionRequest {
             account: &account,
