@@ -17365,7 +17365,8 @@
         "pkg:golang/google.golang.org/protobuf@v1.36.11?package-id=db7c3d0bacdfac35",
         "pkg:golang/gopkg.in/errgo.v1@v1.0.1?package-id=ce29386c5c3814a8",
         "pkg:golang/gopkg.in/retry.v1@v1.0.3?package-id=13c9f16dc4ac0880",
-        "pkg:golang/howett.net/plist@v1.0.1?package-id=9b7aed16e21a2dce"
+        "pkg:golang/howett.net/plist@v1.0.1?package-id=9b7aed16e21a2dce",
+        "pkg:golang/stdlib@1.26.11?package-id=487aa9a2c7ff124f"
       ]
     },
     {

@@ -180,6 +180,8 @@ jq \
       [go_components[] | select(.name == go_root_name) | .version] | first;
     def go_component_ref($name; $version):
       [go_components[] | select(.name == $name and .version == $version) | ."bom-ref"] | first;
+    def go_stdlib_ref:
+      [go_components[] | select(.name == "stdlib") | ."bom-ref"] | first;
     def go_ref($module):
       ($module | split("@")) as $parts
       | if ($parts | length) == 1 then
@@ -209,8 +211,10 @@ jq \
     scrub_paths
     | .components += (go_components | map(select(.name != "/go.mod") | add_go_hash | add_go_licenses | add_go_references | normalize_go_stdlib_version))
     | (go_component_ref(go_root_name; go_root_version)) as $go_root_ref
+    | (go_stdlib_ref) as $go_stdlib_ref
     | .dependencies[0].dependsOn = ((.dependencies[0].dependsOn // []) + [$go_root_ref] | map(select(. != null)) | unique)
     | .dependencies += go_graph_edges
+    | .dependencies += [{ref: $go_root_ref, dependsOn: [$go_stdlib_ref]}]
     | .dependencies |= (group_by(.ref) | map({ref: .[0].ref, dependsOn: (map(.dependsOn // []) | add | unique)}))
     | .serialNumber = "urn:uuid:7f60c5df-047a-5ac1-9a38-4f2f7d88c0a1"
     | .citations = [
@@ -256,6 +260,9 @@ jq -e '
   .specVersion == "1.7"
   and ([.. | strings | select(test("path\\+file://|file://|/Users/"))] | length == 0)
   and ([.. | objects | ."bom-ref"? // empty] as $refs | ($refs | length) == ($refs | unique | length))
+  and ([.components[] | select(.name == "stdlib") | ."bom-ref"][0] as $stdlib
+    | [.components[] | select(.name == "github.com/majd/ipatool/v2/ipakeep-anisette-helper") | ."bom-ref"][0] as $helper
+    | any(.dependencies[]; .ref == $helper and any(.dependsOn[]?; . == $stdlib)))
 ' "$candidate" > /dev/null
 sbomqs score --configpath "$root/sbom/sbomqs-comprehensive.yaml" "$candidate"
 sbomqs score --profile ntia "$candidate"
