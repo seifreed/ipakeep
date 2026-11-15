@@ -169,6 +169,7 @@ mod tests {
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
     use std::io::{self, Write};
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 
     struct FailingWriter;
@@ -233,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn environment_reader_rejects_non_utf8_values() {
         let error = read_env_result(
             "IPAKEEP_TEST",

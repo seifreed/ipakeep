@@ -642,7 +642,8 @@ pub(super) fn external_argv(
     })
 }
 
-#[cfg(test)]
+// ponytail: these tests run POSIX shell stand-ins for the host tools, so unix only.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
