@@ -501,6 +501,22 @@ mod tests {
         file_system.read_exact_at(&mut header, 0).unwrap();
     }
 
+    /// Segment 2276 has a short FSE stream that upstream's Go decoder only
+    /// accepts after `padLZFSEStreams`; `lzfse_rust` must decode it as is.
+    #[test]
+    #[ignore = "downloads one 1 MiB segment of the macOS 27.0.1 SystemOS cryptex"]
+    fn decodes_system_os_segment_needing_go_lzfse_padding() {
+        const SHORT_STREAM_SEGMENT: u64 = 2276;
+        let http = Arc::new(BlockingHttp::new().unwrap());
+        let image = RestoreImage::open_pinned(http).unwrap();
+        let system_os = image.open_system_os_image().unwrap();
+        let segment_size = u64::from(system_os.segment_size());
+        let mut data = vec![0; usize::try_from(segment_size).unwrap()];
+        system_os
+            .read_exact_at(&mut data, SHORT_STREAM_SEGMENT * segment_size)
+            .unwrap();
+    }
+
     #[test]
     #[ignore = "downloads the 33 MB pinned kernel cache member of the macOS 27.0.1 restore image"]
     fn inflates_pinned_kernel_cache_member() {
