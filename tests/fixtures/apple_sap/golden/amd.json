@@ -1,0 +1,87 @@
+{
+  "description": "AMSAnisette _headersForRequest:account:nil type:2 (Store AMD) run in the AppleMediaServices emulator, com.apple.adid served by ModernADI.ExchangeXPC. Input ADI = adi.json (GSA machine provisioning, dsid -2).",
+  "direct_reply": {
+    "mid_b64": "tXF7qexoT5y2Knqn/OeXYVkm+eDq4np0e1MZcdjF56MIp8x3VTyhfj8xLy7dYFaKlzpcYC1UwG1vG0Hp",
+    "mid_hex": "b5717ba9ec684f9cb62a7aa7fce797615926f9e0eae27a747b531971d8c5e7a308a7cc77553ca17e3f312f2edd60568a973a5c602d54c06d6f1b41e9",
+    "otp_b64": "AAAABQAAABDDXdrcRpjEep+kb4Lq6VMYgAAAAQ==",
+    "otp_hex": "0000000500000010c35ddadc4698c47a9fa46f82eae9531880000001",
+    "reply_hex": "000000000000003cb5717ba9ec684f9cb62a7aa7fce797615926f9e0eae27a747b531971d8c5e7a308a7cc77553ca17e3f312f2edd60568a973a5c602d54c06d6f1b41e90000001c0000000500000010c35ddadc4698c47a9fa46f82eae9531880000001",
+    "request_hex": "00000001cfe0b46a00000001fffffffffffffffe",
+    "status": 0
+  },
+  "genuine_dsid_minus1": {
+    "error": "AppleMediaServices returned no Store AMD proof (\u003cnil\u003e)",
+    "exchanges": [
+      {
+        "original_request_hex": "00000001cfe0b46a00000001ffffffffffffffff",
+        "forwarded_request_hex": "00000001cfe0b46a00000001ffffffffffffffff",
+        "reply_hex": "ffff4ffb"
+      }
+    ],
+    "note": "adid answers a bare status because dsid -1 is only provisioned by the account-bound Store 'SP' action",
+    "xpc_request_hex": "00000001cfe0b46a00000001ffffffffffffffff"
+  },
+  "hardware_id_hex": "020000000001",
+  "identifier_hex": "00112233445566778899aabbccddeeff",
+  "input_adi_state": "adi.json adi_state_hex",
+  "request_otp_minus1": {
+    "error": "request modern ADI OTP: status -45061",
+    "xpc": [
+      {
+        "kind": "adi-client:0x1000c01dab04",
+        "request_hex": "00000001cfe0b46a00000001ffffffffffffffff",
+        "reply_hex": "ffff4ffb"
+      }
+    ]
+  },
+  "request_otp_minus2": {
+    "mid_hex": "b5717ba9ec684f9cb62a7aa7fce797615926f9e0eae27a747b531971d8c5e7a308a7cc77553ca17e3f312f2edd60568a973a5c602d54c06d6f1b41e9",
+    "otp_hex": "0000000500000010c35ddadc4698c47a9fa46f82eae9531880000001",
+    "xpc": [
+      {
+        "kind": "adi-client:0x1000c01dab04",
+        "request_hex": "00000001cfe0b46a00000001fffffffffffffffe",
+        "reply_hex": "000000000000003cb5717ba9ec684f9cb62a7aa7fce797615926f9e0eae27a747b531971d8c5e7a308a7cc77553ca17e3f312f2edd60568a973a5c602d54c06d6f1b41e90000001c0000000500000010c35ddadc4698c47a9fa46f82eae9531880000001"
+      }
+    ]
+  },
+  "rewritten_dsid_minus2": {
+    "deterministic_replay": true,
+    "exchanges": [
+      {
+        "original_request_hex": "00000001cfe0b46a00000001ffffffffffffffff",
+        "forwarded_request_hex": "00000001cfe0b46a00000001fffffffffffffffe",
+        "reply_hex": "000000000000003cb5717ba9ec684f9cb62a7aa7fce797615926f9e0eae27a747b531971d8c5e7a308a7cc77553ca17e3f312f2edd60568a973a5c602d54c06d6f1b41e90000001c0000000500000010c35ddadc4698c47a9fa46f82eae9531880000001"
+      }
+    ],
+    "headers": {
+      "X-Apple-AMD": "AAAABQAAABDDXdrcRpjEep+kb4Lq6VMYgAAAAQ==",
+      "X-Apple-AMD-M": "tXF7qexoT5y2Knqn/OeXYVkm+eDq4np0e1MZcdjF56MIp8x3VTyhfj8xLy7dYFaKlzpcYC1UwG1vG0Hp"
+    },
+    "note": "the handler forwards the AMS request with bytes[12:20] changed from ff..ff to ff..fe; time/RNG re-frozen to fixed_time/seed right before adid runs",
+    "other_seed_headers": {
+      "X-Apple-AMD": "AAAABQAAABDDXdrcRpjEep+kb4Lq6VMYgAAAAQ==",
+      "X-Apple-AMD-M": "tXF7qexoT5y2Knqn/OeXYVkm+eDq4np0e1MZcdjF56MIp8x3VTyhfj8xLy7dYFaKlzpcYC1UwG1vG0Hp"
+    },
+    "other_url_headers": {
+      "X-Apple-AMD": "AAAABQAAABDDXdrcRpjEep+kb4Lq6VMYgAAAAQ==",
+      "X-Apple-AMD-M": "tXF7qexoT5y2Knqn/OeXYVkm+eDq4np0e1MZcdjF56MIp8x3VTyhfj8xLy7dYFaKlzpcYC1UwG1vG0Hp"
+    },
+    "plus90s_headers": {
+      "X-Apple-AMD": "AAAABQAAABB9esqDDIHBJzt4UqER12uzgAAAAQ==",
+      "X-Apple-AMD-M": "tXF7qexoT5y2Knqn/OeXYVkm+eDq4np0e1MZcdjF56MIp8x3VTyhfj8xLy7dYFaKlzpcYC1UwG1vG0Hp"
+    },
+    "seed_independent": true,
+    "time_independent_amd": false,
+    "time_independent_mid": true,
+    "url_independent": true
+  },
+  "url": "https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct?guid=020000000001",
+  "verdict": {
+    "ams_reply_equals_direct_reply": true,
+    "ams_request_equals_request_otp_minus1_request": true,
+    "request_otp_api_matches_reply": true,
+    "x_apple_amd_equals_b64_otp": true,
+    "x_apple_amd_m_equals_b64_mid": true
+  }
+}

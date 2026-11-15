@@ -1,0 +1,601 @@
+diff --git a/internal/golden/golden.go b/internal/golden/golden.go
+new file mode 100644
+index 0000000..5aff443
+--- /dev/null
++++ b/internal/golden/golden.go
+@@ -0,0 +1,77 @@
++// Package golden holds the deterministic-oracle hooks of the H0 harness copy.
++package golden
++
++import (
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/binary"
++	"io"
++	"sync"
++	"time"
++)
++
++var (
++	mu      sync.Mutex
++	nowFunc           = time.Now
++	random  io.Reader = rand.Reader
++	counts            = map[string]int{}
++	// XPCTrace observes runtime<->daemon XPC payloads when non-nil.
++	XPCTrace func(kind string, request, reply []byte)
++)
++
++// Now returns the (possibly frozen) host time observed by guest shims.
++func Now(source string) time.Time {
++	mu.Lock()
++	defer mu.Unlock()
++	counts["time:"+source]++
++	return nowFunc()
++}
++
++// Read fills b from the (possibly seeded) random source.
++func Read(source string, b []byte) (int, error) {
++	mu.Lock()
++	defer mu.Unlock()
++	counts["rand:"+source] += len(b)
++	return io.ReadFull(random, b)
++}
++
++// Freeze makes every shim observe fixed time and a seeded SHA-256 counter stream.
++func Freeze(at time.Time, seed []byte) {
++	mu.Lock()
++	defer mu.Unlock()
++	nowFunc = func() time.Time { return at }
++	random = &stream{seed: append([]byte(nil), seed...)}
++	counts = map[string]int{}
++}
++
++// Counts returns and resets the per-source usage counters.
++func Counts() map[string]int {
++	mu.Lock()
++	defer mu.Unlock()
++	out := counts
++	counts = map[string]int{}
++	return out
++}
++
++type stream struct {
++	seed    []byte
++	counter uint64
++	buf     []byte
++}
++
++func (s *stream) Read(p []byte) (int, error) {
++	n := 0
++	for n < len(p) {
++		if len(s.buf) == 0 {
++			var c [8]byte
++			binary.BigEndian.PutUint64(c[:], s.counter)
++			s.counter++
++			h := sha256.Sum256(append(append([]byte(nil), s.seed...), c[:]...))
++			s.buf = h[:]
++		}
++		k := copy(p[n:], s.buf)
++		s.buf = s.buf[k:]
++		n += k
++	}
++	return n, nil
++}
+diff --git a/internal/golden/wire.go b/internal/golden/wire.go
+new file mode 100644
+index 0000000..2707804
+--- /dev/null
++++ b/internal/golden/wire.go
+@@ -0,0 +1,148 @@
++package golden
++
++import (
++	"bytes"
++	"encoding/base64"
++	"encoding/json"
++	"io"
++	"net/http"
++	"os"
++	"strings"
++	"sync"
++	"time"
++	"unicode/utf8"
++)
++
++// WireLogEnv names the JSONL file that receives every HTTP exchange.
++const WireLogEnv = "IPAKEEP_WIRE_LOG"
++
++const maxCapturedBody = 2 << 20
++
++var wireMu sync.Mutex
++
++type wireBody struct {
++	Text    string `json:"text,omitempty"`
++	Base64  string `json:"base64,omitempty"`
++	Length  int64  `json:"length"`
++	Omitted string `json:"omitted,omitempty"`
++}
++
++type wireEntry struct {
++	Time    string              `json:"time"`
++	Layer   string              `json:"layer"`
++	Kind    string              `json:"kind"`
++	Method  string              `json:"method,omitempty"`
++	URL     string              `json:"url,omitempty"`
++	Status  int                 `json:"status,omitempty"`
++	Headers map[string][]string `json:"headers"`
++	Body    *wireBody           `json:"body,omitempty"`
++	Error   string              `json:"error,omitempty"`
++}
++
++func encodeBody(data []byte) *wireBody {
++	body := &wireBody{Length: int64(len(data))}
++	if len(data) == 0 {
++		return body
++	}
++	if utf8.Valid(data) {
++		body.Text = string(data)
++	} else {
++		body.Base64 = base64.StdEncoding.EncodeToString(data)
++	}
++	return body
++}
++
++func writeEntry(entry wireEntry) {
++	path := os.Getenv(WireLogEnv)
++	if path == "" {
++		return
++	}
++	entry.Time = time.Now().UTC().Format(time.RFC3339Nano)
++	line, err := json.Marshal(entry)
++	if err != nil {
++		return
++	}
++	wireMu.Lock()
++	defer wireMu.Unlock()
++	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
++	if err != nil {
++		return
++	}
++	defer file.Close()
++	_, _ = file.Write(append(line, '\n'))
++}
++
++// WireRecord logs a request whose body the caller already holds.
++func WireRecord(layer string, request *http.Request, body []byte) {
++	if os.Getenv(WireLogEnv) == "" || request == nil {
++		return
++	}
++	writeEntry(wireEntry{Layer: layer, Kind: "request", Method: request.Method, URL: request.URL.String(), Headers: request.Header.Clone(), Body: encodeBody(body)})
++}
++
++// WireTransport wraps base so each request and response is appended to the wire log.
++func WireTransport(layer string, base http.RoundTripper) http.RoundTripper {
++	if base == nil {
++		base = http.DefaultTransport
++	}
++	return &wireTransport{layer: layer, base: base}
++}
++
++type wireTransport struct {
++	layer string
++	base  http.RoundTripper
++}
++
++func (t *wireTransport) RoundTrip(request *http.Request) (*http.Response, error) {
++	if os.Getenv(WireLogEnv) == "" {
++		return t.base.RoundTrip(request)
++	}
++	var body []byte
++	if request.Body != nil && request.Body != http.NoBody {
++		data, err := io.ReadAll(request.Body)
++		_ = request.Body.Close()
++		if err != nil {
++			return nil, err
++		}
++		body = data
++		request.Body = io.NopCloser(bytes.NewReader(data))
++		request.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
++	}
++	WireRecord(t.layer, request, body)
++	response, err := t.base.RoundTrip(request)
++	if err != nil {
++		writeEntry(wireEntry{Layer: t.layer, Kind: "response", Method: request.Method, URL: request.URL.String(), Error: err.Error()})
++		return nil, err
++	}
++	entry := wireEntry{Layer: t.layer, Kind: "response", Method: request.Method, URL: request.URL.String(), Status: response.StatusCode, Headers: response.Header.Clone()}
++	if streaming(t.layer, response) {
++		entry.Body = &wireBody{Length: response.ContentLength, Omitted: "streaming or large body"}
++		writeEntry(entry)
++		return response, nil
++	}
++	data, readErr := io.ReadAll(response.Body)
++	_ = response.Body.Close()
++	response.Body = io.NopCloser(bytes.NewReader(data))
++	entry.Body = encodeBody(data)
++	if readErr != nil {
++		entry.Error = readErr.Error()
++	}
++	writeEntry(entry)
++	return response, readErr
++}
++
++func streaming(layer string, response *http.Response) bool {
++	if strings.HasSuffix(layer, ":transfer") || response.ContentLength > maxCapturedBody {
++		return true
++	}
++	contentType := response.Header.Get("Content-Type")
++	return response.ContentLength < 0 && strings.Contains(contentType, "octet-stream")
++}
++
++// UnwrapTransport returns the wrapped transport and a function that rewraps a replacement.
++func UnwrapTransport(rt http.RoundTripper) (http.RoundTripper, func(http.RoundTripper) http.RoundTripper) {
++	if wrapped, ok := rt.(*wireTransport); ok {
++		return wrapped.base, func(next http.RoundTripper) http.RoundTripper { return WireTransport(wrapped.layer, next) }
++	}
++	return rt, func(next http.RoundTripper) http.RoundTripper { return next }
++}
+diff --git a/internal/sap/machine/modern_adi.go b/internal/sap/machine/modern_adi.go
+index 00be545..1f4aa14 100644
+--- a/internal/sap/machine/modern_adi.go
++++ b/internal/sap/machine/modern_adi.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/binary"
+ 	"errors"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"path/filepath"
+ 
+ 	"github.com/majd/ipatool/v2/internal/sap/assets"
+@@ -426,6 +427,9 @@ func (a *ModernADI) invoke(function uint64, arguments ...uint64) (uint64, error)
+ 	}
+ 
+ 	a.runtime.services.xpcSyncReply = append([]byte(nil), a.daemon.services.xpcReply...)
++	if golden.XPCTrace != nil {
++		golden.XPCTrace(fmt.Sprintf("adi-client:%#x", function), request, a.daemon.services.xpcReply)
++	}
+ 
+ 	return a.runtime.invoke(function, arguments...)
+ }
+@@ -453,6 +457,10 @@ func (a *ModernADI) ExchangeXPC(request []byte) ([]byte, error) {
+ 		return nil, errors.New("modern ADI XPC service returned no reply")
+ 	}
+ 
++	if golden.XPCTrace != nil {
++		golden.XPCTrace("exchange-xpc", request, a.daemon.services.xpcReply)
++	}
++
+ 	return append([]byte(nil), a.daemon.services.xpcReply...), nil
+ }
+ 
+diff --git a/internal/sap/machine/shim_platform.go b/internal/sap/machine/shim_platform.go
+index 363c1d1..a1bf64c 100644
+--- a/internal/sap/machine/shim_platform.go
++++ b/internal/sap/machine/shim_platform.go
+@@ -2,14 +2,13 @@
+ package machine
+ 
+ import (
+-	"crypto/rand"
+ 	"crypto/sha256"
+ 	"encoding/binary"
+ 	"errors"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"math"
+ 	"strings"
+-	"time"
+ 
+ 	"github.com/majd/ipatool/v2/internal/sap/unicorn"
+ )
+@@ -1025,7 +1024,7 @@ func (s *shims) abort() error {
+ 
+ func (s *shims) arc4random() error {
+ 	var value [4]byte
+-	if _, err := rand.Read(value[:]); err != nil {
++	if _, err := golden.Read("arc4random", value[:]); err != nil {
+ 		return fmt.Errorf("generate guest random value: %w", err)
+ 	}
+ 
+@@ -1034,7 +1033,7 @@ func (s *shims) arc4random() error {
+ 
+ func (s *shims) random31() error {
+ 	var value [4]byte
+-	if _, err := rand.Read(value[:]); err != nil {
++	if _, err := golden.Read("random", value[:]); err != nil {
+ 		return fmt.Errorf("generate guest random value: %w", err)
+ 	}
+ 
+@@ -1054,7 +1053,7 @@ func (s *shims) arc4randomUniform() error {
+ 	limit -= limit % upper
+ 	for {
+ 		var data [4]byte
+-		if _, err := rand.Read(data[:]); err != nil {
++		if _, err := golden.Read("arc4random_uniform", data[:]); err != nil {
+ 			return fmt.Errorf("generate bounded guest random value: %w", err)
+ 		}
+ 		value := uint64(binary.LittleEndian.Uint32(data[:]))
+@@ -1077,7 +1076,7 @@ func (s *shims) readRandom() error {
+ 		return fmt.Errorf("random request size %d exceeds limit", length)
+ 	}
+ 	data := make([]byte, length)
+-	if _, err := rand.Read(data); err != nil {
++	if _, err := golden.Read("read_random", data); err != nil {
+ 		return fmt.Errorf("generate guest random bytes: %w", err)
+ 	}
+ 	if err := s.engine.MemWrite(address, data); err != nil {
+@@ -1269,7 +1268,7 @@ func (s *shims) currentTime() error {
+ 		return err
+ 	}
+ 
+-	seconds := uint64(time.Now().Unix())
++	seconds := uint64(golden.Now("time").Unix())
+ 	if address != 0 {
+ 		if err := s.writeUint64(address, seconds); err != nil {
+ 			return err
+@@ -1289,7 +1288,7 @@ func (s *shims) clockGetCalendarMicrotime() error {
+ 		return err
+ 	}
+ 
+-	now := time.Now()
++	now := golden.Now("clock_get_calendar_microtime")
+ 	if err := s.writeUint32(secondsAddress, uint32(now.Unix())); err != nil {
+ 		return err
+ 	}
+@@ -1311,7 +1310,7 @@ func (s *shims) gettimeofday() error {
+ 		return err
+ 	}
+ 
+-	now := time.Now()
++	now := golden.Now("gettimeofday")
+ 
+ 	if timeAddress != 0 {
+ 		var value [16]byte
+diff --git a/internal/store/backend.go b/internal/store/backend.go
+index 0fc9277..99acac0 100644
+--- a/internal/store/backend.go
++++ b/internal/store/backend.go
+@@ -8,6 +8,7 @@ import (
+ 	"encoding/hex"
+ 	"errors"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"io"
+ 	"net"
+ 	"net/http"
+@@ -301,7 +302,7 @@ func (b *Backend) requestTransport(input emulator.Request) func(*http.Request) (
+ 		transport = b.authTransport
+ 	}
+ 
+-	client := &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++	client := &http.Client{Transport: golden.WireTransport("store.backend:"+input.Operation, transport), Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+ 
+ 	return func(request *http.Request) (*http.Response, error) {
+ 		if b.jar != nil && request.Header.Get("Cookie") == "" {
+diff --git a/internal/store/emulator/bag.go b/internal/store/emulator/bag.go
+index 66778bd..77926c4 100644
+--- a/internal/store/emulator/bag.go
++++ b/internal/store/emulator/bag.go
+@@ -1,12 +1,16 @@
+ package emulator
+ 
+-import "time"
++import (
++	"time"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++)
+ 
+ func (r *Runtime) frozenBagFromValues(values map[string]any) (uint64, error) {
+ 	var err error
+ 
+ 	builder := r.New("AMSBagFrozenDataSourceBuilder", nil)
+-	fields := map[string]uint64{"setData:": r.importValue(values), "setProfile:": r.New("NSString", "AMSPurchase"), "setProfileVersion:": r.New("NSString", "1"), "setExpirationDate:": r.New("NSDate", time.Now().Add(5*time.Minute))}
++	fields := map[string]uint64{"setData:": r.importValue(values), "setProfile:": r.New("NSString", "AMSPurchase"), "setProfileVersion:": r.New("NSString", "1"), "setExpirationDate:": r.New("NSDate", golden.Now("emu.bag").Add(5*time.Minute))}
+ 
+ 	for selector, value := range fields {
+ 		if _, err = r.Invoke(builder, selector, value); err != nil {
+diff --git a/internal/store/emulator/bridge.go b/internal/store/emulator/bridge.go
+index 55098d7..4a34509 100644
+--- a/internal/store/emulator/bridge.go
++++ b/internal/store/emulator/bridge.go
+@@ -2,11 +2,11 @@ package emulator
+ 
+ import (
+ 	"bytes"
+-	"crypto/rand"
+ 	"crypto/sha512"
+ 	"encoding/base64"
+ 	"encoding/binary"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"math"
+ 	"net/url"
+ 	"path"
+@@ -193,7 +193,7 @@ func (r *Runtime) symbol(name string) {
+ 		r.set(r.New("NSString", value))
+ 
+ 	case "time":
+-		now := uint64(time.Now().Unix())
++		now := uint64(golden.Now("emu.time").Unix())
+ 		if r.arg(0) != 0 {
+ 			r.write64(r.arg(0), now)
+ 		}
+@@ -463,7 +463,7 @@ func (r *Runtime) symbol(name string) {
+ 		r.set(0)
+ 	case "CFUUIDCreate":
+ 		data := make([]byte, 16)
+-		if _, err := rand.Read(data); err != nil {
++		if _, err := golden.Read("emu.CFUUIDCreate", data); err != nil {
+ 			panic(err)
+ 		}
+ 
+@@ -503,7 +503,7 @@ func (r *Runtime) symbol(name string) {
+ 	case "dispatch_time":
+ 		base := r.arg(0)
+ 		if base == 0 {
+-			base = uint64(time.Now().UnixNano())
++			base = uint64(golden.Now("emu.dispatch_time").UnixNano())
+ 		}
+ 
+ 		r.set(base + r.arg(1))
+@@ -950,7 +950,7 @@ func (r *Runtime) message(receiver uint64, selector string, super bool) {
+ 			}
+ 
+ 			if selector == "dateWithTimeIntervalSinceNow:" {
+-				now := time.Now()
++				now := golden.Now("emu.dateWithTimeIntervalSinceNow")
+ 				seconds += float64(now.Unix()) + float64(now.Nanosecond())/1e9
+ 			}
+ 
+@@ -963,7 +963,7 @@ func (r *Runtime) message(receiver uint64, selector string, super bool) {
+ 
+ 			return
+ 		case "date", "now":
+-			r.set(r.New("NSDate", time.Now()))
++			r.set(r.New("NSDate", golden.Now("emu.NSDate.date")))
+ 
+ 			return
+ 		case "defaultSessionConfiguration", "ephemeralSessionConfiguration":
+@@ -2225,7 +2225,7 @@ func characterSetContains(set *Object, c rune) bool {
+ 
+ func (r *Runtime) newUUIDString() string {
+ 	var b [16]byte
+-	if _, err := rand.Read(b[:]); err != nil {
++	if _, err := golden.Read("emu.UUIDString", b[:]); err != nil {
+ 		panic(err)
+ 	}
+ 
+diff --git a/internal/store/emulator/delegate.go b/internal/store/emulator/delegate.go
+index 7abfbec..2170458 100644
+--- a/internal/store/emulator/delegate.go
++++ b/internal/store/emulator/delegate.go
+@@ -2,7 +2,7 @@ package emulator
+ 
+ import (
+ 	"fmt"
+-	"time"
++	"github.com/majd/ipatool/v2/internal/golden"
+ )
+ 
+ // The CLI owns interactive authentication. A caller delegate declines native UI
+@@ -138,7 +138,7 @@ func (r *Runtime) installStoreAMDAdapter() {
+ 	})
+ 	install(0x18073bc1c, func() { r.set(0) })
+ 	install(0x18071bec4, func() {
+-		now := time.Now()
++		now := golden.Now("emu.amd.gettimeofday")
+ 		if value := r.arg(0); value != 0 {
+ 			r.write64(value, uint64(now.Unix()))
+ 			r.write64(value+8, uint64(now.Nanosecond()/1000))
+diff --git a/internal/store/emulator/network.go b/internal/store/emulator/network.go
+index 38a7695..d6ef8ce 100644
+--- a/internal/store/emulator/network.go
++++ b/internal/store/emulator/network.go
+@@ -4,6 +4,7 @@ import (
+ 	"bytes"
+ 	"encoding/json"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"io"
+ 	"math"
+ 	"net/http"
+@@ -450,7 +451,7 @@ func (r *Runtime) networkMessage(receiver uint64, class, selector string, meta b
+ 
+ 		switch selector {
+ 		case "properties":
+-			fields := map[string]any{"Name": cookie.Name, "Value": cookie.Value, "Domain": cookie.Domain, "Path": cookie.Path, "Created": time.Now().Unix() - 978307200}
++			fields := map[string]any{"Name": cookie.Name, "Value": cookie.Value, "Domain": cookie.Domain, "Path": cookie.Path, "Created": golden.Now("emu.cookie").Unix() - 978307200}
+ 			if cookie.Secure {
+ 				fields["Secure"] = "TRUE"
+ 			}
+@@ -810,6 +811,8 @@ func (r *Runtime) performHTTP(task uint64) {
+ 		}
+ 	}
+ 
++	golden.WireRecord("emulator.performHTTP", request, body)
++
+ 	var response *http.Response
+ 	response, err = r.transport(request)
+ 
+diff --git a/internal/storeauth/anisette.go b/internal/storeauth/anisette.go
+index 94b0bbc..643336d 100644
+--- a/internal/storeauth/anisette.go
++++ b/internal/storeauth/anisette.go
+@@ -4,17 +4,16 @@ package storeauth
+ import (
+ 	"bytes"
+ 	"context"
+-	"crypto/rand"
+ 	"crypto/sha256"
+ 	"encoding/base64"
+ 	"encoding/hex"
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"io"
+ 	"net/http"
+ 	"strconv"
+-	"time"
+ 
+ 	"github.com/majd/ipatool/v2/internal/sap/assets"
+ 	"github.com/majd/ipatool/v2/internal/sap/machine"
+@@ -200,7 +199,7 @@ func sendMachineProvisioning(ctx context.Context, client *http.Client, endpoint
+ func decodeAnisetteState(encoded []byte) (*anisetteState, error) {
+ 	if len(encoded) == 0 {
+ 		identifier := make([]byte, 16)
+-		if _, err := rand.Read(identifier); err != nil {
++		if _, err := golden.Read("storeauth.identifier", identifier); err != nil {
+ 			return nil, fmt.Errorf("generate anisette identity: %w", err)
+ 		}
+ 
+@@ -217,7 +216,7 @@ func decodeAnisetteState(encoded []byte) (*anisetteState, error) {
+ 
+ func anisetteHeaders(state *anisetteState, otp, mid []byte) http.Header {
+ 	localUserID, deviceID := anisetteIdentityHeaders(state.Identifier)
+-	now := time.Now()
++	now := golden.Now("storeauth.headers")
+ 	headers := make(http.Header)
+ 	headers.Set("X-Apple-I-Client-Time", now.UTC().Format("2006-01-02T15:04:05Z"))
+ 	headers.Set("X-Apple-I-MD", base64.StdEncoding.EncodeToString(otp))
+diff --git a/internal/storeauth/http_client.go b/internal/storeauth/http_client.go
+index d3d8d10..5325b4f 100644
+--- a/internal/storeauth/http_client.go
++++ b/internal/storeauth/http_client.go
+@@ -8,6 +8,7 @@ import (
+ 	"crypto/x509"
+ 	"errors"
+ 	"fmt"
++	"github.com/majd/ipatool/v2/internal/golden"
+ 	"io"
+ 	"net/http"
+ 	"time"
+@@ -24,7 +25,7 @@ func NewHTTPClient(jar http.CookieJar) *http.Client {
+ 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+ 
+ 	return &http.Client{
+-		Transport: transport,
++		Transport: golden.WireTransport("storeauth", transport),
+ 		Jar:       jar,
+ 		Timeout:   30 * time.Second,
+ 		CheckRedirect: func(*http.Request, []*http.Request) error {
+@@ -89,7 +90,8 @@ func installAppleRoot(ctx context.Context, client *http.Client) error {
+ 	}
+ 	roots.AddCert(certificate)
+ 
+-	transport, ok := client.Transport.(*http.Transport)
++	base, rewrap := golden.UnwrapTransport(client.Transport)
++	transport, ok := base.(*http.Transport)
+ 	if !ok {
+ 		return errors.New("apple authentication transport is unsupported")
+ 	}
+@@ -98,7 +100,7 @@ func installAppleRoot(ctx context.Context, client *http.Client) error {
+ 	updated.TLSClientConfig.RootCAs = roots
+ 	updated.TLSClientConfig.MinVersion = tls.VersionTLS12
+ 	transport.CloseIdleConnections()
+-	client.Transport = updated
++	client.Transport = rewrap(updated)
+ 
+ 	return nil
+ }

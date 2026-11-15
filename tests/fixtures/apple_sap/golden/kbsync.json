@@ -1,0 +1,14 @@
+{
+  "description": "StoreAgent GenerateKBSync(hardwareID, dsid) with no SC Info file present (fresh virtual filesystem)",
+  "deterministic_replay": true,
+  "dsid": 1234567890,
+  "hardware_id_hex": "020000000001",
+  "kbsync_alt_seed_hex": "00040003db600e6cff2a0718fc49e5bb52d1ee842e9ccf25874c42f71109726d526dd65a0d87aadcf8d447b4545834c0ef4c2c68ddbe24a9381fa47dc13d5e848eb9cb07abcedc2c05942cd65abd23a07054d110e708c1545f67695d36ab96b60c294ec0a264d8ee48a663a04b613e443daf3e30e5efb55ad32549683fbf7924e6f10d10fb59642d418ef4f1d63da4a61f75e97c4d1dd2440b598acb9e2eecf03122f5c69aee34eba696f94d950bcc40c40f38d26172f8c5629e170c20ed701b3c7fc9a4927c8eae42e0b8e81710ebc1489c57e4",
+  "kbsync_hex": "0004000374845dda0462387d66d39802f870f2b58e3ce187d6f427ce652926ddfe248dfaa43b329eb3481f66071b966160b81b26455516f7d692a85b3322300053ffbcda2281e6effa38ba19dab1fed7737e331d10c9d9de5aa0e4fb7c03b996de3927d9d882917a25b6ac83bcfae5e6fe126e99503bdf0c10f7dcaa43c6cad301d7d51457c00d488bfbacfb1b2afed578c353fd11586d0ef996aa8b3cdf4ea6105c62cf87cfc36cfa6bfd91712c7e8e19a9899c6eb471823d5123258919870f4036ff171f50cacd8ad112e8fef58346253d5945",
+  "observed_sources": {
+    "rand:arc4random": 24,
+    "time:gettimeofday": 2
+  },
+  "seed_independent": false,
+  "time_independent": false
+}

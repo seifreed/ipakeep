@@ -1,0 +1,1095 @@
+diff --git a/harness/main.go b/harness/main.go
+new file mode 100644
+index 0000000..51f1163
+--- /dev/null
++++ b/harness/main.go
+@@ -0,0 +1,35 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"os"
++)
++
++func main() {
++	if len(os.Args) < 3 {
++		fmt.Fprintln(os.Stderr, "usage: h0golden sap|adi|amd|kbsync <outdir>")
++		os.Exit(2)
++	}
++	ctx := context.Background()
++	out := os.Args[2]
++	switch os.Args[1] {
++	case "sap":
++		commandSAP(ctx, out)
++	case "adi":
++		commandADI(ctx, out)
++	case "adi-verify":
++		commandADIVerify(ctx, out)
++	case "sap-verify":
++		commandSAPVerify(ctx, out)
++	case "wire-selftest":
++		commandWireSelfTest(ctx, out)
++	case "amd":
++		commandAMD(ctx, out)
++	case "kbsync":
++		commandKBSync(ctx, out)
++	default:
++		fmt.Fprintln(os.Stderr, "unknown command")
++		os.Exit(2)
++	}
++}
+diff --git a/harness/common.go b/harness/common.go
+new file mode 100644
+index 0000000..422b7d2
+--- /dev/null
++++ b/harness/common.go
+@@ -0,0 +1,133 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"sort"
++	"time"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++	"github.com/majd/ipatool/v2/internal/sap/assets"
++)
++
++// Injected constants. All synthetic; none identifies a real device or account.
++var (
++	fixedTime     = time.Date(2026, time.November, 15, 12, 0, 0, 0, time.UTC)
++	seedPrimary   = []byte("ipakeep-h0-golden-seed-v1")
++	seedAlternate = []byte("ipakeep-h0-golden-seed-v2")
++	hardwareID    = []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
++	adiIdentifier = mustHex("00112233445566778899aabbccddeeff")
++	kbsyncDSID    = uint64(1234567890)
++)
++
++const (
++	machineDSID = ^uint64(1)
++	amdDSID     = ^uint64(0)
++	userAgent   = "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
++)
++
++func init() {
++	if value := os.Getenv("H0_ADI_ID"); value != "" {
++		adiIdentifier = mustHex(value)
++	}
++	if value := os.Getenv("H0_SEED"); value != "" {
++		seedPrimary = []byte(value)
++	}
++}
++
++func mustHex(value string) []byte {
++	data, err := hex.DecodeString(value)
++	if err != nil {
++		panic(err)
++	}
++	return data
++}
++
++type record map[string]any
++
++func hx(data []byte) string { return hex.EncodeToString(data) }
++
++func freeze(seed []byte) { golden.Freeze(fixedTime, seed) }
++
++var laterTime = fixedTime.Add(90 * time.Second)
++
++func sources() map[string]int {
++	counts := golden.Counts()
++	keys := make([]string, 0, len(counts))
++	for key := range counts {
++		keys = append(keys, key)
++	}
++	sort.Strings(keys)
++	ordered := make(map[string]int, len(counts))
++	for _, key := range keys {
++		ordered[key] = counts[key]
++	}
++	return ordered
++}
++
++func loadBundle(ctx context.Context) assets.Bundle {
++	bundle, err := assets.Load(ctx)
++	check(err, "load assets")
++	return bundle
++}
++
++func check(err error, what string) {
++	if err != nil {
++		fmt.Fprintf(os.Stderr, "%s: %v\n", what, err)
++		os.Exit(1)
++	}
++}
++
++func writeJSON(dir, name string, value any) {
++	check(os.MkdirAll(dir, 0o755), "mkdir")
++	data, err := json.MarshalIndent(value, "", "  ")
++	check(err, "marshal "+name)
++	check(os.WriteFile(filepath.Join(dir, name), append(data, '\n'), 0o644), "write "+name)
++}
++
++func readJSON(dir, name string, value any) {
++	data, err := os.ReadFile(filepath.Join(dir, name))
++	check(err, "read "+name)
++	check(json.Unmarshal(data, value), "decode "+name)
++}
++
++type httpExchange struct {
++	Method          string            `json:"method"`
++	URL             string            `json:"url"`
++	RequestHeaders  map[string]string `json:"request_headers"`
++	RequestBodyHex  string            `json:"request_body_hex"`
++	Status          int               `json:"status"`
++	ResponseBodyHex string            `json:"response_body_hex"`
++}
++
++func doHTTP(ctx context.Context, method, url string, headers map[string]string, body []byte) (httpExchange, []byte) {
++	request, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
++	check(err, "build request")
++	for key, value := range headers {
++		request.Header.Set(key, value)
++	}
++	client := &http.Client{Timeout: 30 * time.Second}
++	response, err := client.Do(request)
++	check(err, "http "+url)
++	defer response.Body.Close()
++	data, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
++	check(err, "read "+url)
++	if response.StatusCode != http.StatusOK {
++		fmt.Fprintf(os.Stderr, "%s returned %d: %s\n", url, response.StatusCode, data)
++		os.Exit(1)
++	}
++	return httpExchange{Method: method, URL: url, RequestHeaders: headers, RequestBodyHex: hx(body), Status: response.StatusCode, ResponseBodyHex: hx(data)}, data
++}
++
++func same(label string, a, b []byte) bool {
++	equal := bytes.Equal(a, b)
++	fmt.Printf("  %-40s %v\n", label, equal)
++	return equal
++}
+diff --git a/harness/sap.go b/harness/sap.go
+new file mode 100644
+index 0000000..a99d27b
+--- /dev/null
++++ b/harness/sap.go
+@@ -0,0 +1,175 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"regexp"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++	"github.com/majd/ipatool/v2/internal/sap/assets"
++	"github.com/majd/ipatool/v2/internal/sap/machine"
++	"howett.net/plist"
++)
++
++const sapVersion = uint32(200)
++
++var signInputs = [][]byte{
++	[]byte("ipakeep-h0-sign-input-0"),
++	make([]byte, 32),
++	[]byte(`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>appleId</key><string>user@example.invalid</string></dict></plist>`),
++}
++
++type sapRun struct {
++	Context    uint64
++	Exchange1  []byte
++	State1     int32
++	Exchange2  []byte
++	State2     int32
++	Signatures [][]byte
++	Sources    []map[string]int
++}
++
++func bagString(bag []byte, key string) string {
++	match := regexp.MustCompile(`<key>` + regexp.QuoteMeta(key) + `</key>\s*<string>([^<]+)</string>`).FindSubmatch(bag)
++	if match == nil {
++		check(fmt.Errorf("bag has no %s", key), "parse bag")
++	}
++	return string(match[1])
++}
++
++func plistBuffer(document []byte, key string) []byte {
++	var values map[string]any
++	_, err := plist.Unmarshal(document, &values)
++	check(err, "decode plist")
++	value, ok := values[key].([]byte)
++	if !ok {
++		check(fmt.Errorf("missing %s", key), "decode plist")
++	}
++	return value
++}
++
++// runSAP executes one full session; reply==nil means POST to Apple, else replay.
++func runSAP(ctx context.Context, bundle assets.Bundle, seed, certificate []byte, setupURL string, reply []byte) (sapRun, *httpExchange) {
++	freeze(seed)
++	if timeShift {
++		golden.Freeze(laterTime, seed)
++	}
++	var run sapRun
++	guest, err := machine.Open(ctx, bundle)
++	check(err, "open SAP machine")
++	defer guest.Close()
++	run.Sources = append(run.Sources, sources())
++
++	run.Context, err = guest.Initialize(hardwareID)
++	check(err, "initialize")
++	run.Sources = append(run.Sources, sources())
++
++	run.Exchange1, run.State1, err = guest.Exchange(sapVersion, hardwareID, run.Context, certificate)
++	check(err, "exchange 1")
++	run.Sources = append(run.Sources, sources())
++
++	var exchange *httpExchange
++	if reply == nil && setupURL == "" {
++		return run, nil
++	}
++	if reply == nil {
++		envelope, err := plist.Marshal(map[string]any{"sign-sap-setup-buffer": run.Exchange1}, plist.XMLFormat)
++		check(err, "encode setup")
++		record, body := doHTTP(ctx, http.MethodPost, setupURL, map[string]string{"Content-Type": "application/x-plist", "User-Agent": userAgent}, envelope)
++		exchange = &record
++		reply = plistBuffer(body, "sign-sap-setup-buffer")
++	}
++
++	run.Exchange2, run.State2, err = guest.Exchange(sapVersion, hardwareID, run.Context, reply)
++	check(err, "exchange 2")
++	run.Sources = append(run.Sources, sources())
++
++	for _, input := range signInputs {
++		signature, err := guest.Sign(run.Context, input)
++		check(err, "sign")
++		run.Signatures = append(run.Signatures, signature)
++	}
++	run.Sources = append(run.Sources, sources())
++	check(guest.Teardown(run.Context), "teardown")
++
++	return run, exchange
++}
++
++func compareSAP(label string, a, b sapRun) bool {
++	fmt.Println(label)
++	ok := same("context", []byte(fmt.Sprint(a.Context)), []byte(fmt.Sprint(b.Context)))
++	ok = same("exchange1", a.Exchange1, b.Exchange1) && ok
++	ok = same("exchange2", a.Exchange2, b.Exchange2) && ok
++	for index := range a.Signatures {
++		ok = same(fmt.Sprintf("signature[%d]", index), a.Signatures[index], b.Signatures[index]) && ok
++	}
++	return ok
++}
++
++func commandSAP(ctx context.Context, out string) {
++	bundle := loadBundle(ctx)
++	bagExchange, bag := doHTTP(ctx, http.MethodGet, "https://init.itunes.apple.com/bag.xml?ix=6&guid=020000000001", map[string]string{"Accept": "application/xml", "User-Agent": userAgent}, nil)
++	certURL := bagString(bag, "sign-sap-setup-cert")
++	setupURL := bagString(bag, "sign-sap-setup")
++	certExchange, certDocument := doHTTP(ctx, http.MethodGet, certURL, map[string]string{"User-Agent": userAgent}, nil)
++	certificate := plistBuffer(certDocument, "sign-sap-setup-cert")
++
++	primary, setup := runSAP(ctx, bundle, seedPrimary, certificate, setupURL, nil)
++	reply := plistBuffer(mustHex(setup.ResponseBodyHex), "sign-sap-setup-buffer")
++	replay, _ := runSAP(ctx, bundle, seedPrimary, certificate, setupURL, reply)
++	alternate, _ := runSAP(ctx, bundle, seedAlternate, certificate, "", nil)
++
++	timeShift = true
++	shifted, _ := runSAP(ctx, bundle, seedPrimary, certificate, "", nil)
++	timeShift = false
++	fmt.Println("SAP fixed_time+90s, same seed:")
++	timeIndependent := same("exchange1", primary.Exchange1, shifted.Exchange1)
++	deterministic := compareSAP("SAP replay with same seed (offline, recorded reply):", primary, replay)
++	fmt.Println("SAP alternate seed:")
++	same("context", []byte(fmt.Sprint(primary.Context)), []byte(fmt.Sprint(alternate.Context)))
++	same("exchange1", primary.Exchange1, alternate.Exchange1)
++
++	signatures := make([]record, 0, len(signInputs))
++	for index, input := range signInputs {
++		signatures = append(signatures, record{"input_hex": hx(input), "signature_hex": hx(primary.Signatures[index])})
++	}
++	_ = bagExchange
++	writeJSON(out, "sap.json", record{
++		"description":                   "FairPlay SAP v200 session: Initialize -> Exchange(cert) -> POST sign-sap-setup -> Exchange(reply) -> Sign(inputs) in order on one context",
++		"version":                       sapVersion,
++		"hardware_id_hex":               hx(hardwareID),
++		"hardware_block_hex":            hx(append(append([]byte{byte(len(hardwareID)), 0, 0, 0}, hardwareID...), make([]byte, 24-4-len(hardwareID))...)),
++		"setup_url":                     setupURL,
++		"certificate_url":               certURL,
++		"certificate_hex":               hx(certificate),
++		"certificate_http":              certExchange,
++		"context_pointer":               fmt.Sprintf("%#x", primary.Context),
++		"exchange1_input_hex":           hx(certificate),
++		"exchange1_output_hex":          hx(primary.Exchange1),
++		"exchange1_state":               primary.State1,
++		"setup_http":                    setup,
++		"exchange2_input_hex":           hx(reply),
++		"exchange2_output_hex":          hx(primary.Exchange2),
++		"exchange2_state":               primary.State2,
++		"signatures":                    signatures,
++		"exchange1_output_alt_seed_hex": hx(alternate.Exchange1),
++		"deterministic_replay":          deterministic,
++		"time_independent":              timeIndependent,
++		"observed_sources":              record{"open": primary.Sources[0], "initialize": primary.Sources[1], "exchange1": primary.Sources[2], "exchange2": primary.Sources[3], "sign_all": primary.Sources[4]},
++	})
++}
++
++// commandSAPVerify replays sap.json offline in a fresh process.
++func commandSAPVerify(ctx context.Context, out string) {
++	var fixture map[string]any
++	readJSON(out, "sap.json", &fixture)
++	certificate := mustHex(fixture["certificate_hex"].(string))
++	reply := mustHex(fixture["exchange2_input_hex"].(string))
++	run, _ := runSAP(ctx, loadBundle(ctx), seedPrimary, certificate, "offline", reply)
++	fmt.Println("SAP offline replay vs sap.json:")
++	same("exchange1", run.Exchange1, mustHex(fixture["exchange1_output_hex"].(string)))
++	for index, entry := range fixture["signatures"].([]any) {
++		same(fmt.Sprintf("signature[%d]", index), run.Signatures[index], mustHex(entry.(map[string]any)["signature_hex"].(string)))
++	}
++}
+diff --git a/harness/adi.go b/harness/adi.go
+new file mode 100644
+index 0000000..7d06e3e
+--- /dev/null
++++ b/harness/adi.go
+@@ -0,0 +1,204 @@
++package main
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/hex"
++	"fmt"
++	"net/http"
++	"strconv"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++	"github.com/majd/ipatool/v2/internal/sap/assets"
++	"github.com/majd/ipatool/v2/internal/sap/machine"
++	"howett.net/plist"
++)
++
++const (
++	machineStartURL    = "https://gsa.apple.com/grandslam/MidService/startMachineProvisioning"
++	machineFinishURL   = "https://gsa.apple.com/grandslam/MidService/finishMachineProvisioning"
++	anisetteClientInfo = "<MacBookPro13,3> <Mac OS X;10.12.6;16G29> <com.apple.AuthKit/1 (com.apple.akd/1.0)>"
++	anisetteUserAgent  = "akd/1.0 CFNetwork/811.5.4 Darwin/16.7.0"
++)
++
++type xpcPair struct {
++	Kind       string `json:"kind"`
++	RequestHex string `json:"request_hex"`
++	ReplyHex   string `json:"reply_hex"`
++}
++
++var xpcLog []xpcPair
++
++func traceXPC() {
++	xpcLog = nil
++	golden.XPCTrace = func(kind string, request, reply []byte) {
++		xpcLog = append(xpcLog, xpcPair{Kind: kind, RequestHex: hx(request), ReplyHex: hx(reply)})
++	}
++}
++
++func takeXPC() []xpcPair {
++	out := xpcLog
++	xpcLog = nil
++	return out
++}
++
++func identityHeaders(identifier []byte) (string, string) {
++	digest := sha256.Sum256(identifier)
++	encoded := hex.EncodeToString(identifier)
++	return hex.EncodeToString(digest[:]), encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32]
++}
++
++func provisioningRequest(ctx context.Context, endpoint string, values map[string]any) (httpExchange, map[string]any) {
++	body, err := plist.Marshal(map[string]any{"Header": map[string]any{}, "Request": values}, plist.XMLFormat)
++	check(err, "encode provisioning")
++	localUser, deviceID := identityHeaders(adiIdentifier)
++	headers := map[string]string{"Accept": "*/*", "Connection": "close", "Content-Type": "text/x-xml-plist", "User-Agent": anisetteUserAgent, "X-Apple-I-MD-LU": localUser, "X-MMe-Client-Info": anisetteClientInfo, "X-Mme-Device-Id": deviceID}
++	exchange, data := doHTTP(ctx, http.MethodPost, endpoint, headers, body)
++	var envelope struct {
++		Response map[string]any `plist:"Response"`
++	}
++	_, err = plist.Unmarshal(data, &envelope)
++	check(err, "decode provisioning")
++	return exchange, envelope.Response
++}
++
++func field(values map[string]any, key string) []byte {
++	text, _ := values[key].(string)
++	data, err := base64.StdEncoding.DecodeString(text)
++	if err != nil || len(data) == 0 {
++		check(fmt.Errorf("missing %s", key), "provisioning field")
++	}
++	return data
++}
++
++type adiRun struct {
++	CPIM, MID, OTP, State []byte
++	Session               uint32
++	XPC                   map[string][]xpcPair
++	Sources               map[string]map[string]int
++}
++
++// runADI provisions a fresh identity; spim/ptm/tk nil means talk to GSA.
++func runADI(ctx context.Context, bundle assets.Bundle, seed []byte, recorded *record, startOnly bool) adiRun {
++	freeze(seed)
++	traceXPC()
++	run := adiRun{XPC: map[string][]xpcPair{}, Sources: map[string]map[string]int{}}
++	adi, err := machine.OpenModernADI(ctx, bundle, adiIdentifier, nil)
++	check(err, "open ADI")
++	defer adi.Close()
++	run.Sources["open"] = sources()
++	run.XPC["open"] = takeXPC()
++
++	var spim, ptm, tk []byte
++	var rinfo string
++	if recorded == nil {
++		start, values := provisioningRequest(ctx, machineStartURL, map[string]any{})
++		spim = field(values, "spim")
++		defer func() { (*recordADI)["gsa_start_http"] = start }()
++	} else {
++		spim = mustHex((*recorded)["spim_hex"].(string))
++	}
++
++	run.CPIM, run.Session, err = adi.StartProvisioning(machineDSID, spim)
++	check(err, "start provisioning")
++	run.Sources["start_provisioning"] = sources()
++	run.XPC["start_provisioning"] = takeXPC()
++	if startOnly {
++		golden.XPCTrace = nil
++		return run
++	}
++
++	if recorded == nil {
++		finish, values := provisioningRequest(ctx, machineFinishURL, map[string]any{"cpim": base64.StdEncoding.EncodeToString(run.CPIM)})
++		ptm, tk = field(values, "ptm"), field(values, "tk")
++		rinfo, _ = values["X-Apple-I-MD-RINFO"].(string)
++		*recordADI = record{"gsa_finish_http": finish, "spim_hex": hx(spim), "ptm_hex": hx(ptm), "tk_hex": hx(tk), "rinfo": rinfo}
++	} else {
++		ptm, tk = mustHex((*recorded)["ptm_hex"].(string)), mustHex((*recorded)["tk_hex"].(string))
++	}
++
++	check(adi.EndProvisioning(run.Session, ptm, tk), "end provisioning")
++	run.Sources["end_provisioning"] = sources()
++	run.XPC["end_provisioning"] = takeXPC()
++
++	run.MID, run.OTP, err = adi.RequestOTP(machineDSID)
++	check(err, "request OTP")
++	run.Sources["request_otp"] = sources()
++	run.XPC["request_otp"] = takeXPC()
++
++	run.State, err = adi.State()
++	check(err, "state")
++	golden.XPCTrace = nil
++	return run
++}
++
++var recordADI = &record{}
++
++func commandADI(ctx context.Context, out string) {
++	bundle := loadBundle(ctx)
++	primary := runADI(ctx, bundle, seedPrimary, nil, false)
++	network := *recordADI
++	replay := runADI(ctx, bundle, seedPrimary, &network, false)
++	alternate := runADI(ctx, bundle, seedAlternate, &network, true)
++
++	fmt.Println("ADI replay same seed:")
++	ok := same("cpim", primary.CPIM, replay.CPIM)
++	ok = same("session", []byte(fmt.Sprint(primary.Session)), []byte(fmt.Sprint(replay.Session))) && ok
++	ok = same("mid", primary.MID, replay.MID) && ok
++	ok = same("otp", primary.OTP, replay.OTP) && ok
++	ok = same("state", primary.State, replay.State) && ok
++	fmt.Println("ADI alternate seed:")
++	same("cpim", primary.CPIM, alternate.CPIM)
++
++	localUser, deviceID := identityHeaders(adiIdentifier)
++	rinfo := network["rinfo"].(string)
++	_, err := strconv.ParseUint(rinfo, 10, 64)
++	check(err, "rinfo")
++	headers := map[string]string{
++		"X-Apple-I-Client-Time": fixedTime.UTC().Format("2006-01-02T15:04:05Z"),
++		"X-Apple-I-MD":          base64.StdEncoding.EncodeToString(primary.OTP),
++		"X-Apple-I-MD-M":        base64.StdEncoding.EncodeToString(primary.MID),
++		"X-Apple-I-MD-RINFO":    rinfo,
++		"X-Apple-I-MD-LU":       localUser,
++		"X-Apple-I-SRL-NO":      "0",
++		"X-Apple-I-TimeZone":    "UTC",
++		"X-Apple-Locale":        "en_US",
++		"X-Mme-Device-Id":       deviceID,
++		"X-MMe-Client-Info":     anisetteClientInfo,
++	}
++	writeJSON(out, "adi.json", record{
++		"description":          "Modern ADI (commerce+adid+fairplayd+FairPlayIOKit) machine provisioning against GSA MidService, then RequestOTP(dsid=-2)",
++		"identifier_hex":       hx(adiIdentifier),
++		"machine_dsid":         fmt.Sprintf("%#x", machineDSID),
++		"gsa_start_http":       network["gsa_start_http"],
++		"gsa_finish_http":      network["gsa_finish_http"],
++		"start_provisioning":   record{"dsid": fmt.Sprintf("%#x", machineDSID), "spim_hex": network["spim_hex"], "cpim_hex": hx(primary.CPIM), "session": primary.Session},
++		"end_provisioning":     record{"session": primary.Session, "ptm_hex": network["ptm_hex"], "tk_hex": network["tk_hex"]},
++		"request_otp":          record{"dsid": fmt.Sprintf("%#x", machineDSID), "mid_hex": hx(primary.MID), "otp_hex": hx(primary.OTP)},
++		"adi_state_hex":        hx(primary.State),
++		"anisette_headers":     headers,
++		"anisette_state_json":  record{"Identifier": base64.StdEncoding.EncodeToString(adiIdentifier), "Provisioning": base64.StdEncoding.EncodeToString(primary.State), "RoutingInfo": rinfo},
++		"xpc":                  primary.XPC,
++		"alt_seed":             record{"cpim_hex": hx(alternate.CPIM), "session": alternate.Session},
++		"deterministic_replay": ok,
++		"observed_sources":     primary.Sources,
++	})
++}
++
++// commandADIVerify replays adi.json offline in a fresh process.
++func commandADIVerify(ctx context.Context, out string) {
++	var fixture map[string]any
++	readJSON(out, "adi.json", &fixture)
++	adiIdentifier = mustHex(fixture["identifier_hex"].(string))
++	start := fixture["start_provisioning"].(map[string]any)
++	end := fixture["end_provisioning"].(map[string]any)
++	otp := fixture["request_otp"].(map[string]any)
++	network := record{"spim_hex": start["spim_hex"], "ptm_hex": end["ptm_hex"], "tk_hex": end["tk_hex"]}
++	run := runADI(ctx, loadBundle(ctx), seedPrimary, &network, false)
++	fmt.Println("ADI offline replay vs adi.json:")
++	same("cpim", run.CPIM, mustHex(start["cpim_hex"].(string)))
++	same("mid", run.MID, mustHex(otp["mid_hex"].(string)))
++	same("otp", run.OTP, mustHex(otp["otp_hex"].(string)))
++	same("state", run.State, mustHex(fixture["adi_state_hex"].(string)))
++}
+diff --git a/harness/amd.go b/harness/amd.go
+new file mode 100644
+index 0000000..84af7e0
+--- /dev/null
++++ b/harness/amd.go
+@@ -0,0 +1,217 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/base64"
++	"encoding/binary"
++	"fmt"
++	"time"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++	"github.com/majd/ipatool/v2/internal/sap/assets"
++	"github.com/majd/ipatool/v2/internal/sap/machine"
++	"github.com/majd/ipatool/v2/internal/store/emulator"
++	"github.com/majd/ipatool/v2/internal/store/profile"
++)
++
++var amdURLs = []string{
++	"https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct?guid=020000000001",
++	"https://downloaddispatch.itunes.apple.com/WebObjects/DownloadDispatch.woa/wa/ent/download?guid=020000000001",
++}
++
++var (
++	dsidMinus1 = bytes.Repeat([]byte{0xff}, 8)
++	dsidMinus2 = append(bytes.Repeat([]byte{0xff}, 7), 0xfe)
++)
++
++type amdExchange struct {
++	OriginalRequestHex  string `json:"original_request_hex"`
++	ForwardedRequestHex string `json:"forwarded_request_hex"`
++	ReplyHex            string `json:"reply_hex"`
++}
++
++type amdRun struct {
++	Headers   map[string]string
++	Exchanges []amdExchange
++	Err       string
++	Request   []byte
++}
++
++// runAMD executes AMSAnisette type 2. With rewrite, the adid request's DSID
++// -1 is forwarded as -2 (the only DSID GSA machine provisioning accepts), and
++// the RNG/time are re-frozen right before the daemon runs.
++func runAMD(ctx context.Context, bundle assets.Bundle, prepared profile.Data, state, seed []byte, at time.Time, endpoint string, rewrite bool) amdRun {
++	freeze(seed)
++	adi, err := machine.OpenModernADI(ctx, bundle, adiIdentifier, state)
++	check(err, "open ADI")
++	defer adi.Close()
++	framework, err := emulator.Open(ctx, bundle.AppleMediaServices, prepared)
++	check(err, "open AMS")
++	defer framework.Close()
++	var run amdRun
++	headers, err := framework.StoreAMDHeaders(endpoint, hardwareID, func(service string, request []byte) ([]byte, error) {
++		if service != "com.apple.adid" {
++			return nil, fmt.Errorf("unexpected service %s", service)
++		}
++		run.Request = append([]byte(nil), request...)
++		forwarded := append([]byte(nil), request...)
++		if rewrite && len(forwarded) == 20 && bytes.Equal(forwarded[12:20], dsidMinus1) {
++			copy(forwarded[12:20], dsidMinus2)
++		}
++		golden.Freeze(at, seed)
++		reply, err := adi.ExchangeXPC(forwarded)
++		run.Exchanges = append(run.Exchanges, amdExchange{hx(request), hx(forwarded), hx(reply)})
++		return reply, err
++	})
++	run.Headers = headers
++	if err != nil {
++		run.Err = err.Error()
++	}
++	return run
++}
++
++func directReply(ctx context.Context, bundle assets.Bundle, state, seed []byte, at time.Time, request []byte) []byte {
++	freeze(seed)
++	adi, err := machine.OpenModernADI(ctx, bundle, adiIdentifier, state)
++	check(err, "open ADI")
++	defer adi.Close()
++	golden.Freeze(at, seed)
++	reply, err := adi.ExchangeXPC(request)
++	check(err, "direct ExchangeXPC")
++	return reply
++}
++
++type otpRun struct {
++	MID, OTP []byte
++	XPC      []xpcPair
++}
++
++func requestOTP(ctx context.Context, bundle assets.Bundle, state, seed []byte, at time.Time, dsid uint64) (otpRun, error) {
++	freeze(seed)
++	adi, err := machine.OpenModernADI(ctx, bundle, adiIdentifier, state)
++	check(err, "open ADI")
++	defer adi.Close()
++	golden.Freeze(at, seed)
++	traceXPC()
++	defer func() { golden.XPCTrace = nil }()
++	mid, otp, err := adi.RequestOTP(dsid)
++	return otpRun{MID: mid, OTP: otp, XPC: takeXPC()}, err
++}
++
++// parseOTPReply splits adid's reply: be32 status, be32 len, mid, be32 len, otp.
++func parseOTPReply(reply []byte) (status uint32, mid, otp []byte) {
++	if len(reply) < 4 {
++		return 0, nil, nil
++	}
++	status = binary.BigEndian.Uint32(reply)
++	rest := reply[4:]
++	take := func() []byte {
++		if len(rest) < 4 {
++			return nil
++		}
++		n := int(binary.BigEndian.Uint32(rest))
++		if len(rest) < 4+n {
++			return nil
++		}
++		out := rest[4 : 4+n]
++		rest = rest[4+n:]
++		return out
++	}
++	mid = take()
++	otp = take()
++	return status, mid, otp
++}
++
++func b64(data []byte) string { return base64.StdEncoding.EncodeToString(data) }
++
++func commandAMD(ctx context.Context, out string) {
++	bundle := loadBundle(ctx)
++	prepared, err := profile.Load(ctx)
++	check(err, "profile")
++	var adiFixture map[string]any
++	readJSON(out, "adi.json", &adiFixture)
++	adiIdentifier = mustHex(adiFixture["identifier_hex"].(string))
++	state := mustHex(adiFixture["adi_state_hex"].(string))
++	later := fixedTime.Add(90 * time.Second)
++
++	genuine := runAMD(ctx, bundle, prepared, state, seedPrimary, fixedTime, amdURLs[0], false)
++	fmt.Println("AMS genuine (dsid -1, not provisioned):", genuine.Err)
++
++	primary := runAMD(ctx, bundle, prepared, state, seedPrimary, fixedTime, amdURLs[0], true)
++	check(errorOf(primary.Err), "AMD rewrite run")
++	replay := runAMD(ctx, bundle, prepared, state, seedPrimary, fixedTime, amdURLs[0], true)
++	otherURL := runAMD(ctx, bundle, prepared, state, seedPrimary, fixedTime, amdURLs[1], true)
++	otherSeed := runAMD(ctx, bundle, prepared, state, seedAlternate, fixedTime, amdURLs[0], true)
++	otherTime := runAMD(ctx, bundle, prepared, state, seedPrimary, later, amdURLs[0], true)
++
++	forwarded := mustHex(primary.Exchanges[0].ForwardedRequestHex)
++	direct := directReply(ctx, bundle, state, seedPrimary, fixedTime, forwarded)
++	status, mid, otp := parseOTPReply(direct)
++	viaAPI, apiErr := requestOTP(ctx, bundle, state, seedPrimary, fixedTime, machineDSID)
++	check(apiErr, "RequestOTP(-2)")
++	apiMinus1, minus1Err := requestOTP(ctx, bundle, state, seedPrimary, fixedTime, amdDSID)
++
++	fmt.Println("AMD determinism / sensitivity:")
++	deterministic := same("replay X-Apple-AMD", []byte(primary.Headers["X-Apple-AMD"]), []byte(replay.Headers["X-Apple-AMD"]))
++	deterministic = same("replay X-Apple-AMD-M", []byte(primary.Headers["X-Apple-AMD-M"]), []byte(replay.Headers["X-Apple-AMD-M"])) && deterministic
++	urlIndependent := same("other URL same AMD", []byte(primary.Headers["X-Apple-AMD"]), []byte(otherURL.Headers["X-Apple-AMD"]))
++	seedIndependent := same("other seed same AMD", []byte(primary.Headers["X-Apple-AMD"]), []byte(otherSeed.Headers["X-Apple-AMD"]))
++	timeIndependent := same("other time same AMD", []byte(primary.Headers["X-Apple-AMD"]), []byte(otherTime.Headers["X-Apple-AMD"]))
++	midStable := same("other time same AMD-M", []byte(primary.Headers["X-Apple-AMD-M"]), []byte(otherTime.Headers["X-Apple-AMD-M"]))
++
++	fmt.Println("AMD hypothesis:")
++	requestIsOTP := len(apiMinus1.XPC) > 0 && apiMinus1.XPC[0].RequestHex == hx(genuine.Request)
++	fmt.Printf("  %-40s %v\n", "AMS request == RequestOTP(-1) request", requestIsOTP)
++	replyEqual := same("AMS-path reply == direct reply", mustHex(primary.Exchanges[0].ReplyHex), direct)
++	amdIsOTP := same("X-Apple-AMD == b64(reply.otp)", []byte(primary.Headers["X-Apple-AMD"]), []byte(b64(otp)))
++	amdMIsMID := same("X-Apple-AMD-M == b64(reply.mid)", []byte(primary.Headers["X-Apple-AMD-M"]), []byte(b64(mid)))
++	apiOTP := same("RequestOTP(-2).otp == reply.otp", viaAPI.OTP, otp)
++	apiMID := same("RequestOTP(-2).mid == reply.mid", viaAPI.MID, mid)
++
++	writeJSON(out, "amd.json", record{
++		"description":         "AMSAnisette _headersForRequest:account:nil type:2 (Store AMD) run in the AppleMediaServices emulator, com.apple.adid served by ModernADI.ExchangeXPC. Input ADI = adi.json (GSA machine provisioning, dsid -2).",
++		"identifier_hex":      hx(adiIdentifier),
++		"hardware_id_hex":     hx(hardwareID),
++		"input_adi_state":     "adi.json adi_state_hex",
++		"url":                 amdURLs[0],
++		"genuine_dsid_minus1": record{"xpc_request_hex": hx(genuine.Request), "exchanges": genuine.Exchanges, "error": genuine.Err, "note": "adid answers a bare status because dsid -1 is only provisioned by the account-bound Store 'SP' action"},
++		"rewritten_dsid_minus2": record{
++			"note":                 "the handler forwards the AMS request with bytes[12:20] changed from ff..ff to ff..fe; time/RNG re-frozen to fixed_time/seed right before adid runs",
++			"exchanges":            primary.Exchanges,
++			"headers":              primary.Headers,
++			"other_url_headers":    otherURL.Headers,
++			"other_seed_headers":   otherSeed.Headers,
++			"plus90s_headers":      otherTime.Headers,
++			"deterministic_replay": deterministic,
++			"url_independent":      urlIndependent,
++			"seed_independent":     seedIndependent,
++			"time_independent_amd": timeIndependent,
++			"time_independent_mid": midStable,
++		},
++		"direct_reply":       record{"request_hex": hx(forwarded), "reply_hex": hx(direct), "status": status, "mid_hex": hx(mid), "otp_hex": hx(otp), "mid_b64": b64(mid), "otp_b64": b64(otp)},
++		"request_otp_minus2": record{"mid_hex": hx(viaAPI.MID), "otp_hex": hx(viaAPI.OTP), "xpc": viaAPI.XPC},
++		"request_otp_minus1": record{"error": errString(minus1Err), "xpc": apiMinus1.XPC},
++		"verdict": record{
++			"ams_request_equals_request_otp_minus1_request": requestIsOTP,
++			"ams_reply_equals_direct_reply":                 replyEqual,
++			"x_apple_amd_equals_b64_otp":                    amdIsOTP,
++			"x_apple_amd_m_equals_b64_mid":                  amdMIsMID,
++			"request_otp_api_matches_reply":                 apiOTP && apiMID,
++		},
++	})
++}
++
++func errorOf(message string) error {
++	if message == "" {
++		return nil
++	}
++	return fmt.Errorf("%s", message)
++}
++
++func errString(err error) string {
++	if err == nil {
++		return ""
++	}
++	return err.Error()
++}
+diff --git a/harness/kbsync.go b/harness/kbsync.go
+new file mode 100644
+index 0000000..587cc76
+--- /dev/null
++++ b/harness/kbsync.go
+@@ -0,0 +1,44 @@
++package main
++
++import (
++	"context"
++	"fmt"
++
++	"github.com/majd/ipatool/v2/internal/golden"
++	"github.com/majd/ipatool/v2/internal/sap/machine"
++)
++
++var timeShift bool
++
++func commandKBSync(ctx context.Context, out string) {
++	bundle := loadBundle(ctx)
++	generate := func(seed []byte) ([]byte, map[string]int) {
++		freeze(seed)
++		if timeShift {
++			golden.Freeze(laterTime, seed)
++		}
++		blob, err := machine.GenerateKBSync(ctx, bundle, hardwareID, kbsyncDSID)
++		check(err, "kbsync")
++		return blob, sources()
++	}
++	first, observed := generate(seedPrimary)
++	second, _ := generate(seedPrimary)
++	alternate, _ := generate(seedAlternate)
++	timeShift = true
++	shifted, _ := generate(seedPrimary)
++	fmt.Println("kbsync:")
++	deterministic := same("same seed", first, second)
++	seedIndependent := same("alternate seed", first, alternate)
++	timeIndependent := same("fixed_time+90s", first, shifted)
++	writeJSON(out, "kbsync.json", record{
++		"description":          "StoreAgent GenerateKBSync(hardwareID, dsid) with no SC Info file present (fresh virtual filesystem)",
++		"hardware_id_hex":      hx(hardwareID),
++		"dsid":                 kbsyncDSID,
++		"kbsync_hex":           hx(first),
++		"kbsync_alt_seed_hex":  hx(alternate),
++		"deterministic_replay": deterministic,
++		"seed_independent":     seedIndependent,
++		"time_independent":     timeIndependent,
++		"observed_sources":     observed,
++	})
++}
+diff --git a/harness/wire_selftest.go b/harness/wire_selftest.go
+new file mode 100644
+index 0000000..29e86b6
+--- /dev/null
++++ b/harness/wire_selftest.go
+@@ -0,0 +1,29 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"io"
++	"net/http"
++
++	"github.com/majd/ipatool/v2/internal/store"
++	"github.com/majd/ipatool/v2/internal/storeauth"
++	apphttp "github.com/majd/ipatool/v2/pkg/http"
++)
++
++// commandWireSelfTest drives both hooked HTTP paths without an account.
++func commandWireSelfTest(ctx context.Context, _ string) {
++	client := storeauth.NewHTTPClient(nil)
++	response, err := client.Get("https://s.mzstatic.com/sap/setupCert.plist")
++	check(err, "storeauth GET")
++	_, _ = io.Copy(io.Discard, response.Body)
++	_ = response.Body.Close()
++	backend := store.New(nil, func() (string, error) { return "02:00:00:00:00:01", nil })
++	result, err := backend.Client("bag-direct").Send(apphttp.Request{Context: ctx, Method: http.MethodGet, URL: "https://init.itunes.apple.com/bag.xml?ix=6&guid=020000000001", Headers: map[string]string{"Accept": "application/xml"}}, nil)
++	check(err, "backend bag-direct")
++	_ = result.Body.Close()
++	lookup, err := backend.Client("request").Send(apphttp.Request{Context: ctx, Method: http.MethodGet, URL: "https://itunes.apple.com/lookup?id=284882215&entity=software", ResponseFormat: apphttp.ResponseFormatJSON}, nil)
++	check(err, "backend emulated lookup")
++	_ = lookup.Body.Close()
++	fmt.Println("statuses", response.StatusCode, result.StatusCode, lookup.StatusCode)
++}
+diff --git a/harness/go.mod b/harness/go.mod
+new file mode 100644
+index 0000000..0e16571
+--- /dev/null
++++ b/harness/go.mod
+@@ -0,0 +1,45 @@
++module github.com/majd/ipatool/v2/h0golden
++
++go 1.26.5
++
++require (
++	github.com/majd/ipatool/v2 v2.8.1
++	howett.net/plist v1.0.1
++)
++
++require (
++	github.com/VividCortex/ewma v1.2.0 // indirect
++	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
++	github.com/andybalholm/brotli v1.2.1 // indirect
++	github.com/apex/log v1.9.0 // indirect
++	github.com/blacktop/go-dwarf v1.0.14 // indirect
++	github.com/blacktop/go-macho v1.1.282 // indirect
++	github.com/blacktop/go-plist v1.0.2 // indirect
++	github.com/bodgit/plumbing v1.3.0 // indirect
++	github.com/bodgit/sevenzip v1.6.3 // indirect
++	github.com/bodgit/windows v1.0.1 // indirect
++	github.com/deploymenttheory/go-macos-pkg v0.3.0 // indirect
++	github.com/dustin/go-humanize v1.1.0 // indirect
++	github.com/ebitengine/purego v0.10.2 // indirect
++	github.com/fatih/color v1.19.0 // indirect
++	github.com/go-compressions/lzfse v0.3.0 // indirect
++	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
++	github.com/klauspost/compress v1.18.7 // indirect
++	github.com/majd/go-apfs v1.0.29 // indirect
++	github.com/mattn/go-colorable v0.1.14 // indirect
++	github.com/mattn/go-isatty v0.0.22 // indirect
++	github.com/mattn/go-runewidth v0.0.16 // indirect
++	github.com/pierrec/lz4/v4 v4.1.29 // indirect
++	github.com/pkg/errors v0.9.1 // indirect
++	github.com/rivo/uniseg v0.4.7 // indirect
++	github.com/spf13/afero v1.15.0 // indirect
++	github.com/stangelandcl/ppmd v0.1.0 // indirect
++	github.com/ulikunitz/xz v0.5.17 // indirect
++	github.com/vbauerster/mpb/v7 v7.5.3 // indirect
++	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
++	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
++	golang.org/x/sys v0.48.0 // indirect
++	golang.org/x/text v0.42.0 // indirect
++)
++
++replace github.com/majd/ipatool/v2 => ../ipatool
+diff --git a/wire/redact.py b/wire/redact.py
+new file mode 100644
+index 0000000..240f3e8
+--- /dev/null
++++ b/wire/redact.py
+@@ -0,0 +1,159 @@
++#!/usr/bin/env python3
++"""Redact an IPAKEEP_WIRE_LOG JSONL capture before sharing it.
++
++Usage:
++  python3 -I redact.py IN.jsonl OUT.jsonl [--literal VALUE ...]
++
++Every secret is replaced by "[R:name:len=N:id=XXXXXXXX]", where id is an
++HMAC with a random per-run key: equal values inside one capture keep the same
++id (so request/response correlation survives) but cannot be reversed or
++brute-forced across captures. Pass --literal for any extra value (Apple ID
++email, DSID, real MAC/guid, first/last name, phone digits) to scrub it from
++every URL, header and text body as a plain substring.
++"""
++import argparse
++import base64
++import hashlib
++import hmac
++import json
++import os
++import re
++import sys
++import urllib.parse
++
++KEY = os.urandom(32)
++
++SECRET_HEADERS = re.compile(
++    r"cookie|token|dsid|^x-apple-i-md|^x-apple-amd|device-id|authorization|"
++    r"x-apple-i-md-lu|x-apple-id|x-apple-hb|x-apple-gs|session|^x-mme|"
++    r"x-apple-i-srl-no|x-apple-tz|^x-dsid|^icloud|x-apple-store-front|x-apple-ams-|^x-jsession",
++    re.I,
++)
++SECRET_KEYS = {
++    "appleid", "password", "passwordtoken", "clearToken".lower(), "dspersonid",
++    "dsid", "directoryservicesid", "kbsync", "guid", "serialnumber", "machinename",
++    "email", "firstname", "lastname", "accountinfo", "sinf", "sinfs",
++    "keybag", "x-token", "mt-tkn", "downloadkey", "download-key", "clientdata",
++    "settinginfo", "transportkey", "cpim", "spim", "ptm", "tk", "x-apple-i-md",
++    "x-apple-i-md-m", "x-apple-amd", "x-apple-amd-m", "creditdisplay",
++    "accountname", "storefront", "phonenumber", "trusteddevices", "code",
++    "securitycode", "attempt", "rmd", "dsidstring", "account-id", "pings",
++    "hsa2", "x-apple-i-md-rinfo", "rinfo", "salt", "a", "b", "m1", "m2", "c",
++    "sc", "spd", "np",
++}
++
++
++def tag(name, value):
++    raw = value if isinstance(value, bytes) else str(value).encode()
++    digest = hmac.new(KEY, raw, hashlib.sha256).hexdigest()[:8]
++    return f"[R:{name}:len={len(raw)}:id={digest}]"
++
++
++def scrub_literals(text, literals):
++    for literal in literals:
++        if literal:
++            text = text.replace(literal, tag("literal", literal))
++            encoded = urllib.parse.quote(literal, safe="")
++            if encoded != literal:
++                text = text.replace(encoded, tag("literal", literal))
++    return text
++
++
++def redact_json(value, literals):
++    if isinstance(value, dict):
++        return {k: (tag(k, json.dumps(v)) if k.lower() in SECRET_KEYS else redact_json(v, literals)) for k, v in value.items()}
++    if isinstance(value, list):
++        return [redact_json(v, literals) for v in value]
++    if isinstance(value, str):
++        return scrub_literals(value, literals)
++    return value
++
++
++PLIST_ITEM = re.compile(
++    r"(<key>([^<]+)</key>\s*)(<(string|data|integer|real|date)>(.*?)</\4>)",
++    re.S,
++)
++
++
++def redact_plist(text):
++    def replace(match):
++        key = match.group(2)
++        if key.lower() not in SECRET_KEYS:
++            return match.group(0)
++        return f"{match.group(1)}<string>{tag(key, match.group(5))}</string>"
++
++    return PLIST_ITEM.sub(replace, text)
++
++
++def redact_form(text):
++    pairs = urllib.parse.parse_qsl(text, keep_blank_values=True)
++    if not pairs or "=" not in text:
++        return None
++    return urllib.parse.urlencode([(k, tag(k, v) if k.lower() in SECRET_KEYS else v) for k, v in pairs])
++
++
++def redact_text(text, literals):
++    stripped = text.lstrip()
++    if stripped.startswith("{") or stripped.startswith("["):
++        try:
++            return json.dumps(redact_json(json.loads(text), literals))
++        except ValueError:
++            pass
++    if "<plist" in text or "<key>" in text:
++        return scrub_literals(redact_plist(text), literals)
++    form = redact_form(text) if "&" in text or "=" in text else None
++    if form is not None and "<" not in text:
++        return scrub_literals(form, literals)
++    return scrub_literals(text, literals)
++
++
++def redact_url(url, literals):
++    parts = urllib.parse.urlsplit(url)
++    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
++    query = [(k, tag(k, v) if k.lower() in SECRET_KEYS else v) for k, v in query]
++    rebuilt = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
++    return scrub_literals(rebuilt, literals)
++
++
++def redact_body(body, literals):
++    if not body:
++        return body
++    if body.get("text"):
++        body["text"] = redact_text(body["text"], literals)
++    if body.get("base64"):
++        raw = base64.b64decode(body["base64"])
++        body["base64"] = tag("binary-body", raw)
++    return body
++
++
++def redact_entry(entry, literals):
++    entry["url"] = redact_url(entry.get("url", ""), literals)
++    headers = entry.get("headers") or {}
++    entry["headers"] = {
++        k: [tag(k, v) if SECRET_HEADERS.search(k) else scrub_literals(v, literals) for v in values]
++        for k, values in headers.items()
++    }
++    entry["body"] = redact_body(entry.get("body"), literals)
++    if entry.get("error"):
++        entry["error"] = scrub_literals(entry["error"], literals)
++    return entry
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("input")
++    parser.add_argument("output")
++    parser.add_argument("--literal", action="append", default=[])
++    args = parser.parse_args()
++    literals = sorted(set(args.literal), key=len, reverse=True)
++    count = 0
++    with open(args.input) as source, open(args.output, "w") as sink:
++        for line in source:
++            if line.strip():
++                sink.write(json.dumps(redact_entry(json.loads(line), literals)) + "\n")
++                count += 1
++    print(f"redacted {count} entries -> {args.output}", file=sys.stderr)
++
++
++if __name__ == "__main__":
++    main()
