@@ -93,19 +93,19 @@ pub enum DyldError {
 }
 
 /// Opens one shared-cache member by suffix (`""` is the primary file).
-pub trait CacheOpener {
+pub trait CacheOpener<'src> {
     /// Opens the member named `ARM64E_CACHE_PATH + suffix`.
     ///
     /// # Errors
     /// Returns the underlying I/O failure.
-    fn open(&mut self, suffix: &str) -> io::Result<Box<dyn ReadAt>>;
+    fn open(&mut self, suffix: &str) -> io::Result<Box<dyn ReadAt + 'src>>;
 }
 
-impl<F> CacheOpener for F
+impl<'src, F> CacheOpener<'src> for F
 where
-    F: FnMut(&str) -> io::Result<Box<dyn ReadAt>>,
+    F: FnMut(&str) -> io::Result<Box<dyn ReadAt + 'src>>,
 {
-    fn open(&mut self, suffix: &str) -> io::Result<Box<dyn ReadAt>> {
+    fn open(&mut self, suffix: &str) -> io::Result<Box<dyn ReadAt + 'src>> {
         self(suffix)
     }
 }
@@ -137,13 +137,13 @@ impl Mapping {
     }
 }
 
-struct Member {
-    source: Box<dyn ReadAt>,
+struct Member<'src> {
+    source: Box<dyn ReadAt + 'src>,
     uuid: [u8; 16],
     mappings: Vec<Mapping>,
 }
 
-impl Member {
+impl Member<'_> {
     fn read(&self, buf: &mut [u8], offset: u64, context: &'static str) -> Result<(), DyldError> {
         self.source
             .read_exact_at(buf, offset)
@@ -194,12 +194,12 @@ pub struct CachedImage {
 }
 
 /// An opened arm64e shared cache.
-pub struct DyldCache {
-    members: Vec<Member>,
+pub struct DyldCache<'src> {
+    members: Vec<Member<'src>>,
     slide: SlideInfo5,
 }
 
-impl std::fmt::Debug for DyldCache {
+impl std::fmt::Debug for DyldCache<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("DyldCache")
@@ -214,19 +214,19 @@ impl std::fmt::Debug for DyldCache {
 ///
 /// # Errors
 /// Fails when the cache is malformed or the image cannot be exported.
-pub fn extract_dyld_image(
-    opener: impl CacheOpener,
+pub fn extract_dyld_image<'src>(
+    opener: impl CacheOpener<'src>,
     image_path: &str,
 ) -> Result<Vec<u8>, DyldError> {
     DyldCache::open(opener)?.export_image(image_path)
 }
 
-impl DyldCache {
+impl<'src> DyldCache<'src> {
     /// Opens the primary member and every subcache it lists.
     ///
     /// # Errors
     /// Fails on malformed headers, UUID mismatches or missing slide info.
-    pub fn open(mut opener: impl CacheOpener) -> Result<Self, DyldError> {
+    pub fn open(mut opener: impl CacheOpener<'src>) -> Result<Self, DyldError> {
         let (primary, header) = open_member(&mut opener, "")?;
         let entries = subcache_entries(&primary, &header)?;
         let mut members = vec![primary];
@@ -564,7 +564,7 @@ impl DyldCache {
 }
 
 struct CacheMemory<'a> {
-    cache: &'a DyldCache,
+    cache: &'a DyldCache<'a>,
     linkedit_member: usize,
 }
 
@@ -589,10 +589,10 @@ fn export_read_error(error: &DyldError) -> ExportError {
     }
 }
 
-fn open_member(
-    opener: &mut impl CacheOpener,
+fn open_member<'src>(
+    opener: &mut impl CacheOpener<'src>,
     suffix: &str,
-) -> Result<(Member, Vec<u8>), DyldError> {
+) -> Result<(Member<'src>, Vec<u8>), DyldError> {
     let source = opener.open(suffix).map_err(|source| DyldError::Io {
         context: "open shared-cache member",
         source,

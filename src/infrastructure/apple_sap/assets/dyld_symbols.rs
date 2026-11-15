@@ -24,7 +24,7 @@ const LOAD_COMMAND_HEADER_SIZE: usize = 8;
 /// # Errors
 /// Fails when the tables are malformed or the load command order changed.
 pub fn restore_image_symbols(
-    cache: &DyldCache,
+    cache: &DyldCache<'_>,
     image: &CachedImage,
     linkedit_member: usize,
     macho: &mut MachImage,
@@ -86,7 +86,7 @@ fn matching_load(
 }
 
 struct SymbolReader<'a> {
-    cache: &'a DyldCache,
+    cache: &'a DyldCache<'a>,
     member: usize,
 }
 
