@@ -1,0 +1,220 @@
+image CoreFP
+base 0x0
+seg __TEXT 0x0 0x1c78000 0x0 0x1c78000
+seg __DATA_CONST 0x1c78000 0xa0000 0x1c78000 0xa0000
+seg __DATA 0x1d18000 0x2c000 0x1d18000 0x28000
+seg __LINKEDIT 0x1d44000 0x18000 0x1d40000 0x16fb0
+patches 75417 3563a6e5b045f1e546015ce5a149f98903fbee27ffb1dff69e696cd294c76d75
+fixups 81351 b9f0cd89e71e18f2d50e6b950d819ca03a6de63ffce8c0aba08993dd13e7bf15
+import _CFArrayAppendValue
+import _CFArrayCreateMutable
+import _CFArrayGetCount
+import _CFArrayGetValueAtIndex
+import _CFBooleanGetTypeID
+import _CFBooleanGetValue
+import _CFDataCreate
+import _CFDataGetBytePtr
+import _CFDataGetBytes
+import _CFDictionaryAddValue
+import _CFDictionaryCreateMutable
+import _CFDictionaryGetValue
+import _CFDictionarySetValue
+import _CFEqual
+import _CFErrorGetCode
+import _CFErrorGetDomain
+import _CFFileSecuritySetMode
+import _CFGetTypeID
+import _CFGregorianDateGetAbsoluteTime
+import _CFPreferencesCopyAppValue
+import _CFPropertyListCreateWithStream
+import _CFReadStreamClose
+import _CFReadStreamCreateWithFile
+import _CFReadStreamOpen
+import _CFRelease
+import _CFStringCreateWithCString
+import _CFStringGetCString
+import _CFStringGetCStringPtr
+import _CFStringGetLength
+import _CFStringGetMaximumSizeForEncoding
+import _CFStringGetSystemEncoding
+import _CFStringGetTypeID
+import _CFURLCopyResourcePropertyForKey
+import _CFURLCreateFromFileSystemRepresentation
+import _CFURLSetResourcePropertyForKey
+import _IOBSDNameMatching
+import _IOIteratorNext
+import _IOMainPort
+import _IOObjectRelease
+import _IORegistryEntryCreateCFProperty
+import _IORegistryEntryGetParentEntry
+import _IOServiceGetMatchingService
+import _IOServiceGetMatchingServices
+import _IOServiceMatching
+import _MGCopyAnswer
+import _NDR_record
+import _OBJC_CLASS_$_NSBundle
+import _OBJC_CLASS_$_NSData
+import _OBJC_CLASS_$_NSDate
+import _OBJC_CLASS_$_NSFileManager
+import _OBJC_CLASS_$_NSNumber
+import _OBJC_CLASS_$_NSObject
+import _OBJC_CLASS_$_NSProcessInfo
+import _OBJC_CLASS_$_NSString
+import _OBJC_METACLASS_$_NSObject
+import _SecCertificateCopyProperties
+import _SecCertificateCopySubjectPublicKeyInfoSHA256Digest
+import _SecCertificateCreateWithData
+import _SecCmsContentInfoGetContent
+import _SecCmsContentInfoGetContentTypeTag
+import _SecCmsDecoderCreate
+import _SecCmsDecoderDestroy
+import _SecCmsDecoderFinish
+import _SecCmsDecoderUpdate
+import _SecCmsMessageContentLevel
+import _SecCmsMessageContentLevelCount
+import _SecCmsMessageDestroy
+import _SecCmsMessageGetContent
+import _SecCmsSignedDataGetCertificateList
+import _SecPolicyCreateWithProperties
+import _SecTrustCreateWithCertificates
+import _SecTrustEvaluate
+import _SecTrustSetAnchorCertificates
+import _SecTrustSetAnchorCertificatesOnly
+import _SecTrustSetPolicies
+import _SecTrustSetVerifyDate
+import __NSConcreteGlobalBlock
+import ___CFConstantStringClassReference
+import ___chkstk_darwin
+import ___error
+import ___memcpy_chk
+import ___memset_chk
+import ___stack_chk_fail
+import ___stack_chk_guard
+import ___strcpy_chk
+import __objc_empty_cache
+import __os_log_default
+import __os_log_impl
+import __xpc_error_connection_interrupted
+import __xpc_type_error
+import _abort
+import _arc4random
+import _atexit
+import _basename
+import _bootstrap_look_up
+import _bootstrap_port
+import _bzero
+import _close
+import _closedir
+import _confstr
+import _dispatch_once
+import _dispatch_queue_create
+import _dlopen
+import _dlsym
+import _fcntl
+import _free
+import _fstat
+import _getpid
+import _getpwuid
+import _gettimeofday
+import _getuid
+import _kCFAllocatorDefault
+import _kCFBooleanTrue
+import _kCFErrorDomainOSStatus
+import _kCFTypeArrayCallBacks
+import _kCFTypeDictionaryKeyCallBacks
+import _kCFTypeDictionaryValueCallBacks
+import _kCFURLFileSecurityKey
+import _kCFURLIsHiddenKey
+import _kCFURLTypeIdentifierKey
+import _kIOMainPortDefault
+import _kSecPolicyAppleRevocation
+import _kSecPolicyAppleX509Basic
+import _kSecPolicyMacAppStoreReceipt
+import _kSecPolicyRevocationFlags
+import _kSecPropertyKeyLabel
+import _kSecPropertyKeyValue
+import _lockf
+import _lstat
+import _mach_msg
+import _mach_msg_destroy
+import _mach_port_deallocate
+import _mach_task_self_
+import _malloc
+import _malloc_type_malloc
+import _memcmp
+import _memcpy
+import _mig_dealloc_reply_port
+import _mig_get_reply_port
+import _mig_put_reply_port
+import _mmap
+import _munmap
+import _notify_cancel
+import _notify_check
+import _notify_register_check
+import _objc_alloc
+import _objc_autorelease
+import _objc_autoreleasePoolPop
+import _objc_autoreleasePoolPush
+import _objc_msgSend
+import _objc_msgSendSuper2
+import _objc_opt_class
+import _objc_opt_isKindOfClass
+import _objc_release
+import _objc_retain
+import _open
+import _opendir
+import _os_log_type_enabled
+import _proc_pidpath
+import _pthread_attr_init
+import _pthread_attr_setstacksize
+import _pthread_create
+import _pthread_join
+import _pthread_once
+import _pthread_rwlock_destroy
+import _pthread_rwlock_init
+import _pthread_rwlock_rdlock
+import _pthread_rwlock_unlock
+import _pthread_rwlock_wrlock
+import _pthread_self
+import _puts
+import _readdir
+import _sched_yield
+import _sleep
+import _sscanf
+import _stat
+import _statfs
+import _strcmp
+import _strcpy
+import _strlen
+import _sysconf
+import _sysctlbyname
+import _umask
+import _vm_allocate
+import _vm_deallocate
+import _voucher_mach_msg_set
+import _xpc_connection_activate
+import _xpc_connection_create_mach_service
+import _xpc_connection_send_message_with_reply_sync
+import _xpc_connection_set_event_handler
+import _xpc_copy_description
+import _xpc_dictionary_create_empty
+import _xpc_dictionary_get_data
+import _xpc_dictionary_set_data
+import _xpc_get_type
+import _xpc_release
+symbols 204 c49625e470ef2391d95345836bbc57b504201ee72cb2346c3c420d59076711f7
+code 0xfb8 0x1490c28
+code 0x1490c28 0x14910b8
+code 0x14910c0 0x1491780
+export _WIn9UJ86JKdV4dM 0x10000000b814
+export _X46O5IeS 0x10000000ba74
+export _YlCJ3lg 0x10000000bf48
+export _dku592fbFAj 0x10000000d568
+export _fdjkDSAFjklaf2s 0x10000000c6b0
+export _lxpgvVMLd0S7uRl 0x10000000d368
+resolveorder 268 196 917a586f46b336fefb1465d2ea558379d3b6b3178c96031b80602712e1521590
+map 0x100000000000 0x1d5c000 074d8c7eae8b25ad96acdad7ff5bc61cae524e786907b9218fc737fa093820e8
+segbytes __TEXT 0x100000000000 0x1c78000 f4aec5f9aeaba1d7c599f13708bac8c1b3d70086fc4220a8baae43bff27dc4c4
+segbytes __DATA_CONST 0x100001c78000 0xa0000 5a85ec2a262f52b4f4c643023092caee5e9a59303eec907e9cb5b6860d2456d2
+segbytes __DATA 0x100001d18000 0x2c000 665885019bac3e83a6f61bb098697c9a44d9dec79e4283ff5bdbd945e46d5baf
+segbytes __LINKEDIT 0x100001d44000 0x18000 d46211e42a7a3152f87880f066a07f20f13015236558deec6078479f85361c46

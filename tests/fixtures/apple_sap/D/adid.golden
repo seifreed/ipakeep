@@ -1,0 +1,147 @@
+image adid
+base 0x100000000
+seg __PAGEZERO 0x0 0x100000000 0x0 0x0
+seg __TEXT 0x100000000 0x2c4000 0x0 0x2c4000
+seg __DATA_CONST 0x1002c4000 0x18000 0x2c4000 0x18000
+seg __DATA 0x1002dc000 0x4000 0x2dc000 0x4000
+seg __LINKEDIT 0x1002e0000 0xc000 0x2e0000 0x8180
+patches 10679 c905e0be867c415b74b1b48117c28f1bf8b0dca6876f4db0005f1791077cd5d5
+fixups 11451 0c77e40836c52c78de382e09cfdf57d9b7d017b4e669b4923c782719122cda51
+import _CFDataCreateWithBytesNoCopy
+import _CFDictionaryGetTypeID
+import _CFDictionaryGetValue
+import _CFErrorGetCode
+import _CFErrorGetDomain
+import _CFFileDescriptorCreate
+import _CFFileDescriptorCreateRunLoopSource
+import _CFFileDescriptorEnableCallBacks
+import _CFFileDescriptorGetNativeDescriptor
+import _CFFileDescriptorInvalidate
+import _CFFileSecuritySetMode
+import _CFGetTypeID
+import _CFNumberGetTypeID
+import _CFNumberGetValue
+import _CFPropertyListCreateWithData
+import _CFRelease
+import _CFRunLoopAddSource
+import _CFRunLoopGetCurrent
+import _CFRunLoopGetMain
+import _CFRunLoopRun
+import _CFRunLoopStop
+import _CFStringCreateWithCStringNoCopy
+import _CFStringGetCString
+import _CFStringGetTypeID
+import _CFURLCopyResourcePropertyForKey
+import _CFURLCreateFromFileSystemRepresentation
+import _CFURLSetResourcePropertyForKey
+import _CSBackupIsItemExcluded
+import _CSBackupSetItemExcluded
+import _IOConnectCallStructMethod
+import _IOIteratorNext
+import _IOMainPort
+import _IOObjectRelease
+import _IOServiceGetMatchingServices
+import _IOServiceMatching
+import _IOServiceOpen
+import _SecTaskCopyValueForEntitlement
+import _SecTaskCreateWithAuditToken
+import __NSConcreteGlobalBlock
+import __NSConcreteStackBlock
+import ___CFConstantStringClassReference
+import ___chkstk_darwin
+import ___error
+import ___stack_chk_fail
+import ___stack_chk_guard
+import __dispatch_main_q
+import __os_log_default
+import __os_log_impl
+import __xpc_error_connection_invalid
+import __xpc_type_dictionary
+import __xpc_type_error
+import _abort
+import _arc4random
+import _arc4random_uniform
+import _audit_token_to_au32
+import _audit_token_to_euid
+import _chmod
+import _close
+import _dispatch_once
+import _fchmod
+import _fcntl
+import _free
+import _fstat
+import _ftruncate
+import _getenv
+import _gethostuuid
+import _getpid
+import _gettimeofday
+import _getuid
+import _kCFAllocatorDefault
+import _kCFAllocatorNull
+import _kCFBooleanFalse
+import _kCFBooleanTrue
+import _kCFErrorDomainOSStatus
+import _kCFRunLoopCommonModes
+import _kCFURLFileSecurityKey
+import _kCFURLIsDirectoryKey
+import _kCFURLIsHiddenKey
+import _kCFURLTypeIdentifierKey
+import _kUTTypePlainText
+import _kevent
+import _kqueue
+import _lockf
+import _lstat
+import _mach_task_self_
+import _malloc
+import _mkdir
+import _mmap
+import _munmap
+import _notify_post
+import _open
+import _os_log_type_enabled
+import _os_release
+import _os_transaction_create
+import _proc_pidpath
+import _pthread_rwlock_destroy
+import _pthread_rwlock_init
+import _pthread_rwlock_rdlock
+import _pthread_rwlock_unlock
+import _pthread_rwlock_wrlock
+import _pthread_set_qos_class_self_np
+import _ptrace
+import _read
+import _sched_yield
+import _signal
+import _statfs
+import _strnlen
+import _strtoul
+import _sysconf
+import _sysctlbyname
+import _time
+import _umask
+import _unlink
+import _write
+import _xpc_connection_activate
+import _xpc_connection_cancel
+import _xpc_connection_create_mach_service
+import _xpc_connection_resume
+import _xpc_connection_set_event_handler
+import _xpc_connection_set_target_queue
+import _xpc_dictionary_create_reply
+import _xpc_dictionary_get_audit_token
+import _xpc_dictionary_get_data
+import _xpc_dictionary_send_reply
+import _xpc_dictionary_set_data
+import _xpc_get_type
+import _xpc_release
+import _xpc_transaction_begin
+import _xpc_transaction_end
+symbols 131 94181b3909718f70af75336734ca6321c24ae36df40a5dfb0411a38951293254
+code 0x1000009f8 0x100269b60
+code 0x100269b60 0x100269b70
+resolveorder 130 129 30487d671c18062e3af2c373175ca37701dbdde41b3ef657d2b36caaf222a050
+map 0x200000000000 0x2ec000 3458269f797a3d22a1e3ccb08e100d350c819322e5973d91fee9291a198d86f0
+segbytes __TEXT 0x200000000000 0x2c4000 086c289c564af0c52b8f2f3339f45d27f70e0856337e527db894e9fe8b376284
+segbytes __DATA_CONST 0x2000002c4000 0x18000 e4ed9144b9f76c23949b1e3563896b010f3fe3603bd1922820a75ec2a61ae82b
+segbytes __DATA 0x2000002dc000 0x4000 e83fb5d322f7b974de90f2b916759fd6edbb04935950e617d35ec27aeb9d3eab
+segbytes __LINKEDIT 0x2000002e0000 0xc000 94bd55ca4c05ca203d047e31610f54e10df9f06198e0e373a0798040add683c8
