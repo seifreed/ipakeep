@@ -307,12 +307,8 @@ impl<R: ReadAt> AeaReader<R> {
         let salt_offset = (AEA_HEADER_SIZE + prologue.auth_data.len()) as u64;
         let main_salt: [u8; MAIN_SALT_SIZE] = read_array(&source, salt_offset, "AEA main salt")?;
         let main_info = indexed_info(AEA_MAIN_KEY_INFO, prologue.profile_and_scrypt);
-        let main_key = derive_key(
-            &symmetric_key,
-            Some(&main_salt),
-            &main_info,
-            symmetric_key.len(),
-        )?;
+        let key_len = symmetric_key.len();
+        let main_key = derive_key(&symmetric_key, Some(&main_salt), &main_info, key_len)?;
         let root_offset = salt_offset + MAIN_SALT_SIZE as u64;
         let (root, first_cluster_mac) = read_root(&source, root_offset, &main_key, &prologue)?;
         let segment_count = root.file_size.div_ceil(u64::from(root.segment_size));
@@ -344,8 +340,8 @@ impl<R: ReadAt> AeaReader<R> {
         let mut output_size = 0;
         let mut cluster = 0_u32;
         while output_size < root.file_size {
-            let header =
-                self.read_cluster_header(offset, header_size, cluster, &cluster_mac, root)?;
+            let location = (offset, header_size);
+            let header = self.read_cluster_header(location, cluster, &cluster_mac, root)?;
             offset = self.index_segments(&header, offset + header_size, root, &mut output_size)?;
             cluster_mac = header.next_mac;
             cluster += 1;
@@ -355,8 +351,7 @@ impl<R: ReadAt> AeaReader<R> {
 
     fn read_cluster_header(
         &self,
-        offset: u64,
-        header_size: u64,
+        (offset, header_size): (u64, u64),
         cluster: u32,
         expected_mac: &Mac32,
         root: &RootHeader,
@@ -367,23 +362,15 @@ impl<R: ReadAt> AeaReader<R> {
         }
         let header_len = usize::try_from(header_size).map_err(|_| AeaError::ClusterOutOfBounds)?;
         let mut data = read_vec(&self.source, offset, header_len, "AEA cluster header")?;
-        let header_key = derive_header_key(
-            &cluster_key(&self.main_key, cluster)?,
-            AEA_CLUSTER_HEADER_KEY_INFO,
-        )?;
+        let key = cluster_key(&self.main_key, cluster)?;
+        let header_key = derive_header_key(&key, AEA_CLUSTER_HEADER_KEY_INFO)?;
         let encrypted_len = SEGMENT_HEADER_SIZE * root.segments_per_cluster as usize;
         let (encrypted, trailer) = data.split_at_mut(encrypted_len);
-        let next_mac: Mac32 = to_array(&trailer[..MAC_SIZE]);
         if !verify_mac(&header_key.mac, encrypted, &[&trailer[..]], expected_mac) {
             return Err(AeaError::ClusterAuthentication(cluster));
         }
         apply_ctr(encrypted, &header_key);
-        Ok(ClusterHeader {
-            index: cluster,
-            segment_headers: encrypted.to_vec(),
-            next_mac,
-            segment_macs: trailer[MAC_SIZE..].to_vec(),
-        })
+        Ok(ClusterHeader::new(cluster, encrypted, trailer))
     }
 
     fn index_segments(
@@ -393,65 +380,16 @@ impl<R: ReadAt> AeaReader<R> {
         root: &RootHeader,
         output_size: &mut u64,
     ) -> Result<u64, AeaError> {
+        let source_size = self.source.size();
         for index in 0..root.segments_per_cluster {
-            let fault = |reason| invalid_segment(header.index, index, reason);
-            let Some(segment) = self.parse_segment(header, index, data_offset, root)? else {
-                continue;
-            };
-            let global =
-                u64::from(header.index) * u64::from(root.segments_per_cluster) + u64::from(index);
-            let slot = usize::try_from(global).ok();
-            let slot = slot.and_then(|slot| self.segments.get_mut(slot));
-            let slot = slot.ok_or_else(|| fault("is outside the declared output"))?;
-            let output_offset = global * u64::from(root.segment_size);
-            if output_offset + u64::from(segment.decompressed_size) > root.file_size {
-                return Err(fault("extends beyond the declared output"));
+            let available = source_size.saturating_sub(data_offset);
+            if let Some(segment) = parse_segment(header, index, (data_offset, available), root)? {
+                place_segment(&mut self.segments, segment, root)?;
+                data_offset += u64::from(segment.compressed_size);
+                *output_size += u64::from(segment.decompressed_size);
             }
-            *slot = Some(Segment {
-                output_offset,
-                ..segment
-            });
-            data_offset += u64::from(segment.compressed_size);
-            *output_size += u64::from(segment.decompressed_size);
         }
         Ok(data_offset)
-    }
-
-    fn parse_segment(
-        &self,
-        header: &ClusterHeader,
-        index: u32,
-        data_offset: u64,
-        root: &RootHeader,
-    ) -> Result<Option<Segment>, AeaError> {
-        let fault = |reason| invalid_segment(header.index, index, reason);
-        let start = index as usize * SEGMENT_HEADER_SIZE;
-        let raw = &header.segment_headers[start..start + SEGMENT_HEADER_SIZE];
-        let decompressed_size = le_u32(&raw[0..4]);
-        let compressed_size = le_u32(&raw[4..8]);
-        if decompressed_size == 0 {
-            if compressed_size != 0 {
-                return Err(fault("has compressed data without output"));
-            }
-            return Ok(None);
-        }
-        if decompressed_size > root.segment_size || compressed_size == 0 {
-            return Err(fault("has invalid sizes"));
-        }
-        if u64::from(compressed_size) > self.source.size().saturating_sub(data_offset) {
-            return Err(fault("extends beyond the encrypted image"));
-        }
-        let mac_start = index as usize * MAC_SIZE;
-        Ok(Some(Segment {
-            input_offset: data_offset,
-            output_offset: 0,
-            compressed_size,
-            decompressed_size,
-            checksum: to_array(&raw[8..]),
-            mac: to_array(&header.segment_macs[mac_start..mac_start + MAC_SIZE]),
-            cluster: header.index,
-            index,
-        }))
     }
 
     fn lock_cache(&self) -> MutexGuard<'_, SegmentCache> {
@@ -544,6 +482,77 @@ struct ClusterHeader {
     segment_headers: Vec<u8>,
     next_mac: Mac32,
     segment_macs: Vec<u8>,
+}
+
+impl ClusterHeader {
+    fn new(index: u32, segment_headers: &[u8], trailer: &[u8]) -> Self {
+        Self {
+            index,
+            segment_headers: segment_headers.to_vec(),
+            next_mac: to_array(&trailer[..MAC_SIZE]),
+            segment_macs: trailer[MAC_SIZE..].to_vec(),
+        }
+    }
+}
+
+/// Decodes segment `index` of a cluster whose payload starts at
+/// `data_offset` with `available` encrypted bytes left; `None` marks an
+/// unused slot.
+fn parse_segment(
+    header: &ClusterHeader,
+    index: u32,
+    (data_offset, available): (u64, u64),
+    root: &RootHeader,
+) -> Result<Option<Segment>, AeaError> {
+    let fault = |reason| invalid_segment(header.index, index, reason);
+    let start = index as usize * SEGMENT_HEADER_SIZE;
+    let raw = &header.segment_headers[start..start + SEGMENT_HEADER_SIZE];
+    let decompressed_size = le_u32(&raw[0..4]);
+    let compressed_size = le_u32(&raw[4..8]);
+    if decompressed_size == 0 {
+        if compressed_size != 0 {
+            return Err(fault("has compressed data without output"));
+        }
+        return Ok(None);
+    }
+    if decompressed_size > root.segment_size || compressed_size == 0 {
+        return Err(fault("has invalid sizes"));
+    }
+    if u64::from(compressed_size) > available {
+        return Err(fault("extends beyond the encrypted image"));
+    }
+    let mac_start = index as usize * MAC_SIZE;
+    Ok(Some(Segment {
+        input_offset: data_offset,
+        output_offset: 0,
+        compressed_size,
+        decompressed_size,
+        checksum: to_array(&raw[8..]),
+        mac: to_array(&header.segment_macs[mac_start..mac_start + MAC_SIZE]),
+        cluster: header.index,
+        index,
+    }))
+}
+
+/// Stores `segment` in its slot of the output index, rejecting slots outside
+/// the declared output.
+fn place_segment(
+    segments: &mut [Option<Segment>],
+    mut segment: Segment,
+    root: &RootHeader,
+) -> Result<(), AeaError> {
+    let fault = |reason| invalid_segment(segment.cluster, segment.index, reason);
+    let per_cluster = u64::from(root.segments_per_cluster);
+    let global = u64::from(segment.cluster) * per_cluster + u64::from(segment.index);
+    let slot = usize::try_from(global).ok();
+    let slot = slot.and_then(|slot| segments.get_mut(slot));
+    let slot = slot.ok_or_else(|| fault("is outside the declared output"))?;
+    segment.output_offset = global * u64::from(root.segment_size);
+    if segment.output_offset + u64::from(segment.decompressed_size) > root.file_size {
+        return Err(fault("extends beyond the declared output"));
+    }
+    *slot = Some(segment);
+    Ok(())
 }
 
 fn invalid_segment(cluster: u32, segment: u32, reason: &'static str) -> AeaError {

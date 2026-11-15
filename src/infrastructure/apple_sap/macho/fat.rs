@@ -166,13 +166,14 @@ fn read_fat_table<R: Read>(input: &mut R, count: u64, size: u64) -> MachoResult<
     selected.ok_or(MachoError::MissingArm64e)
 }
 
+/// I/O error message for a universal binary shorter than its fat table claims.
+const TRUNCATED_UNIVERSAL: &str = "universal binary truncated";
+
 fn discard<R: Read>(input: &mut R, count: u64) -> io::Result<()> {
     let copied = io::copy(&mut input.take(count), &mut io::sink())?;
     if copied != count {
-        return Err(io::Error::new(
-            io::ErrorKind::UnexpectedEof,
-            "universal binary truncated",
-        ));
+        let truncated = io::Error::new(io::ErrorKind::UnexpectedEof, TRUNCATED_UNIVERSAL);
+        return Err(truncated);
     }
     Ok(())
 }

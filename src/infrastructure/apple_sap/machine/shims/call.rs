@@ -135,9 +135,8 @@ impl<'c, 'e> ShimCall<'c, 'e> {
             value.extend_from_slice(&chunk);
         }
 
-        Err(ShimError::StringTooLong {
-            limit: C_STRING_LIMIT,
-        })
+        let limit = C_STRING_LIMIT;
+        Err(ShimError::StringTooLong { limit })
     }
 
     /// Reserves guest heap memory (contents are not cleared).
@@ -153,10 +152,8 @@ impl<'c, 'e> ShimCall<'c, 'e> {
     /// Clears and frees a heap allocation.
     pub(super) fn release(&mut self, address: u64) -> Result<(), ShimError> {
         let allocation = self.state()?.heap.allocation(address);
-        let allocation = allocation.ok_or(ShimError::UnknownPointer {
-            operation: "free",
-            address,
-        })?;
+        let operation = "free";
+        let allocation = allocation.ok_or(ShimError::UnknownPointer { operation, address })?;
         self.fill(address, 0, allocation.reserved)?;
         self.state()?.heap.release(address)?;
 

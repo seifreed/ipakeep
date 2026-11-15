@@ -414,9 +414,8 @@ impl MachImage {
             return Ok(None);
         };
         if self.contains_address(original) {
-            let relocated = pointer
-                .load_base
-                .checked_add(original.wrapping_sub(self.base));
+            let image_offset = original.wrapping_sub(self.base);
+            let relocated = pointer.load_base.checked_add(image_offset);
             return relocated.map(Some).ok_or_else(|| {
                 MachoError::overflow(
                     &self.name,

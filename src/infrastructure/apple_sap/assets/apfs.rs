@@ -502,14 +502,15 @@ impl<R: ReadAt> ApfsExtractor<R> {
         let (transaction_id, volume_omap) = container.read_omap(volume.omap)?;
         let root = container.omap_lookup(&volume_omap, volume.root_tree, volume.xid)?;
         let filesystem_root = container.read_node(root)?;
-        Ok(Self {
+        let extractor = Self {
             container,
             volume_omap,
             filesystem_root,
             root_tree_base: volume.root_tree,
             transaction_id,
             extent_tree: volume.extent_tree,
-        })
+        };
+        Ok(extractor)
     }
 }
 
@@ -596,8 +597,8 @@ impl<R: ReadAt> Container<R> {
         let container = self.latest_checkpoint()?;
         let (_, container_omap) = self.read_omap(le_u64(&container, CONTAINER_OMAP_OFFSET)?)?;
         let volume_id = le_u64(&container, FIRST_VOLUME_OFFSET)?;
-        let address =
-            self.omap_lookup(&container_omap, volume_id, object_transaction(&container)?)?;
+        let checkpoint_xid = object_transaction(&container)?;
+        let address = self.omap_lookup(&container_omap, volume_id, checkpoint_xid)?;
         let volume = self.read_typed_object(address, OBJECT_TYPE_VOLUME, "volume superblock")?;
         if field::<4>(&volume, CONTAINER_MAGIC_OFFSET)? != *VOLUME_MAGIC {
             return Err(malformed("volume superblock has an invalid magic"));
@@ -606,12 +607,13 @@ impl<R: ReadAt> Container<R> {
         let omap = le_u64(&volume, VOLUME_OMAP_OFFSET)?;
         let root_tree = le_u64(&volume, VOLUME_ROOT_TREE_OFFSET)?;
         let extent_tree = le_u64(&volume, VOLUME_EXTENT_TREE_OFFSET)?;
-        Ok(VolumeInfo {
+        let info = VolumeInfo {
             xid,
             omap,
             root_tree,
             extent_tree,
-        })
+        };
+        Ok(info)
     }
 
     /// Returns the valid checkpoint superblock with the highest transaction.
@@ -620,8 +622,8 @@ impl<R: ReadAt> Container<R> {
         const DESCRIPTOR_BLOCKS_OFFSET: usize = 104;
         const DESCRIPTOR_BASE_OFFSET: usize = 112;
         const NON_CONTIGUOUS: u32 = 1 << 31;
-        let superblock =
-            self.read_typed_object(0, OBJECT_TYPE_CONTAINER, "container superblock")?;
+        let (kind, what) = (OBJECT_TYPE_CONTAINER, "container superblock");
+        let superblock = self.read_typed_object(0, kind, what)?;
         if u64::from(le_u32(&superblock, BLOCK_SIZE_OFFSET)?) != BLOCK_SIZE_U64 {
             return Err(ApfsError::Unsupported("non-4096-byte block size".into()));
         }
@@ -634,20 +636,21 @@ impl<R: ReadAt> Container<R> {
         let base = le_u64(&superblock, DESCRIPTOR_BASE_OFFSET)?;
         let mut latest: Option<Vec<u8>> = None;
         for index in 0..u64::from(blocks) {
-            let candidate = match self.read_object(base + index) {
-                Ok(block) if object_type(&block)? == OBJECT_TYPE_CONTAINER => block,
-                Ok(_) | Err(ApfsError::Checksum(_)) => continue,
-                Err(err) => return Err(err),
-            };
-            let newer = match &latest {
-                Some(current) => object_transaction(&candidate)? >= object_transaction(current)?,
-                None => true,
-            };
-            if newer {
-                latest = Some(candidate);
+            if let Some(candidate) = self.checkpoint_candidate(base + index)? {
+                keep_newer_checkpoint(&mut latest, candidate)?;
             }
         }
         latest.ok_or_else(|| malformed("checkpoint area has no valid container superblock"))
+    }
+
+    /// Reads a checkpoint-area block, skipping blocks that are not valid
+    /// container superblocks.
+    fn checkpoint_candidate(&self, address: u64) -> Result<Option<Vec<u8>>> {
+        match self.read_object(address) {
+            Ok(block) if object_type(&block)? == OBJECT_TYPE_CONTAINER => Ok(Some(block)),
+            Ok(_) | Err(ApfsError::Checksum(_)) => Ok(None),
+            Err(err) => Err(err),
+        }
     }
 
     /// Resolves a virtual object to its physical address (go-apfs
@@ -658,15 +661,13 @@ impl<R: ReadAt> Container<R> {
             let node = child.as_ref().unwrap_or(root);
             let index = Self::omap_floor(node, object_id, max_xid)?;
             let entry = node.map_entry(index)?;
-            let value = entry
-                .value
-                .ok_or_else(|| malformed("object map entry has no value"))?;
+            let value = entry.value;
+            let value = value.ok_or_else(|| malformed("object map entry has no value"))?;
             if node.is_leaf() {
                 let (oid, xid) = (le_u64(entry.key, 0)?, le_u64(entry.key, 8)?);
                 if oid != object_id || xid > max_xid {
-                    return Err(malformed(format!(
-                        "object {object_id:#x} is not in the object map"
-                    )));
+                    let reason = format!("object {object_id:#x} is not in the object map");
+                    return Err(malformed(reason));
                 }
                 return le_u64(value, 8);
             }
@@ -699,36 +700,18 @@ impl<R: ReadAt> ApfsExtractor<R> {
     /// Returns an error when the path does not resolve to a regular file or
     /// its extents or compression metadata are invalid or unsupported.
     pub fn open_file(&self, path: &str) -> Result<ApfsFile<'_, R>> {
-        let records = self.resolve_path(path)?;
-        let mut inode = None;
-        let mut compression = None;
-        let mut resource = None;
-        let mut extents = Vec::new();
-        for record in records {
-            match record {
-                Record::Inode { private_id, size } => inode = Some((private_id, size)),
-                Record::Extent(extent) => extents.push(extent),
-                Record::Xattr { name, value } if name == DECMPFS_XATTR => {
-                    compression = Some(decmpfs_header(&value)?);
-                }
-                Record::Xattr { name, value } if name == RESOURCE_FORK_XATTR => {
-                    resource = value.stream().or(resource);
-                }
-                _ => {}
-            }
+        let file = FileRecords::collect(self.resolve_path(path)?)?;
+        let missing_inode = || malformed("file has no inode record");
+        let (private_id, size) = file.inode.ok_or_else(missing_inode)?;
+        if let Some((method, output_size)) = file.compression {
+            return self.open_compressed(method, output_size, file.resource);
         }
-        let (private_id, size) = inode.ok_or_else(|| malformed("file has no inode record"))?;
-        if let Some((method, output_size)) = compression {
-            return self.open_compressed(method, output_size, resource);
-        }
+        let mut extents = file.extents;
         if extents.is_empty() && size != 0 {
             extents = self.data_extents(private_id)?;
         }
-        Ok(ApfsFile::Plain(ExtentReader::new(
-            &self.container.device,
-            extents,
-            size,
-        )?))
+        let reader = ExtentReader::new(&self.container.device, extents, size)?;
+        Ok(ApfsFile::Plain(reader))
     }
 
     fn open_compressed(
@@ -740,15 +723,12 @@ impl<R: ReadAt> ApfsExtractor<R> {
         if ![DECMPFS_LZVN, DECMPFS_LZFSE, DECMPFS_LZBITMAP].contains(&method) {
             return Err(ApfsError::Unsupported(format!("compression type {method}")));
         }
-        let (object_id, size) =
-            resource.ok_or_else(|| malformed("compressed file has no resource fork"))?;
+        let resource = resource.ok_or_else(|| malformed("compressed file has no resource fork"));
+        let (object_id, size) = resource?;
         let extents = self.data_extents(object_id)?;
         let source = ExtentReader::new(&self.container.device, extents, size)?;
-        Ok(ApfsFile::Compressed(DecmpfsReader::new(
-            source,
-            output_size,
-            method,
-        )?))
+        let reader = DecmpfsReader::new(source, output_size, method)?;
+        Ok(ApfsFile::Compressed(reader))
     }
 
     fn resolve_path(&self, path: &str) -> Result<Vec<Record>> {
@@ -769,13 +749,8 @@ impl<R: ReadAt> ApfsExtractor<R> {
     fn records_for(&self, object_id: u64) -> Result<Vec<Record>> {
         let mut visited = HashSet::new();
         let mut records = Vec::new();
-        self.collect_records(
-            &self.filesystem_root,
-            object_id,
-            &mut visited,
-            0,
-            &mut records,
-        )?;
+        let root = &self.filesystem_root;
+        self.collect_records(root, object_id, &mut visited, 0, &mut records)?;
         Ok(records)
     }
 
@@ -796,20 +771,14 @@ impl<R: ReadAt> ApfsExtractor<R> {
             if node.is_leaf() {
                 if header & RECORD_ID_MASK == object_id {
                     let record_type = (header >> RECORD_TYPE_SHIFT) as u8;
-                    records.push(parse_record(
-                        record_type,
-                        entry.key,
-                        entry.value.unwrap_or_default(),
-                    )?);
+                    let value = entry.value.unwrap_or_default();
+                    records.push(parse_record(record_type, entry.key, value)?);
                 }
-                continue;
-            }
-            if !Self::child_may_contain(node, index, header & RECORD_ID_MASK, object_id)? {
-                continue;
-            }
-            let (child, address) = self.filesystem_child(node, entry.value)?;
-            if visited.insert(address) {
-                self.collect_records(&child, object_id, visited, depth + 1, records)?;
+            } else if Self::child_may_contain(node, index, header & RECORD_ID_MASK, object_id)? {
+                let (child, address) = self.filesystem_child(node, entry.value)?;
+                if visited.insert(address) {
+                    self.collect_records(&child, object_id, visited, depth + 1, records)?;
+                }
             }
         }
         Ok(())
@@ -836,9 +805,8 @@ impl<R: ReadAt> ApfsExtractor<R> {
         } else {
             (child_id, None)
         };
-        let address =
-            self.container
-                .omap_lookup(&self.volume_omap, object_id, self.transaction_id)?;
+        let (container, xid) = (&self.container, self.transaction_id);
+        let address = container.omap_lookup(&self.volume_omap, object_id, xid)?;
         if let Some(expected) = expected_hash {
             let digest: [u8; 32] = Sha256::digest(self.container.read_block(address)?).into();
             if digest != expected {
@@ -884,14 +852,12 @@ impl<R: ReadAt> ApfsExtractor<R> {
                 if le_u64(entry.key, 0)? == object_id {
                     extents.push(physical_extent(entry.key, entry.value)?);
                 }
-                continue;
-            }
-            let Some(address) = Self::extent_child(node, index, &entry, object_id)? else {
-                continue;
-            };
-            if visited.insert(address) {
-                let child = self.container.read_node(address)?;
-                self.collect_physical_extents(&child, object_id, visited, depth + 1, extents)?;
+            } else {
+                let address = Self::extent_child(node, index, &entry, object_id)?;
+                if let Some(address) = address.filter(|address| visited.insert(*address)) {
+                    let child = self.container.read_node(address)?;
+                    self.collect_physical_extents(&child, object_id, visited, depth + 1, extents)?;
+                }
             }
         }
         Ok(())
@@ -914,9 +880,8 @@ impl<R: ReadAt> ApfsExtractor<R> {
         if object_id < lower || object_id > upper {
             return Ok(None);
         }
-        let value = entry
-            .value
-            .ok_or_else(|| malformed("extent index has no child"))?;
+        let value = entry.value;
+        let value = value.ok_or_else(|| malformed("extent index has no child"))?;
         le_u64(value, 0).map(Some)
     }
 
@@ -1131,6 +1096,47 @@ impl<R: ReadAt> ReadAt for ApfsFile<'_, R> {
     }
 }
 
+/// Replaces `latest` with `candidate` unless `latest` has a newer transaction.
+fn keep_newer_checkpoint(latest: &mut Option<Vec<u8>>, candidate: Vec<u8>) -> Result<()> {
+    let newer = match latest {
+        Some(current) => object_transaction(&candidate)? >= object_transaction(current)?,
+        None => true,
+    };
+    if newer {
+        *latest = Some(candidate);
+    }
+    Ok(())
+}
+
+/// The records of one file that opening it depends on.
+#[derive(Default)]
+struct FileRecords {
+    inode: Option<(u64, u64)>,
+    compression: Option<(u32, u64)>,
+    resource: Option<(u64, u64)>,
+    extents: Vec<Extent>,
+}
+
+impl FileRecords {
+    fn collect(records: Vec<Record>) -> Result<Self> {
+        let mut file = Self::default();
+        for record in records {
+            match record {
+                Record::Inode { private_id, size } => file.inode = Some((private_id, size)),
+                Record::Extent(extent) => file.extents.push(extent),
+                Record::Xattr { name, value } if name == DECMPFS_XATTR => {
+                    file.compression = Some(decmpfs_header(&value)?);
+                }
+                Record::Xattr { name, value } if name == RESOURCE_FORK_XATTR => {
+                    file.resource = value.stream().or(file.resource);
+                }
+                _ => {}
+            }
+        }
+        Ok(file)
+    }
+}
+
 /// Reads a file's logical bytes from its physical extents.
 pub struct ExtentReader<'a, R> {
     device: &'a R,
@@ -1141,9 +1147,7 @@ pub struct ExtentReader<'a, R> {
 impl<'a, R: ReadAt> ExtentReader<'a, R> {
     fn new(device: &'a R, mut extents: Vec<Extent>, size: u64) -> Result<Self> {
         if size > i64::MAX as u64 {
-            return Err(malformed(format!(
-                "file size {size} exceeds the supported maximum"
-            )));
+            return Err(too_large("file size", size));
         }
         extents.sort_by_key(|extent| extent.logical);
         let mut position = 0u64;
@@ -1163,15 +1167,15 @@ impl<'a, R: ReadAt> ExtentReader<'a, R> {
                 .ok_or_else(|| malformed("file extent length overflows"))?;
         }
         if position < size {
-            return Err(malformed(format!(
-                "file extents cover {position} bytes, expected {size}"
-            )));
+            let reason = format!("file extents cover {position} bytes, expected {size}");
+            return Err(malformed(reason));
         }
-        Ok(Self {
+        let reader = Self {
             device,
             extents,
             size,
-        })
+        };
+        Ok(reader)
     }
 }
 
@@ -1180,14 +1184,11 @@ impl<R: ReadAt> ReadAt for ExtentReader<'_, R> {
         let mut written = 0usize;
         let mut position = offset;
         while written < buf.len() && position < self.size {
-            let index = self
-                .extents
-                .partition_point(|extent| extent.logical + extent.length <= position);
-            let extent = self
-                .extents
-                .get(index)
-                .filter(|extent| position >= extent.logical)
-                .ok_or(io::ErrorKind::UnexpectedEof)?;
+            let extents = &self.extents;
+            let index = extents.partition_point(|run| run.logical + run.length <= position);
+            let extent = extents.get(index);
+            let extent = extent.filter(|extent| position >= extent.logical);
+            let extent = extent.ok_or(io::ErrorKind::UnexpectedEof)?;
             let available = (extent.logical + extent.length - position).min(self.size - position);
             let count = (buf.len() - written).min(usize::try_from(available).unwrap_or(usize::MAX));
             let physical = extent.physical * BLOCK_SIZE_U64 + position - extent.logical;
@@ -1224,9 +1225,7 @@ pub struct DecmpfsReader<'a, R> {
 impl<'a, R: ReadAt> DecmpfsReader<'a, R> {
     fn new(source: ExtentReader<'a, R>, output_size: u64, method: u32) -> Result<Self> {
         if output_size > i64::MAX as u64 {
-            return Err(malformed(format!(
-                "compressed file size {output_size} exceeds the supported maximum"
-            )));
+            return Err(too_large("compressed file size", output_size));
         }
         let source_size = source.size();
         if source_size < 2 * DECMPFS_OFFSET_SIZE {
@@ -1238,33 +1237,26 @@ impl<'a, R: ReadAt> DecmpfsReader<'a, R> {
         read_resource(&source, &mut first, 0)?;
         let declared = u64::from(u32::from_le_bytes(first));
         if declared != table_size || declared > source_size {
-            return Err(malformed(format!(
-                "compression index has size {declared}, expected {table_size}"
-            )));
+            let reason = format!("compression index has size {declared}, expected {table_size}");
+            return Err(malformed(reason));
         }
         let mut table = vec![0u8; to_usize(table_size)?];
         read_resource(&source, &mut table, 0)?;
-        let offsets: Vec<u64> = table
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|entry| u64::from(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]])))
-            .collect();
+        let offsets = block_offsets(&table);
         validate_block_offsets(&offsets, table_size, source_size)?;
-        Ok(Self {
+        let reader = Self {
             source,
             output_size,
             method,
             offsets,
             cache: Mutex::new(BlockCache::default()),
-        })
+        };
+        Ok(reader)
     }
 
     fn block(&self, index: u64) -> io::Result<Vec<u8>> {
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| io::Error::other("decmpfs cache lock poisoned"))?;
+        let cache = self.cache.lock();
+        let mut cache = cache.map_err(|_| io::Error::other("decmpfs cache lock poisoned"))?;
         if let Some(block) = cache.blocks.get(&index) {
             return Ok(block.clone());
         }
@@ -1281,29 +1273,42 @@ impl<'a, R: ReadAt> DecmpfsReader<'a, R> {
 
     fn decode_block(&self, index: u64) -> Result<Vec<u8>> {
         let slot = to_usize(index)?;
-        let range = self
-            .offsets
-            .get(slot..=slot + 1)
-            .ok_or_else(|| malformed(format!("compressed block {index} is out of range")))?;
+        let range = self.offsets.get(slot..=slot + 1);
+        let out_of_range = || malformed(format!("compressed block {index} is out of range"));
+        let range = range.ok_or_else(out_of_range)?;
         let (start, end) = (range[0], range[1]);
         let mut compressed = vec![0u8; to_usize(end - start)?];
         read_resource(&self.source, &mut compressed, start)?;
         let expected = DECMPFS_BLOCK_SIZE.min(self.output_size - index * DECMPFS_BLOCK_SIZE);
-        let plain =
-            decompress_block(&compressed, self.method, to_usize(expected)?).map_err(|source| {
-                ApfsError::Decompress {
-                    block: index,
-                    source,
-                }
-            })?;
-        if plain.len() as u64 != expected {
-            return Err(malformed(format!(
-                "decompressed block {index} has size {}, expected {expected}",
-                plain.len()
-            )));
-        }
-        Ok(plain)
+        decode_decmpfs_block(&compressed, self.method, index, expected)
     }
+}
+
+/// Decompresses decmpfs block `index`, which must expand to `expected` bytes.
+fn decode_decmpfs_block(
+    compressed: &[u8],
+    method: u32,
+    index: u64,
+    expected: u64,
+) -> Result<Vec<u8>> {
+    let plain = decompress_block(compressed, method, to_usize(expected)?).map_err(|source| {
+        ApfsError::Decompress {
+            block: index,
+            source,
+        }
+    })?;
+    if plain.len() as u64 != expected {
+        return Err(malformed(format!(
+            "decompressed block {index} has size {}, expected {expected}",
+            plain.len()
+        )));
+    }
+    Ok(plain)
+}
+
+/// Error for a size beyond what a signed 64-bit file offset can address.
+fn too_large(what: &str, size: u64) -> ApfsError {
+    malformed(format!("{what} {size} exceeds the supported maximum"))
 }
 
 fn read_resource<R: ReadAt>(
@@ -1311,12 +1316,20 @@ fn read_resource<R: ReadAt>(
     buffer: &mut [u8],
     offset: u64,
 ) -> Result<()> {
-    source
-        .read_exact_at(buffer, offset)
-        .map_err(|source| ApfsError::Read {
-            context: "compressed resource fork".into(),
-            source,
-        })
+    let read = source.read_exact_at(buffer, offset);
+    read.map_err(|source| ApfsError::Read {
+        context: "compressed resource fork".into(),
+        source,
+    })
+}
+
+/// Decodes the little-endian 32-bit entries of a decmpfs block-offset table.
+fn block_offsets(table: &[u8]) -> Vec<u64> {
+    let (entries, _) = table.as_chunks::<4>();
+    entries
+        .iter()
+        .map(|entry| u64::from(u32::from_le_bytes(*entry)))
+        .collect()
 }
 
 fn validate_block_offsets(offsets: &[u64], table_size: u64, source_size: u64) -> Result<()> {
@@ -1343,9 +1356,8 @@ fn validate_block_offsets(offsets: &[u64], table_size: u64, source_size: u64) ->
 impl<R: ReadAt> ReadAt for DecmpfsReader<'_, R> {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         let remaining = self.output_size.saturating_sub(offset);
-        let wanted = buf
-            .len()
-            .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
+        let wanted = buf.len().min(remaining);
         let mut written = 0usize;
         let mut position = offset;
         while written < wanted {

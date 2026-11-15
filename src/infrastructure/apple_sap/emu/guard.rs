@@ -37,11 +37,11 @@ impl Engine<'_> {
             Ok(())
         };
 
-        let data_hook =
-            self.add_memory_access_hook(ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, on_data)?;
+        let (begin, end) = (ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END);
+        let data_hook = self.add_memory_access_hook(begin, end, on_data)?;
         // Instruction hooks also cover fetches served from Unicorn's translation
         // cache, which need not trigger a memory-fetch hook when re-executed.
-        let code_hook = self.add_code_hook(ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, on_code);
+        let code_hook = self.add_code_hook(begin, end, on_code);
         code_hook.or_else(|error| self.remove_hook(data_hook).and(Err(error)))?;
 
         self.uc.get_data_mut().guard = Some(check);

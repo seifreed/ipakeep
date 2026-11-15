@@ -28,6 +28,8 @@ const MAXIMUM_MAPPINGS: u64 = 64;
 const MAXIMUM_IMAGES: u64 = 100_000;
 const MAXIMUM_SUBCACHES: u64 = 128;
 const MAXIMUM_PATH_LENGTH: u64 = 4096;
+/// Load commands kept when parsing a cached image for its symbols.
+const IMAGE_SYMBOL_COMMANDS: [u32; 2] = [export::LC_SYMTAB, export::LC_DYSYMTAB];
 const SLIDE_INFO_5_SIZE: usize = 24;
 const SLIDE_VERSION_5: u32 = 5;
 const MAXIMUM_LOAD_COMMANDS_SIZE: u64 = 16 << 20;
@@ -236,10 +238,8 @@ impl<'src> DyldCache<'src> {
                 return Err(DyldError::SubcacheUuid(suffix));
             }
             let index = members.len();
-            member
-                .mappings
-                .iter_mut()
-                .for_each(|mapping| mapping.member = index);
+            let mappings = member.mappings.iter_mut();
+            mappings.for_each(|mapping| mapping.member = index);
             members.push(member);
         }
         let slide = common_slide_info(&members)?;
@@ -265,16 +265,10 @@ impl<'src> DyldCache<'src> {
 
     /// The unslid start and length of the range covered by all mappings.
     pub fn address_range(&self) -> (u64, u64) {
-        let start = self
-            .mappings()
-            .map(|mapping| mapping.address)
-            .min()
-            .unwrap_or(u64::MAX);
-        let end = self
-            .mappings()
-            .map(|mapping| mapping.address.wrapping_add(mapping.size))
-            .max()
-            .unwrap_or(0);
+        let starts = self.mappings().map(|mapping| mapping.address);
+        let start = starts.min().unwrap_or(u64::MAX);
+        let mapping_end = |mapping: &Mapping| mapping.address.wrapping_add(mapping.size);
+        let end = self.mappings().map(mapping_end).max().unwrap_or(0);
         (start, end.wrapping_sub(start))
     }
 
@@ -316,11 +310,12 @@ impl<'src> DyldCache<'src> {
             let (name, address) = self.image_entry(entry)?;
             if name == path.as_bytes() {
                 let mapping = self.mapping_for_address(address)?;
-                return Ok(CachedImage {
+                let image = CachedImage {
                     member: mapping.member,
                     address,
                     offset: mapping.file_offset_of(address),
-                });
+                };
+                return Ok(image);
             }
         }
         Err(DyldError::ImageNotFound(path.to_owned()))
@@ -332,15 +327,12 @@ impl<'src> DyldCache<'src> {
     /// Fails on a malformed image table.
     pub fn images(&self) -> Result<Vec<(String, u64)>, DyldError> {
         let table = self.image_table()?;
-        table
-            .as_chunks::<IMAGE_INFO_SIZE>()
-            .0
-            .iter()
-            .map(|entry| {
-                let (name, address) = self.image_entry(entry)?;
-                Ok((String::from_utf8_lossy(&name).into_owned(), address))
-            })
-            .collect()
+        let mut images = Vec::new();
+        for entry in table.as_chunks::<IMAGE_INFO_SIZE>().0 {
+            let (name, address) = self.image_entry(entry)?;
+            images.push((String::from_utf8_lossy(&name).into_owned(), address));
+        }
+        Ok(images)
     }
 
     fn image_entry(&self, entry: &[u8]) -> Result<(Vec<u8>, u64), DyldError> {
@@ -432,11 +424,13 @@ impl<'src> DyldCache<'src> {
         buf: &mut [u8],
         offset: u64,
     ) -> Result<(), DyldError> {
-        let member = self
-            .members
-            .get(member)
-            .ok_or(DyldError::Format("unknown shared-cache member"))?;
+        let member = self.member(member)?;
         member.read(buf, offset, "read shared-cache member")
+    }
+
+    fn member(&self, index: usize) -> Result<&Member<'_>, DyldError> {
+        let member = self.members.get(index);
+        member.ok_or(DyldError::Format("unknown shared-cache member"))
     }
 
     pub(crate) fn member_size(&self, member: usize) -> u64 {
@@ -449,11 +443,7 @@ impl<'src> DyldCache<'src> {
         size: u64,
         offset: u64,
     ) -> Result<Vec<u8>, DyldError> {
-        let source = self
-            .members
-            .get(member)
-            .ok_or(DyldError::Format("unknown shared-cache member"))?;
-        read_cstring(source, size, offset)
+        read_cstring(self.member(member)?, size, offset)
     }
 
     /// Reads the image's header and raw load commands.
@@ -463,8 +453,8 @@ impl<'src> DyldCache<'src> {
     ) -> Result<(Vec<u8>, Vec<u8>), DyldError> {
         let mut header = vec![0; export::MACH_HEADER_64_SIZE];
         self.read_member(image.member, &mut header, image.offset)?;
-        let size =
-            u64::from(le_u32(&header, 20).ok_or(DyldError::Format("truncated Mach-O header"))?);
+        let size = le_u32(&header, 20).ok_or(DyldError::Format("truncated Mach-O header"))?;
+        let size = u64::from(size);
         if size > MAXIMUM_LOAD_COMMANDS_SIZE {
             return Err(DyldError::Format("invalid image load command size"));
         }
@@ -479,11 +469,8 @@ impl<'src> DyldCache<'src> {
 
     fn parse_image(&self, image: &CachedImage) -> Result<MachImage, DyldError> {
         let (header, commands) = self.image_commands(image)?;
-        Ok(MachImage::parse(
-            &header,
-            &commands,
-            &[export::LC_SYMTAB, export::LC_DYSYMTAB],
-        )?)
+        let image = MachImage::parse(&header, &commands, &IMAGE_SYMBOL_COMMANDS)?;
+        Ok(image)
     }
 
     /// The `__LINKEDIT` vmaddr of an image (ipatool `dyldImage.linkeditAddress`).
@@ -547,17 +534,27 @@ impl<'src> DyldCache<'src> {
         let segments = exported_segments(exported)?;
         for segment in &segments {
             let mapping = *self.mapping_for_address(segment.address)?;
-            if mapping.slide_info_offset == 0 {
-                continue;
+            if mapping.slide_info_offset != 0 {
+                self.slide_segment(exported, &segments, segment, &mapping)?;
             }
-            let page_size = u64::from(self.slide_info(&mapping)?.page_size);
-            let start = (segment.address - mapping.address) / page_size;
-            let end =
-                (segment.address + segment.memory_size - mapping.address + page_size) / page_size;
-            for rebase in self.rebases(&mapping, start, end)? {
-                if let Some(offset) = file_offset_for(&segments, rebase.address) {
-                    write_pointer(exported, offset, rebase.target)?;
-                }
+        }
+        Ok(())
+    }
+
+    fn slide_segment(
+        &self,
+        exported: &mut Vec<u8>,
+        segments: &[ExportedSegment],
+        segment: &ExportedSegment,
+        mapping: &Mapping,
+    ) -> Result<(), DyldError> {
+        let page_size = u64::from(self.slide_info(mapping)?.page_size);
+        let start = (segment.address - mapping.address) / page_size;
+        let segment_end = segment.address + segment.memory_size;
+        let end = (segment_end - mapping.address + page_size) / page_size;
+        for rebase in self.rebases(mapping, start, end)? {
+            if let Some(offset) = file_offset_for(segments, rebase.address) {
+                write_pointer(exported, offset, rebase.target)?;
             }
         }
         Ok(())

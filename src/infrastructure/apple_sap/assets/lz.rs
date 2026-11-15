@@ -207,6 +207,8 @@ impl LzvnDecoder<'_> {
 }
 
 const LZBITMAP_MAGIC: &[u8; 4] = b"ZBM\x09";
+/// Bytes before the first chunk: the stream magic.
+const LZBITMAP_STREAM_HEADER: usize = LZBITMAP_MAGIC.len();
 const LZBITMAP_MAX_CHUNK: usize = 0x8000;
 const LZBITMAP_CHUNK_HEADER: usize = 6;
 const LZBITMAP_COMPRESSED_HEADER: usize = 15;
@@ -217,6 +219,8 @@ const LZBITMAP_MAX_PERIOD_BYTES: u8 = 2;
 const LZBITMAP_REPEAT_BASE: usize = 4;
 const LZBITMAP_REPEAT_MARKER: u8 = 0x0F;
 const LZBITMAP_DEFAULT_PERIOD: usize = 8;
+/// Error for a bitmap number that is the repetition marker.
+const REPEAT_MARKER_AS_BITMAP: &str = "0xf is a repetition marker, not a bitmap";
 const LZBITMAP_BITS_PER_BITMAP: usize = 8;
 const LZBITMAP_PERIOD_FIELD_BITS: usize = 2;
 
@@ -272,7 +276,7 @@ impl<'a> LzbitmapDecoder<'a> {
         Self {
             src,
             out: Vec::new(),
-            pos: LZBITMAP_MAGIC.len(),
+            pos: LZBITMAP_STREAM_HEADER,
             end: 0,
             decompressed_len: 0,
             written: 0,
@@ -301,8 +305,8 @@ impl<'a> LzbitmapDecoder<'a> {
             return Err(LzError::Lzbitmap("chunk decompresses over the limit"));
         }
         if length == self.decompressed_len + LZBITMAP_CHUNK_HEADER {
-            self.out
-                .extend_from_slice(&self.src[self.pos + LZBITMAP_CHUNK_HEADER..self.end]);
+            let stored = &self.src[self.pos + LZBITMAP_CHUNK_HEADER..self.end];
+            self.out.extend_from_slice(stored);
             self.written = self.decompressed_len;
             return Ok(());
         }
@@ -355,11 +359,9 @@ impl<'a> LzbitmapDecoder<'a> {
     }
 
     fn read_nibble(&mut self) -> Result<u8, LzError> {
-        let byte = *self
-            .src
-            .get(self.meta3)
-            .filter(|_| self.meta3 < self.end)
-            .ok_or(LzError::Lzbitmap("bitmap numbers run past the chunk"))?;
+        let index = self.meta3;
+        let byte = self.src.get(index).filter(|_| index < self.end);
+        let byte = *byte.ok_or(LzError::Lzbitmap("bitmap numbers run past the chunk"))?;
         if self.high_nibble {
             self.high_nibble = false;
             self.meta3 += 1;
@@ -410,9 +412,7 @@ impl<'a> LzbitmapDecoder<'a> {
 
     fn apply_number(&mut self, number: u8) -> Result<(), LzError> {
         if number == LZBITMAP_REPEAT_MARKER {
-            return Err(LzError::Lzbitmap(
-                "0xf is a repetition marker, not a bitmap",
-            ));
+            return Err(LzError::Lzbitmap(REPEAT_MARKER_AS_BITMAP));
         }
         if number > LZBITMAP_MAX_PERIOD_BYTES {
             let bitmap = self.bitmaps[usize::from(number - LZBITMAP_BITMAP_BASE)];
@@ -443,10 +443,8 @@ impl<'a> LzbitmapDecoder<'a> {
         if self.period == 0 {
             return Err(LzError::Lzbitmap("zero repetition period"));
         }
-        for index in 0..LZBITMAP_BITS_PER_BITMAP {
-            if self.written == self.decompressed_len {
-                break;
-            }
+        let remaining = self.decompressed_len.saturating_sub(self.written);
+        for index in 0..LZBITMAP_BITS_PER_BITMAP.min(remaining) {
             self.emit(bitmap.bits & (1 << index) != 0)?;
         }
         Ok(())

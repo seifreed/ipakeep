@@ -84,10 +84,8 @@ impl<'a> Engine<'a> {
             with_engine(uc, (), |engine| callback(engine, address, size));
         };
 
-        self.uc
-            .add_code_hook(begin, end, hook)
-            .map(HookId)
-            .map_err(native("hook_add code"))
+        let added = self.uc.add_code_hook(begin, end, hook);
+        added.map(HookId).map_err(native("hook_add code"))
     }
 
     /// Calls `callback(engine, access, address, size, value)` for guest loads and
@@ -106,16 +104,14 @@ impl<'a> Engine<'a> {
     {
         let hook = move |uc: &mut Uc<'_>, kind: MemType, address: u64, size: usize, value: i64| {
             let access = MemoryAccess::from_mem_type(kind);
-            with_engine(uc, (), |engine| {
-                callback(engine, access, address, size, value)
-            });
-            true
+            with_engine(uc, true, |engine| {
+                callback(engine, access, address, size, value).map(|()| true)
+            })
         };
+        let accesses = HookType::MEM_READ | HookType::MEM_WRITE;
 
-        self.uc
-            .add_mem_hook(HookType::MEM_READ | HookType::MEM_WRITE, begin, end, hook)
-            .map(HookId)
-            .map_err(native("hook_add memory"))
+        let added = self.uc.add_mem_hook(accesses, begin, end, hook);
+        added.map(HookId).map_err(native("hook_add memory"))
     }
 
     /// Calls `callback(engine, access, address, size)` when the guest touches
@@ -132,14 +128,12 @@ impl<'a> Engine<'a> {
             let access = MemoryAccess::from_mem_type(kind);
             with_engine(uc, false, |engine| callback(engine, access, address, size))
         };
-        let unmapped = HookType::MEM_READ_UNMAPPED
-            | HookType::MEM_WRITE_UNMAPPED
-            | HookType::MEM_FETCH_UNMAPPED;
+        let unmapped = HookType::MEM_READ_UNMAPPED | HookType::MEM_WRITE_UNMAPPED;
+        let unmapped = unmapped | HookType::MEM_FETCH_UNMAPPED;
+        let (begin, end) = (ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END);
 
-        self.uc
-            .add_mem_hook(unmapped, ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, hook)
-            .map(HookId)
-            .map_err(native("hook_add memory fault"))
+        let added = self.uc.add_mem_hook(unmapped, begin, end, hook);
+        added.map(HookId).map_err(native("hook_add memory fault"))
     }
 
     /// Calls `callback(engine, exception_number)` on guest interrupts and
@@ -159,10 +153,8 @@ impl<'a> Engine<'a> {
             with_engine(uc, (), |engine| callback(engine, number));
         };
 
-        self.uc
-            .add_intr_hook(hook)
-            .map(HookId)
-            .map_err(native("hook_add interrupt"))
+        let added = self.uc.add_intr_hook(hook);
+        added.map(HookId).map_err(native("hook_add interrupt"))
     }
 
     /// Removes a hook and drops its callback. Never call this from inside the

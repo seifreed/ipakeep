@@ -93,10 +93,8 @@ impl<'a> ByteReader<'a> {
     /// Reads bytes up to (excluding) the next NUL, consuming the NUL.
     pub(crate) fn bytes_until_nul(&mut self) -> Vec<u8> {
         let tail = self.data.get(self.position..).unwrap_or_default();
-        let length = tail
-            .iter()
-            .position(|&byte| byte == 0)
-            .unwrap_or(tail.len());
+        let nul = tail.iter().position(|&byte| byte == 0);
+        let length = nul.unwrap_or(tail.len());
         self.position += (length + 1).min(tail.len());
         tail[..length].to_vec()
     }
