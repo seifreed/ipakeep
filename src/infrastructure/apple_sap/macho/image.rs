@@ -694,3 +694,593 @@ fn trie_exports(data: &[u8], layout: &Layout) -> Vec<TrieExport> {
         .and_then(|trie| parse_export_trie(trie, layout.base()))
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::infrastructure::apple_sap::macho::chained::format;
+    use crate::infrastructure::apple_sap::macho::layout::le32;
+    use crate::infrastructure::apple_sap::macho::test_support::*;
+
+    const LOAD: u64 = 0x2_0000_0000;
+    const MALLOC: u64 = 0x5000;
+
+    fn found(symbol: &str) -> Result<u64, &'static str> {
+        if symbol.is_empty() {
+            Err("empty symbol name")
+        } else {
+            Ok(MALLOC)
+        }
+    }
+
+    fn missing(_: &str) -> Result<u64, &'static str> {
+        Err("no such symbol")
+    }
+
+    fn pointer(image: &MachImage, offset: usize) -> u64 {
+        le64_at(image.data(), offset as u64).unwrap_or_default()
+    }
+
+    fn open(input: &[u8]) -> MachImage {
+        MachImage::open("test", input).unwrap()
+    }
+
+    fn open_error(input: &[u8]) -> MachoError {
+        MachImage::open("test", input).unwrap_err()
+    }
+
+    /// Standard image whose `__DATA` holds a userland rebase chained to a bind.
+    fn chained_image() -> Vec<u8> {
+        let starts = ChainStarts::single(format::ARM64E_USERLAND, 0x10);
+        let payload = chained_payload(
+            &[None, None, Some(starts), None],
+            ImportFormat::Addend,
+            &[("_malloc", 8)],
+        );
+        MachOBuilder::standard()
+            .chained_fixups(LINKEDIT_AT, payload.len())
+            .bytes(LINKEDIT_AT, &payload)
+            .pointer(DATA_AT + 0x10, 0x1040 | (1 << 51))
+            .pointer(DATA_AT + 0x18, 1 << 62)
+            .build()
+    }
+
+    fn fat(thin: &[u8], subtype: u32) -> Vec<u8> {
+        let offset = 0x20u32;
+        let mut data = Vec::new();
+        for value in [
+            0xcafe_babe,
+            1,
+            CPU_TYPE_ARM64,
+            subtype,
+            offset,
+            u32_of(thin.len()),
+            0,
+        ] {
+            data.extend_from_slice(&u32::to_be_bytes(value));
+        }
+        data.resize(offset as usize, 0);
+        data.extend_from_slice(thin);
+        data
+    }
+
+    fn temporary_cache(tag: &str) -> (PathBuf, PreparationCache) {
+        let directory =
+            std::env::temp_dir().join(format!("ipakeep-macho-image-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let cache = PreparationCache::new(&directory);
+        (directory, cache)
+    }
+
+    #[test]
+    fn open_strips_pointer_authentication_and_reports_layout() {
+        let image = open(&MachOBuilder::standard().build());
+        assert_eq!(image.name(), "test");
+        assert_eq!(image.base(), BASE);
+        assert_eq!(image.loaded_base(), None);
+        let names: Vec<&str> = image.segments().iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["__PAGEZERO", "__TEXT", "__DATA", "__LINKEDIT"]);
+        assert_eq!(image.symbols(), []);
+        assert_eq!(image.relocations(), []);
+        assert!(image.imports().is_empty());
+        assert_eq!(
+            image.instruction_ranges(),
+            vec![(BASE + 0x800, BASE + 0x808)]
+        );
+        assert_eq!(le32(image.data(), TEXT_SECTION), Some(NOP));
+        assert_eq!(le32(image.data(), TEXT_SECTION + 4), Some(RET));
+    }
+
+    #[test]
+    fn open_selects_the_arm64e_slice_of_a_universal_binary() {
+        let thin = MachOBuilder::standard().build();
+        let image = open(&fat(&thin, CPU_SUBTYPE_ARM64E));
+        assert_eq!(image.data().len(), thin.len());
+        assert_eq!(image.base(), BASE);
+        assert!(matches!(
+            open_error(&fat(&thin, 0)),
+            MachoError::MissingArm64e
+        ));
+        assert!(matches!(
+            open_error(&[0u8; 64]),
+            MachoError::NotArm64 { .. }
+        ));
+    }
+
+    #[test]
+    fn relocate_applies_chained_rebases_and_binds_then_loads() {
+        let mut image = open(&chained_image());
+        assert_eq!(
+            image.relocations(),
+            [
+                Relocation::Rebase {
+                    offset: 0x1010,
+                    target: 0x1040
+                },
+                Relocation::Bind {
+                    offset: 0x1018,
+                    symbol: "_malloc".to_owned(),
+                    addend: 8
+                }
+            ]
+        );
+        assert_eq!(image.imports().into_iter().collect::<Vec<_>>(), ["_malloc"]);
+        let mut requested = Vec::new();
+        image
+            .relocate(LOAD, |symbol: &str| {
+                requested.push(symbol.to_owned());
+                found(symbol)
+            })
+            .unwrap();
+        assert_eq!(requested, ["_malloc"]);
+        assert_eq!(image.loaded_base(), Some(LOAD));
+        assert_eq!(pointer(&image, DATA_AT + 0x10), LOAD + 0x1040);
+        assert_eq!(pointer(&image, DATA_AT + 0x18), MALLOC + 8);
+        let plan = image.load_plan().unwrap();
+        assert_eq!(
+            plan.regions,
+            [MemoryRegion {
+                address: LOAD,
+                size: 0x3000
+            }]
+        );
+        let names: Vec<&str> = plan.segments.iter().map(|s| s.name).collect();
+        assert_eq!(names, ["__TEXT", "__DATA", "__LINKEDIT"]);
+        let data = plan.segments[1];
+        assert_eq!(data.address, LOAD + 0x1000);
+        assert_eq!(data.memory_size, 0x1000);
+        assert_eq!(data.protection, PROT_RW);
+        assert_eq!(data.data, &image.data()[DATA_AT..DATA_AT + 0x1000]);
+    }
+
+    #[test]
+    fn relocation_happens_only_once() {
+        let mut image = open(&chained_image());
+        image.relocate(LOAD, found).unwrap();
+        let again = image.relocate(LOAD, found).unwrap_err();
+        assert!(again.to_string().contains("already relocated"));
+        let prelinked = image.prepare_prelinked(&HashMap::new(), found);
+        assert!(matches!(prelinked, Err(MachoError::State { .. })));
+    }
+
+    #[test]
+    fn relocation_failures_leave_the_image_unrelocated() {
+        let mut image = open(&chained_image());
+        let rebase = image.relocate(u64::MAX, found).unwrap_err();
+        assert!(matches!(rebase, MachoError::Overflow { .. }));
+        assert_eq!(image.relocations().len(), 2);
+        assert_eq!(image.loaded_base(), None);
+        let Err(MachoError::Resolve { symbol, reason, .. }) = image.relocate(LOAD, missing) else {
+            panic!("expected a resolver failure");
+        };
+        assert_eq!(
+            (symbol.as_str(), reason.as_str()),
+            ("_malloc", "no such symbol")
+        );
+        let addend = image.relocate(LOAD, |_: &str| Ok::<u64, Infallible>(u64::MAX));
+        assert!(
+            addend
+                .unwrap_err()
+                .to_string()
+                .contains("addend for _malloc")
+        );
+        image.data.truncate(DATA_AT + 0x14);
+        let truncated = image.relocate(LOAD, found).unwrap_err();
+        assert!(truncated.to_string().contains("exceeds image"));
+        assert_eq!(image.loaded_base(), None);
+    }
+
+    #[test]
+    fn preparation_cache_is_populated_then_reused() {
+        let input = chained_image();
+        let (directory, cache) = temporary_cache("reuse");
+        let fresh = MachImage::open_with_cache("c", &input, Some(&cache)).unwrap();
+        assert_eq!(fs::read_dir(&directory).map(Iterator::count).ok(), Some(1));
+        let cached = MachImage::open_with_cache("c", &input, Some(&cache)).unwrap();
+        assert_eq!(cached.data(), fresh.data());
+        assert_eq!(cached.relocations(), fresh.relocations());
+        assert_eq!(le32(cached.data(), TEXT_SECTION), Some(NOP));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn cached_preparations_are_trusted_over_the_image() {
+        let input = MachOBuilder::standard().build();
+        let (directory, cache) = temporary_cache("trusted");
+        let key: [u8; 32] = Sha256::digest(&input).into();
+        let preparation = Preparation {
+            has_symtab: false,
+            symbols: Vec::new(),
+            patches: Vec::new(),
+            relocations: vec![Relocation::Rebase {
+                offset: 0x10_0000,
+                target: 0,
+            }],
+        };
+        cache.store(&key, &preparation);
+        let mut image = MachImage::open_with_cache("c", &input, Some(&cache)).unwrap();
+        assert_eq!(le32(image.data(), TEXT_SECTION), Some(PACIBSP));
+        let error = image.relocate(LOAD, found).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("fixup at 0x100000 exceeds image")
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    fn symbol_image(with_symtab: bool) -> Vec<u8> {
+        let (table, strings) = symbol_table(&[
+            ("_Alpha", 0x0f, BASE + 0x800),
+            ("_low", 0x0f, 0x10),
+            ("_ext", 0x01, 0x9_0000_0000),
+        ]);
+        let trie = export_trie(&[("_trieonly", 0x20)]);
+        let export = (LINKEDIT_AT + 0x200, trie.len());
+        let builder = MachOBuilder::standard()
+            .dyld_info(LC_DYLD_INFO_ONLY, [(0, 0), (0, 0), (0, 0), (0, 0), export])
+            .bytes(LINKEDIT_AT + 0x200, &trie);
+        if !with_symtab {
+            return builder.build();
+        }
+        builder
+            .symtab(LINKEDIT_AT, 3, LINKEDIT_AT + 0x100, strings.len())
+            .bytes(LINKEDIT_AT, &table)
+            .bytes(LINKEDIT_AT + 0x100, &strings)
+            .build()
+    }
+
+    #[test]
+    fn export_prefers_the_symbol_table_then_the_trie() {
+        let image = open(&symbol_image(true));
+        assert_eq!(image.symbols().len(), 3);
+        assert_eq!(image.export("_alpha", LOAD).ok(), Some(LOAD + 0x800));
+        assert_eq!(image.export("_TRIEONLY", LOAD).ok(), Some(LOAD + 0x20));
+        assert!(matches!(
+            image.export("_missing", LOAD),
+            Err(MachoError::SymbolNotFound { .. })
+        ));
+        let low = image.export("_low", LOAD).unwrap_err();
+        assert!(low.to_string().contains("precedes image base"));
+        assert!(matches!(
+            image.export("_Alpha", u64::MAX),
+            Err(MachoError::Overflow { .. })
+        ));
+    }
+
+    #[test]
+    fn export_requires_a_symbol_table() {
+        let image = open(&symbol_image(false));
+        assert!(matches!(
+            image.export("_trieonly", LOAD),
+            Err(MachoError::SymbolNotFound { .. })
+        ));
+    }
+
+    fn dyld_info_image(command: u32) -> Vec<u8> {
+        let rebase = [0x11, 0x22, 0x20, 0x51, 0x00];
+        let bind = [0x40, b'_', b'b', 0, 0x72, 0x28, 0x90, 0x00];
+        let weak = [0x40, b'_', b'w', 0, 0x72, 0x30, 0x90, 0x00];
+        let lazy = [
+            0x72, 0x38, 0x40, b'_', b'l', 0, 0x90, 0x00, 0x72, 0x40, 0x40, b'_', b'm', 0, 0x90,
+            0x00,
+        ];
+        let streams = [
+            (LINKEDIT_AT, rebase.len()),
+            (LINKEDIT_AT + 0x10, bind.len()),
+            (LINKEDIT_AT + 0x20, weak.len()),
+            (LINKEDIT_AT + 0x30, lazy.len()),
+            (LINKEDIT_AT + 0x50, 1),
+        ];
+        MachOBuilder::standard()
+            .dyld_info(command, streams)
+            .bytes(LINKEDIT_AT, &rebase)
+            .bytes(LINKEDIT_AT + 0x10, &bind)
+            .bytes(LINKEDIT_AT + 0x20, &weak)
+            .bytes(LINKEDIT_AT + 0x30, &lazy)
+            .bytes(LINKEDIT_AT + 0x50, &[0xff])
+            .pointer(DATA_AT + 0x20, BASE + 0x100)
+            .build()
+    }
+
+    #[test]
+    fn dyld_info_streams_decode_in_rebase_bind_weak_lazy_order() {
+        let mut image = open(&dyld_info_image(LC_DYLD_INFO));
+        let bind = |offset: u64, symbol: &str| Relocation::Bind {
+            offset,
+            symbol: symbol.to_owned(),
+            addend: 0,
+        };
+        let expected = [
+            Relocation::Rebase {
+                offset: 0x1020,
+                target: 0x100,
+            },
+            bind(0x1028, "_b"),
+            bind(0x1030, "_w"),
+            bind(0x1038, "_l"),
+            bind(0x1040, "_m"),
+        ];
+        assert_eq!(image.relocations(), expected);
+        let addresses: HashMap<&str, u64> =
+            HashMap::from([("_b", 0xb0), ("_w", 0xc0), ("_l", 0xd0), ("_m", 0xe0)]);
+        image
+            .relocate(LOAD, |symbol: &str| {
+                addresses.get(symbol).copied().ok_or("unknown")
+            })
+            .unwrap();
+        let written: Vec<u64> = (0..5)
+            .map(|index| pointer(&image, DATA_AT + 0x20 + index * 8))
+            .collect();
+        assert_eq!(written, [LOAD + 0x100, 0xb0, 0xc0, 0xd0, 0xe0]);
+    }
+
+    fn prelinked_image() -> Vec<u8> {
+        MachOBuilder::standard()
+            .segment("__ODD", BASE + 0x3006, 0x20, 0x2c00, 0x20)
+            .segment("__TINY", BASE + 0x3100, 4, 0x2d00, 4)
+            .pointer(0x900, 0x7777)
+            .pointer(DATA_AT + 0x8, 0x7777)
+            .pointer(DATA_AT + 0x10, 0x8888)
+            .pointer(LINKEDIT_AT + 0x8, 0x7777)
+            .pointer(0x2c02, 0x7777)
+            .build()
+    }
+
+    #[test]
+    fn prepare_prelinked_patches_data_pointers_in_place() {
+        let mut image = open(&prelinked_image());
+        let external = HashMap::from([(0x7777, "_ext".to_owned()), (0x8888, "_other".to_owned())]);
+        let mut requested = Vec::new();
+        image
+            .prepare_prelinked(&external, |symbol: &str| {
+                requested.push(symbol.to_owned());
+                Ok::<u64, Infallible>(if symbol == "_ext" { 0xe000 } else { 0xf000 })
+            })
+            .unwrap();
+        assert_eq!(requested, ["_ext", "_other"]);
+        assert_eq!(image.loaded_base(), Some(BASE));
+        assert_eq!(pointer(&image, DATA_AT + 0x8), 0xe000);
+        assert_eq!(pointer(&image, DATA_AT + 0x10), 0xf000);
+        assert_eq!(pointer(&image, 0x2c02), 0xe000);
+        assert_eq!(pointer(&image, 0x900), 0x7777);
+        assert_eq!(pointer(&image, LINKEDIT_AT + 0x8), 0x7777);
+    }
+
+    #[test]
+    fn prepare_prelinked_without_imports_only_marks_the_image_loaded() {
+        let input = prelinked_image();
+        let mut image = open(&input);
+        image.prepare_prelinked(&HashMap::new(), found).unwrap();
+        assert_eq!(image.loaded_base(), Some(BASE));
+        assert_eq!(pointer(&image, DATA_AT + 0x8), 0x7777);
+        let mut failing = open(&input);
+        let external = HashMap::from([(0x7777, "_ext".to_owned())]);
+        let error = failing.prepare_prelinked(&external, missing).unwrap_err();
+        assert!(matches!(error, MachoError::Resolve { .. }));
+        assert_eq!(failing.loaded_base(), None);
+    }
+
+    const KERNEL_LOAD: u64 = 0x4000_0000;
+    const KEXT: u64 = 0xabc;
+
+    fn kernel_image() -> Vec<u8> {
+        let (table, strings) = symbol_table(&[
+            ("_kext", 0x01, BASE + 0x100_0000),
+            ("_inside", 0x0f, BASE + 0x40),
+            ("_null", 0x01, 0),
+        ]);
+        MachOBuilder::new(0x4000)
+            .segment("__TEXT", BASE, 0x1000, 0, 0x1000)
+            .segment("__TEXT_EXEC", BASE + 0x1000, 0x1000, 0x1000, 0x1000)
+            .segment("__DATA", BASE + 0x2000, 0x1000, 0x2000, 0x1000)
+            .segment("__LINKEDIT", BASE + 0x3000, 0x1000, 0x3000, 0x1000)
+            .symtab(0x3000, 3, 0x3100, strings.len())
+            .bytes(0x3000, &table)
+            .bytes(0x3100, &strings)
+            .pointer(0x1100, 0x40)
+            .pointer(0x2000, 0x40)
+            .pointer(0x2010, 0x100_0000)
+            .pointer(0x2020, 0x200_0000)
+            .pointer(0x2030, (1 << 30) | 0x40)
+            .build()
+    }
+
+    fn resolve_kext(symbol: &str) -> Result<u64, String> {
+        (symbol == "_kext")
+            .then_some(KEXT)
+            .ok_or_else(|| format!("unexpected {symbol}"))
+    }
+
+    #[test]
+    fn kernel_cache_pointers_are_rebased_or_resolved() {
+        let mut image = open(&kernel_image());
+        image
+            .relocate_kernel_cache_pointers(KERNEL_LOAD, BASE, resolve_kext)
+            .unwrap();
+        assert_eq!(pointer(&image, 0x2000), KERNEL_LOAD + 0x40);
+        assert_eq!(pointer(&image, 0x2010), KEXT);
+        assert_eq!(pointer(&image, 0x2020), 0x200_0000);
+        assert_eq!(pointer(&image, 0x2030), (1 << 30) | 0x40);
+        assert_eq!(pointer(&image, 0x1100), 0x40);
+    }
+
+    #[test]
+    fn kernel_cache_pointer_failures() {
+        let input = kernel_image();
+        let mut image = open(&input);
+        let overflow = image.relocate_kernel_cache_pointers(u64::MAX, BASE, resolve_kext);
+        assert!(matches!(overflow, Err(MachoError::Overflow { .. })));
+        let mut image = open(&input);
+        image
+            .relocate_kernel_cache_pointers(KERNEL_LOAD, u64::MAX, resolve_kext)
+            .unwrap();
+        assert_eq!(image.data(), open(&input).data());
+        let mut image = open(&input);
+        let error = image.relocate_kernel_cache_pointers(KERNEL_LOAD, BASE, missing);
+        assert!(matches!(error, Err(MachoError::Resolve { .. })));
+    }
+
+    fn relocated(builder: MachOBuilder, load_base: u64) -> MachImage {
+        let mut image = open(&builder.build());
+        image.relocate(load_base, found).unwrap();
+        image
+    }
+
+    fn text_only() -> MachOBuilder {
+        MachOBuilder::new(0x1000).segment("__TEXT", BASE, 0x1000, 0, 0x1000)
+    }
+
+    #[test]
+    fn load_plan_merges_regions_and_skips_unbacked_segments() {
+        let builder = text_only()
+            .segment("__BSS", BASE + 0x800, 0x1000, 0, 0)
+            .segment("__EMPTY", BASE + 0x8000, 0, 0, 0)
+            .segment("__FAR", BASE + 0x10008, 0x10, 0x100, 0x10);
+        let image = relocated(builder, LOAD);
+        let plan = image.load_plan().unwrap();
+        assert_eq!(
+            plan.regions,
+            [
+                MemoryRegion {
+                    address: LOAD,
+                    size: 0x2000
+                },
+                MemoryRegion {
+                    address: LOAD + 0x10000,
+                    size: 0x1000
+                }
+            ]
+        );
+        let placed: Vec<(&str, u64)> = plan.segments.iter().map(|s| (s.name, s.address)).collect();
+        assert_eq!(placed, [("__TEXT", LOAD), ("__FAR", LOAD + 0x10008)]);
+    }
+
+    #[test]
+    fn load_plan_requires_relocation() {
+        let image = open(&text_only().build());
+        let error = image.load_plan().unwrap_err();
+        assert!(error.to_string().contains("must be relocated"));
+    }
+
+    #[test]
+    fn load_plan_rejects_inconsistent_layouts() {
+        let low = relocated(
+            text_only().segment("__LOW", BASE - 0x1000, 0x1000, 0, 0),
+            LOAD,
+        );
+        let error = low.load_plan().unwrap_err().to_string();
+        assert!(error.contains("segment __LOW precedes image base"));
+        let reordered = MachOBuilder::new(0x2000)
+            .segment("__DATA", BASE + 0x1000, 0x1000, 0x1000, 0x1000)
+            .segment("__TEXT", BASE, 0x1000, 0, 0x1000);
+        let error = relocated(reordered, u64::MAX - 0x800)
+            .load_plan()
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("address overflow: segment __DATA")
+        );
+        let error = relocated(text_only(), u64::MAX - 0x10)
+            .load_plan()
+            .unwrap_err();
+        assert!(error.to_string().contains("segment __TEXT range"));
+        let pagezero = MachOBuilder::new(0x100).segment("__PAGEZERO", 0, BASE, 0, 0);
+        let error = relocated(pagezero, 0).load_plan().unwrap_err();
+        assert!(error.to_string().contains("no loadable segments"));
+        let big = text_only().segment("__BIG", BASE + 0x1000, 0x8000_0000, 0, 0);
+        let error = relocated(big, LOAD).load_plan().unwrap_err();
+        assert!(error.to_string().contains("too large"));
+        let mut truncated = relocated(MachOBuilder::standard(), LOAD);
+        truncated.data.truncate(DATA_AT + 0x800);
+        let error = truncated.load_plan().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("segment __DATA data exceeds image")
+        );
+    }
+
+    #[test]
+    fn open_rejects_inconsistent_segments() {
+        let oversized = MachOBuilder::new(0x1000).segment("__TEXT", BASE, 0x10, 0, 0x20);
+        let error = open_error(&oversized.build()).to_string();
+        assert!(error.contains("exceeds its memory size"));
+        let wrapping = MachOBuilder::new(0x1000).segment("__TEXT", u64::MAX - 1, 0x10, 0, 0);
+        assert!(matches!(
+            open_error(&wrapping.build()),
+            MachoError::Overflow { .. }
+        ));
+        let beyond = MachOBuilder::new(0x1800).segment("__DATA", BASE, 0x1000, 0x1000, 0x1000);
+        let error = open_error(&beyond.build()).to_string();
+        assert!(error.contains("segment __DATA data exceeds image"));
+    }
+
+    #[test]
+    fn open_rejects_linkedit_outside_the_image() {
+        let section = MachOBuilder::new(0x1000)
+            .segment("__TEXT", BASE, 0x1000, 0, 0x1000)
+            .section("__text", BASE, 0x200, 0xf00, PURE_INSTRUCTIONS);
+        let error = open_error(&section.build()).to_string();
+        assert!(error.contains("instruction section __text exceeds image"));
+        let chained = MachOBuilder::standard().chained_fixups(0x2f00, 0x200);
+        let error = open_error(&chained.build()).to_string();
+        assert!(error.contains("linkedit data exceeds image"));
+        let rebase = MachOBuilder::standard().dyld_info(
+            LC_DYLD_INFO,
+            [(0x2f00, 0x200), (0, 0), (0, 0), (0, 0), (0, 0)],
+        );
+        let error = open_error(&rebase.build()).to_string();
+        assert!(error.contains("linkedit data exceeds image"));
+        let symtab = MachOBuilder::standard().symtab(0x2f00, 100, LINKEDIT_AT, 1);
+        let error = open_error(&symtab.build()).to_string();
+        assert!(error.contains("symbol table exceeds image"));
+        let truncated = MachOBuilder::standard().chained_fixups(LINKEDIT_AT, 8);
+        let error = open_error(&truncated.build()).to_string();
+        assert!(error.contains("truncated chained fixups"));
+    }
+
+    #[test]
+    fn unreadable_export_tries_yield_no_exports() {
+        let range = |export| [(0, 0), (0, 0), (0, 0), (0, 0), export];
+        let (table, strings) = symbol_table(&[("_x", 0x0f, BASE)]);
+        for export in [(LINKEDIT_AT, 0), (0x2fff, 0x10), (LINKEDIT_AT + 0x100, 1)] {
+            let image = open(
+                &MachOBuilder::standard()
+                    .dyld_info(LC_DYLD_INFO_ONLY, range(export))
+                    .symtab(LINKEDIT_AT, 1, LINKEDIT_AT + 0x80, strings.len())
+                    .bytes(LINKEDIT_AT, &table)
+                    .bytes(LINKEDIT_AT + 0x80, &strings)
+                    .bytes(LINKEDIT_AT + 0x100, &[0xff])
+                    .build(),
+            );
+            assert_eq!(image.trie_exports, []);
+            assert_eq!(image.export("_x", LOAD).ok(), Some(LOAD));
+        }
+    }
+}

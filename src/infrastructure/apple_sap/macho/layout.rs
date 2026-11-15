@@ -242,88 +242,164 @@ fn parse_dyld_info(body: &[u8]) -> Option<DyldInfoCommand> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
+    use crate::infrastructure::apple_sap::macho::test_support::{
+        BASE, LINKEDIT_AT, MachOBuilder, PROT_RX, TEXT_SECTION, u32_of,
+    };
 
-    fn u32_of(value: usize) -> u32 {
-        u32::try_from(value).unwrap_or(u32::MAX)
+    const SEGMENT_FIELDS: usize = (SEGMENT_COMMAND_SIZE - LOAD_COMMAND_HEADER_SIZE) / 4;
+    const SECTION_COUNT_FIELD: usize = 14;
+
+    fn parse(data: &[u8]) -> MachoResult<Layout> {
+        Layout::parse("t", data)
     }
 
-    /// Builds a minimal arm64 Mach-O with the given segments
-    /// `(name, vmaddr, vmsize, fileoff, filesize)` and extra load commands.
-    pub(crate) fn synthetic_image(
-        segments: &[(&str, u64, u64, u64, u64)],
-        extra_commands: &[Vec<u8>],
-        file_size: usize,
-    ) -> Vec<u8> {
-        let mut commands = Vec::new();
-        for &(name, address, size, offset, length) in segments {
-            let mut command = Vec::new();
-            command.extend_from_slice(&LC_SEGMENT_64.to_le_bytes());
-            command.extend_from_slice(&u32_of(SEGMENT_COMMAND_SIZE).to_le_bytes());
-            let mut raw_name = [0u8; NAME_SIZE];
-            raw_name[..name.len()].copy_from_slice(name.as_bytes());
-            command.extend_from_slice(&raw_name);
-            for value in [address, size, offset, length] {
-                command.extend_from_slice(&value.to_le_bytes());
-            }
-            command.extend_from_slice(&[7, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-            commands.push(command);
+    fn malformed_reason(data: &[u8]) -> String {
+        match parse(data) {
+            Err(MachoError::Malformed { reason, .. }) => reason,
+            other => panic!("expected a malformed image, got {other:?}"),
         }
-        commands.extend(extra_commands.iter().cloned());
-        let mut data = Vec::new();
-        data.extend_from_slice(&MH_MAGIC_64.to_le_bytes());
-        data.extend_from_slice(&CPU_TYPE_ARM64.to_le_bytes());
-        data.extend_from_slice(&2u32.to_le_bytes());
-        data.extend_from_slice(&6u32.to_le_bytes());
-        data.extend_from_slice(&u32_of(commands.len()).to_le_bytes());
-        let total: usize = commands.iter().map(Vec::len).sum();
-        data.extend_from_slice(&u32_of(total).to_le_bytes());
-        data.extend_from_slice(&[0u8; 8]);
-        for command in commands {
-            data.extend_from_slice(&command);
-        }
-        data.resize(file_size.max(data.len()), 0);
-        data
+    }
+
+    fn streams(first: usize) -> [(usize, usize); 5] {
+        [0, 1, 2, 3, 4].map(|index| (first + index * 0x10, index + 1))
     }
 
     #[test]
-    fn parses_segments_and_base() {
-        let data = synthetic_image(
-            &[
-                ("__PAGEZERO", 0, 0x1000, 0, 0),
-                ("__TEXT", 0x4000, 0x1000, 0, 0x1000),
-            ],
-            &[],
-            0x1000,
-        );
-        let layout = Layout::parse("t", &data).ok();
-        let layout = layout.as_ref();
-        assert_eq!(layout.map(|item| item.segments.len()), Some(2));
-        assert_eq!(layout.map(Layout::base), Some(0x4000));
+    fn parses_segments_sections_and_linkedit_commands() {
+        let data = MachOBuilder::standard()
+            .symtab(LINKEDIT_AT, 2, LINKEDIT_AT + 0x40, 0x20)
+            .dyld_info(LC_DYLD_INFO_ONLY, streams(LINKEDIT_AT))
+            .chained_fixups(LINKEDIT_AT + 0x100, 0x30)
+            .command(0x1b, &[0; 4])
+            .build();
+        let layout = parse(&data).unwrap();
+        assert_eq!(layout.base(), BASE);
+        assert_eq!(layout.segments.len(), 4);
+        assert_eq!(layout.segments[1].initial_protection, PROT_RX);
+        assert_eq!(layout.segments[1].max_protection, PROT_RX);
+        let sections: Vec<(&str, u32, bool)> = layout
+            .sections
+            .iter()
+            .map(|section| {
+                (
+                    section.name.as_str(),
+                    section.offset,
+                    section.has_instructions(),
+                )
+            })
+            .collect();
         assert_eq!(
-            layout.map(|item| item.segments[1].initial_protection),
-            Some(3)
+            sections,
+            [
+                ("__text", u32_of(TEXT_SECTION), true),
+                ("__const", 0x900, false)
+            ]
+        );
+        assert_eq!(layout.sections[0].address, BASE + 0x800);
+        assert_eq!(layout.sections[0].size, 8);
+        let symtab = layout.symtab.unwrap();
+        assert_eq!(
+            (symtab.symbol_offset, symtab.symbol_count),
+            (u32_of(LINKEDIT_AT), 2)
+        );
+        assert_eq!((symtab.string_offset, symtab.string_size), (0x2040, 0x20));
+        let info = layout.dyld_info().unwrap();
+        assert_eq!(
+            info.rebase,
+            LinkeditRange {
+                offset: 0x2000,
+                size: 1
+            }
+        );
+        assert_eq!(
+            info.export,
+            LinkeditRange {
+                offset: 0x2040,
+                size: 5
+            }
+        );
+        assert_eq!(layout.dyld_info, None);
+        assert_eq!(
+            layout.chained_fixups,
+            Some(LinkeditRange {
+                offset: 0x2100,
+                size: 0x30
+            })
         );
     }
 
     #[test]
-    fn rejects_non_arm64() {
-        let mut data = synthetic_image(&[], &[], 64);
-        data[4] = 7;
-        assert!(matches!(
-            Layout::parse("t", &data),
-            Err(MachoError::NotArm64 { .. })
-        ));
+    fn dyld_info_takes_precedence_over_dyld_info_only() {
+        let data = MachOBuilder::new(0x100)
+            .dyld_info(LC_DYLD_INFO_ONLY, streams(0x100))
+            .dyld_info(LC_DYLD_INFO, streams(0x200))
+            .build();
+        let layout = parse(&data).unwrap();
+        assert_eq!(layout.dyld_info().map(|info| info.bind.offset), Some(0x210));
+        assert_eq!(
+            layout.dyld_info_only.map(|info| info.bind.offset),
+            Some(0x110)
+        );
+        assert_eq!(layout.base(), 0);
     }
 
     #[test]
-    fn rejects_truncated_command() {
-        let mut data = synthetic_image(&[("__TEXT", 0, 0x10, 0, 0x10)], &[], 0);
-        data.truncate(60);
-        assert!(matches!(
-            Layout::parse("t", &data),
-            Err(MachoError::Malformed { .. })
-        ));
+    fn rejects_images_that_are_not_arm64() {
+        let valid = MachOBuilder::new(0).build();
+        assert!(parse(&valid).is_ok());
+        let mut wrong_cpu = valid.clone();
+        wrong_cpu[4] = 7;
+        let mut wrong_magic = valid.clone();
+        wrong_magic[0] = 0;
+        for data in [&valid[..8], &wrong_cpu[..], &wrong_magic[..], &[][..]] {
+            assert!(matches!(parse(data), Err(MachoError::NotArm64 { .. })));
+        }
+    }
+
+    #[test]
+    fn rejects_load_commands_outside_the_image() {
+        let mut missing = MachOBuilder::new(0).build();
+        missing[16] = 1;
+        missing.extend_from_slice(&[0x19, 0]);
+        assert_eq!(malformed_reason(&missing), "truncated load command");
+        let mut undersized = MachOBuilder::new(0).command(0x1b, &[]).build();
+        undersized[36] = 4;
+        assert_eq!(malformed_reason(&undersized), "load command exceeds image");
+        let mut oversized = MachOBuilder::new(0).command(0x1b, &[]).build();
+        oversized[36] = 0x40;
+        assert_eq!(malformed_reason(&oversized), "load command exceeds image");
+    }
+
+    #[test]
+    fn rejects_truncated_command_bodies() {
+        let mut section_count = [0u32; SEGMENT_FIELDS];
+        section_count[SECTION_COUNT_FIELD] = 1;
+        let cases = [
+            (LC_SEGMENT_64, &[0u32; 4][..]),
+            (LC_SEGMENT_64, &section_count[..]),
+            (LC_SYMTAB, &[0; 2][..]),
+            (LC_DYLD_INFO, &[0; 2][..]),
+            (LC_DYLD_INFO_ONLY, &[0; 9][..]),
+            (LC_DYLD_CHAINED_FIXUPS, &[0; 1][..]),
+        ];
+        for (command, fields) in cases {
+            let data = MachOBuilder::new(0).command(command, fields).build();
+            assert_eq!(
+                malformed_reason(&data),
+                format!("truncated load command {command:#x}")
+            );
+        }
+    }
+
+    #[test]
+    fn byte_helpers_are_bounds_checked() {
+        assert_eq!(le32(&[1, 2, 3], 0), None);
+        assert_eq!(le32(&[1, 0, 0, 0], usize::MAX), None);
+        assert_eq!(le64(&[1, 0, 0, 0, 0, 0, 0, 0], 0), Some(1));
+        assert_eq!(le64_at(&[0; 8], u64::MAX), None);
+        assert_eq!(cstring(b"_name\0tail"), "_name");
+        assert_eq!(cstring(b"_unterminated"), "_unterminated");
     }
 }

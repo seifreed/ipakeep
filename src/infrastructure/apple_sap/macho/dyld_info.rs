@@ -486,4 +486,177 @@ mod tests {
         let result = parse_binds(&context, &[0xd0], BindStream::Eager);
         assert!(matches!(result, Err(MachoError::Unsupported { .. })));
     }
+
+    const BASE: u64 = 0x1_0000_0000;
+
+    fn image_with_pointers(value: u64) -> Vec<u8> {
+        let mut data = vec![0u8; 0x200];
+        for slot in data[0x100..].as_chunks_mut::<8>().0 {
+            slot.copy_from_slice(&value.to_le_bytes());
+        }
+        data
+    }
+
+    fn rebases(data: &[u8], segments: &[Segment], stream: &[u8]) -> MachoResult<Vec<u64>> {
+        let context = FixupContext {
+            image: "t",
+            data,
+            segments,
+            base: BASE,
+        };
+        let decoded = parse_rebases(&context, stream)?;
+        Ok(decoded.iter().map(Relocation::offset).collect())
+    }
+
+    fn binds(stream: &[u8], kind: BindStream) -> MachoResult<Vec<Relocation>> {
+        let data = vec![0u8; 0x200];
+        let segments = segments();
+        let context = FixupContext {
+            image: "t",
+            data: &data,
+            segments: &segments,
+            base: BASE,
+        };
+        parse_binds(&context, stream, kind)
+    }
+
+    fn reason(result: MachoResult<impl std::fmt::Debug>) -> String {
+        match result {
+            Err(MachoError::Malformed { reason, .. } | MachoError::Unsupported { reason, .. }) => {
+                reason
+            }
+            other => panic!("expected a decoding error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rebase_opcodes_cover_every_addressing_mode() {
+        let data = image_with_pointers(BASE + 0x40);
+        let stream = [
+            0x11, 0x21, 0x00, 0x30, 0x08, 0x41, 0x60, 0x02, 0x70, 0x08, 0x80, 0x02, 0x08, 0x00,
+            0x51,
+        ];
+        let offsets = rebases(&data, &segments(), &stream).unwrap();
+        assert_eq!(offsets, [0x110, 0x118, 0x120, 0x130, 0x140]);
+        let context = FixupContext {
+            image: "t",
+            data: &data,
+            segments: &segments(),
+            base: BASE,
+        };
+        let targets = parse_rebases(&context, &[0x11, 0x21, 0x00, 0x51]).unwrap();
+        assert_eq!(
+            targets,
+            [Relocation::Rebase {
+                offset: 0x100,
+                target: 0x40
+            }]
+        );
+    }
+
+    #[test]
+    fn rebase_streams_are_validated() {
+        let data = image_with_pointers(BASE);
+        let segments = segments();
+        let failures: [(&[u8], &str); 6] = [
+            (&[0x51], "rebase before segment selection"),
+            (&[0x12, 0x21, 0x00, 0x51], "rebase type 2"),
+            (&[0x11, 0x21], "truncated rebase opcode stream"),
+            (&[0x90], "bad rebase opcode 0x90"),
+            (&[0x11, 0x2f, 0x00], "fixup references segment 15"),
+            (
+                &[0x11, 0x21, 0xf9, 0x01, 0x51],
+                "fixup at 0xf9 exceeds segment __DATA",
+            ),
+        ];
+        for (stream, expected) in failures {
+            assert_eq!(reason(rebases(&data, &segments, stream)), expected);
+        }
+        let below = image_with_pointers(0x40);
+        let error = rebases(&below, &segments, &[0x11, 0x21, 0x00, 0x51]);
+        assert_eq!(reason(error), "rebase below image base");
+    }
+
+    #[test]
+    fn fixups_must_fit_in_the_file() {
+        let data = image_with_pointers(BASE);
+        let mut segments = segments();
+        segments[1].file_offset = 0x1f8;
+        let error = rebases(&data, &segments, &[0x11, 0x21, 0x08, 0x51]);
+        assert_eq!(reason(error), "fixup at 0x8 exceeds image");
+    }
+
+    #[test]
+    fn duplicate_segment_names_resolve_to_the_first_declaration() {
+        let data = image_with_pointers(BASE);
+        let mut segments = segments();
+        segments.push(Segment {
+            file_offset: 0x180,
+            ..segments[1].clone()
+        });
+        let offsets = rebases(&data, &segments, &[0x11, 0x22, 0x00, 0x51]).unwrap();
+        assert_eq!(offsets, [0x100]);
+    }
+
+    #[test]
+    fn bind_opcodes_cover_every_addressing_mode() {
+        let stream = [
+            0x11, 0x22, 0x01, 0x3e, 0x40, b'_', b'a', 0, 0x51, 0x60, 0x10, 0x71, 0x00, 0x80, 0x08,
+            0x90, 0xa0, 0x08, 0xb1, 0xc0, 0x02, 0x08, 0x00, 0x90,
+        ];
+        let decoded = binds(&stream, BindStream::Eager).unwrap();
+        let offsets: Vec<u64> = decoded.iter().map(Relocation::offset).collect();
+        assert_eq!(offsets, [0x108, 0x110, 0x120, 0x130, 0x140]);
+        assert!(decoded.iter().all(|relocation| matches!(
+            relocation,
+            Relocation::Bind { symbol, addend: 16, .. } if symbol == "_a"
+        )));
+    }
+
+    #[test]
+    fn lazy_binds_reset_their_record_after_done() {
+        let stream = [
+            0x71, 0x00, 0x40, b'_', b'x', 0, 0x60, 0x7f, 0x90, 0x00, 0x90, 0x00,
+        ];
+        let bind = |offset, symbol: &str, addend| Relocation::Bind {
+            offset,
+            symbol: symbol.to_owned(),
+            addend,
+        };
+        assert_eq!(
+            binds(&stream, BindStream::Lazy).unwrap(),
+            [bind(0x100, "_x", -1), bind(0x108, "", 0)]
+        );
+        assert_eq!(
+            binds(&stream, BindStream::Eager).unwrap(),
+            [bind(0x100, "_x", -1)]
+        );
+        let unterminated = binds(&[0x71, 0x00, 0x40, b'_', b'y'], BindStream::Eager);
+        assert_eq!(unterminated.unwrap(), []);
+    }
+
+    #[test]
+    fn bind_streams_are_validated() {
+        let failures: [(&[u8], &str); 5] = [
+            (&[0x90], "bind before segment selection"),
+            (&[0x52, 0x71, 0x00, 0x90], "bind type 2 for "),
+            (&[0x60], "truncated bind opcode stream"),
+            (&[0x22], "truncated bind opcode stream"),
+            (&[0x7f, 0x00], "fixup references segment 15"),
+        ];
+        for (stream, expected) in failures {
+            assert_eq!(reason(binds(stream, BindStream::Eager)), expected);
+        }
+    }
+
+    #[test]
+    fn oversized_leb128_values_drop_high_bits() {
+        let mut long = vec![0x81u8; 10];
+        long.push(0x01);
+        assert_eq!(ByteReader::at(&long, 0).uleb(), Some(0x8102_0408_1020_4081));
+        let mut negative = vec![0xffu8; 10];
+        negative.push(0x7f);
+        assert_eq!(ByteReader::at(&negative, 0).sleb(), Some(-1));
+        assert_eq!(ByteReader::at(&[0x80], 0).sleb(), None);
+    }
 }

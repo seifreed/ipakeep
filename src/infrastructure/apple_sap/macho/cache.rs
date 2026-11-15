@@ -268,6 +268,7 @@ fn decode_relocation(input: &mut Decoder<'_>) -> Option<Relocation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
 
     fn sample() -> Preparation {
         Preparation {
@@ -322,6 +323,118 @@ mod tests {
         assert_eq!(cache.load(&key), None);
         cache.store(&key, &sample());
         assert_eq!(cache.load(&key), Some(sample()));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    fn sealed(mut body: Vec<u8>) -> Vec<u8> {
+        let digest = Sha256::digest(&body);
+        body.extend_from_slice(&digest);
+        body
+    }
+
+    fn body_of(bytes: &[u8]) -> Vec<u8> {
+        bytes[..bytes.len() - DIGEST_SIZE].to_vec()
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("ipakeep-macho-cache-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        directory
+    }
+
+    #[test]
+    fn default_location_lives_under_the_user_cache() {
+        let cache = PreparationCache::default_location();
+        let expected = dirs::cache_dir().map(|root| root.join(CACHE_SUBDIRECTORY));
+        assert_eq!(cache.map(|cache| cache.directory().to_path_buf()), expected);
+    }
+
+    #[test]
+    fn rejects_sealed_but_invalid_entries() {
+        let key = [7u8; DIGEST_SIZE];
+        let valid = body_of(&encode(&key, &sample()));
+        let mut bad_magic = valid.clone();
+        bad_magic[0] ^= 1;
+        let mut bad_version = valid.clone();
+        bad_version[MAGIC.len()] ^= 1;
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let tag_at = valid.len() - (1 + 8 + 8 + 8 + "_free".len());
+        let mut bad_tag = valid.clone();
+        bad_tag[tag_at] = 9;
+        let mut bad_utf8 = valid.clone();
+        let last = bad_utf8.len() - 1;
+        bad_utf8[last] = 0xff;
+        let truncated = valid[..valid.len() - 3].to_vec();
+        let header_only = valid[..MAGIC.len() + 4 + DIGEST_SIZE + 1 + 3].to_vec();
+        for body in [
+            bad_magic,
+            bad_version,
+            trailing,
+            bad_tag,
+            bad_utf8,
+            truncated,
+            header_only,
+        ] {
+            assert_eq!(decode(&sealed(body), &key), None);
+        }
+        assert_eq!(decode(&sealed(valid), &key), Some(sample()));
+        assert_eq!(decode(&[0u8; 8], &key), None);
+    }
+
+    #[test]
+    fn corrupt_entries_are_ignored_and_logged() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let directory = scratch("corrupt");
+        let cache = PreparationCache::new(&directory);
+        let key = [3u8; DIGEST_SIZE];
+        cache.store(&key, &sample());
+        let path = cache.entry_path(&key);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(cache.load(&key), None);
+        let logs = capture.contents();
+        assert!(logs.contains("DEBUG"));
+        assert!(logs.contains("ignoring corrupt Mach-O preparation cache entry"));
+        assert!(logs.contains(&hex::encode(key)));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn store_failures_only_disable_caching() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let blocker = scratch("blocked");
+        fs::write(&blocker, b"not a directory").unwrap();
+        let cache = PreparationCache::new(blocker.join("entries"));
+        let key = [4u8; DIGEST_SIZE];
+        cache.store(&key, &sample());
+        assert_eq!(cache.load(&key), None);
+        assert!(
+            capture
+                .contents()
+                .contains("cannot write Mach-O preparation cache entry")
+        );
+        let _ = fs::remove_file(&blocker);
+    }
+
+    #[test]
+    fn failed_renames_remove_the_temporary_file() {
+        let directory = scratch("rename");
+        let cache = PreparationCache::new(&directory);
+        let key = [5u8; DIGEST_SIZE];
+        let occupied = cache.entry_path(&key);
+        fs::create_dir_all(occupied.join("occupant")).unwrap();
+        cache.store(&key, &sample());
+        let names: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, [occupied.file_name().unwrap().to_owned()]);
+        assert_eq!(cache.load(&key), None);
         let _ = fs::remove_dir_all(&directory);
     }
 }

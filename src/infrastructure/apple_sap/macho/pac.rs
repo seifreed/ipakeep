@@ -112,9 +112,7 @@ pub(crate) fn strip_range(
 /// clipped to the buffer.
 pub(crate) fn apply_patches(data: &mut [u8], patches: &[InstructionPatch]) {
     for patch in patches {
-        let Ok(start) = usize::try_from(patch.offset) else {
-            continue;
-        };
+        let start = usize::try_from(patch.offset).unwrap_or(usize::MAX);
         let bytes = patch.value.to_le_bytes();
         let available = data.len().saturating_sub(start).min(INSTRUCTION_SIZE);
         if available > 0 {
@@ -175,5 +173,22 @@ mod tests {
         let mut copy = vec![0u8; 12];
         apply_patches(&mut copy, &patches);
         assert_eq!(&copy[8..12], &RET.to_le_bytes());
+    }
+
+    #[test]
+    fn apply_patches_clips_to_the_buffer() {
+        let mut data = vec![0u8; 6];
+        let patches = [
+            InstructionPatch {
+                offset: 4,
+                value: NOP,
+            },
+            InstructionPatch {
+                offset: 64,
+                value: RET,
+            },
+        ];
+        apply_patches(&mut data, &patches);
+        assert_eq!(data, [0, 0, 0, 0, 0x1f, 0x20]);
     }
 }

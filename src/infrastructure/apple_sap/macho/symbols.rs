@@ -170,6 +170,7 @@ fn read_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::apple_sap::macho::test_support::symbol_table;
 
     #[test]
     fn equal_fold_matches_go_semantics() {
@@ -195,6 +196,85 @@ mod tests {
         assert_eq!(symbol.name, "_alpha");
         assert_eq!(symbol.value, 0x1234);
         assert_eq!(symbol.section, 1);
+    }
+
+    fn symtab_command(symbols: usize, count: u32, strings: usize, size: usize) -> SymtabCommand {
+        SymtabCommand {
+            symbol_offset: u32::try_from(symbols).unwrap_or(u32::MAX),
+            symbol_count: count,
+            string_offset: u32::try_from(strings).unwrap_or(u32::MAX),
+            string_size: u32::try_from(size).unwrap_or(u32::MAX),
+        }
+    }
+
+    #[test]
+    fn parse_symtab_reads_every_entry_and_resolves_indirect_names() {
+        const N_INDR_EXTERNAL: u8 = N_INDR | 1;
+        let (table, strings) =
+            symbol_table(&[("_main", 0x0f, 0x4000), ("_alias", N_INDR_EXTERNAL, 1)]);
+        let mut data = table.clone();
+        let strings_at = data.len();
+        data.extend_from_slice(&strings);
+        let mut far = table[..NLIST_SIZE].to_vec();
+        far[..4].copy_from_slice(&0xffffu32.to_le_bytes());
+        data.extend_from_slice(&far);
+        let command = symtab_command(0, 2, strings_at, strings.len());
+        let symbols = parse_symtab("t", &data, command).unwrap();
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(
+            (symbols[0].name.as_str(), symbols[0].value),
+            ("_main", 0x4000)
+        );
+        assert_eq!(symbols[0].indirect_name, "");
+        assert_eq!(symbols[1].indirect_name, "_main");
+        assert_eq!(symbols[1].kind, N_INDR_EXTERNAL);
+        let far_at = strings_at + strings.len();
+        let unnamed = parse_symtab("t", &data, symtab_command(far_at, 1, strings_at, 1));
+        assert_eq!(unnamed.unwrap()[0].name, "");
+    }
+
+    #[test]
+    fn parse_symtab_rejects_tables_outside_the_image() {
+        let data = [0u8; 64];
+        let strings = parse_symtab("t", &data, symtab_command(0, 1, 60, 8));
+        assert!(strings.unwrap_err().to_string().contains("string table"));
+        let symbols = parse_symtab("t", &data, symtab_command(56, 1, 0, 8));
+        assert!(symbols.unwrap_err().to_string().contains("symbol table"));
+    }
+
+    #[test]
+    fn export_trie_handles_reexports_and_resolvers() {
+        // root -> "_r" (re-export) at 10, "_s" (stub+resolver) at 15.
+        let trie = [
+            0, 2, b'_', b'r', 0, 10, b'_', b's', 0, 15, 2, 0x08, 0, 0, 0, 3, 0x10, 0x20, 0x30, 0,
+        ];
+        let exports = parse_export_trie(&trie, 0x1000).unwrap();
+        assert_eq!(
+            exports,
+            [
+                TrieExport {
+                    name: "_r".to_owned(),
+                    address: 0
+                },
+                TrieExport {
+                    name: "_s".to_owned(),
+                    address: 0x1020
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn export_trie_rejects_cycles_and_truncation() {
+        assert_eq!(parse_export_trie(&[0, 1, b'_', 0, 0], 0), None);
+        assert_eq!(parse_export_trie(&[0, 1, b'_', 0], 0), None);
+        assert_eq!(parse_export_trie(&[3, 0], 0), None);
+    }
+
+    #[test]
+    fn equal_fold_folds_unicode_case() {
+        assert!(equal_fold("_ÉCOLE", "_école"));
+        assert!(!equal_fold("_école", "_ecole"));
     }
 
     #[test]

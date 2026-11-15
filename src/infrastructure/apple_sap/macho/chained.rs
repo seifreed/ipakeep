@@ -423,6 +423,9 @@ fn parse_imports(
 mod tests {
     use super::*;
     use crate::infrastructure::apple_sap::macho::layout::Segment;
+    use crate::infrastructure::apple_sap::macho::test_support::{
+        ChainStarts, ImportFormat, chained_payload,
+    };
 
     const BASE: u64 = 0x1_0000_0000;
 
@@ -566,6 +569,250 @@ mod tests {
                     addend: 0xff + 4
                 },
             ])
+        );
+    }
+
+    fn segment(name: &str, file_offset: u64) -> Segment {
+        Segment {
+            name: name.to_owned(),
+            address: BASE + file_offset,
+            size: 0x1000,
+            file_offset,
+            file_size: 0x1000,
+            max_protection: 3,
+            initial_protection: 3,
+        }
+    }
+
+    fn parse_payload(payload: &[u8], segments: &[Segment]) -> MachoResult<ChainedFixups> {
+        let context = FixupContext {
+            image: "t",
+            data: &[],
+            segments,
+            base: BASE,
+        };
+        ChainedFixups::parse(&context, payload)
+    }
+
+    fn imports_of(format: ImportFormat, imports: &[(&str, i64)]) -> Vec<ChainedImport> {
+        let payload = chained_payload(&[], format, imports);
+        parse_payload(&payload, &[]).unwrap().imports
+    }
+
+    fn walk(starts: SegmentStarts, data: &[u8]) -> MachoResult<Vec<Relocation>> {
+        let fixups = ChainedFixups {
+            pointer_format: starts.pointer_format,
+            starts: vec![Some(starts)],
+            imports: Vec::new(),
+        };
+        let context = FixupContext {
+            image: "t",
+            data,
+            segments: &[],
+            base: BASE,
+        };
+        fixups.relocations(&context)
+    }
+
+    fn starts(pointer_format: u16, page_size: u16, page_starts: Vec<u16>) -> SegmentStarts {
+        SegmentStarts {
+            page_size,
+            pointer_format,
+            segment_offset: 0,
+            page_starts,
+        }
+    }
+
+    fn data_with(words: &[(usize, u64)]) -> Vec<u8> {
+        let mut data = vec![0u8; 0x100];
+        for &(at, word) in words {
+            data[at..at + 8].copy_from_slice(&word.to_le_bytes());
+        }
+        data
+    }
+
+    fn import(name: &str, addend: i64) -> ChainedImport {
+        ChainedImport {
+            name: name.to_owned(),
+            addend,
+        }
+    }
+
+    #[test]
+    fn parses_every_import_format() {
+        let entries = [("_a", -4), ("_b", 1 << 40)];
+        assert_eq!(
+            imports_of(ImportFormat::Plain, &entries),
+            [import("_a", 0), import("_b", 0)]
+        );
+        assert_eq!(
+            imports_of(ImportFormat::Addend, &entries[..1]),
+            [import("_a", -4)]
+        );
+        assert_eq!(
+            imports_of(ImportFormat::Addend64, &entries),
+            [import("_a", -4), import("_b", 1 << 40)]
+        );
+        assert_eq!(imports_of(ImportFormat::Unknown, &entries), []);
+    }
+
+    #[test]
+    fn parse_takes_segment_offsets_from_load_commands() {
+        let kernel = ChainStarts::single(format::PTR_64_KERNEL_CACHE, 0);
+        let userland = ChainStarts::single(format::ARM64E_USERLAND, 0);
+        let payload = chained_payload(
+            &[None, Some(kernel), Some(userland)],
+            ImportFormat::Plain,
+            &[],
+        );
+        let segments = [segment("__TEXT", 0), segment("__DATA", 0x1000)];
+        let fixups = parse_payload(&payload, &segments).unwrap();
+        assert_eq!(fixups.pointer_format, format::PTR_64_KERNEL_CACHE);
+        assert!(fixups.starts[0].is_none());
+        let offsets: Vec<u64> = fixups
+            .starts
+            .iter()
+            .flatten()
+            .map(|start| start.segment_offset)
+            .collect();
+        assert_eq!(offsets, [0x1000, 0]);
+    }
+
+    #[test]
+    fn rejects_truncated_payloads() {
+        let valid = chained_payload(
+            &[Some(ChainStarts::single(format::ARM64E, 0))],
+            ImportFormat::Plain,
+            &[("_a", 0)],
+        );
+        let mut starts_beyond = valid.clone();
+        starts_beyond[4] = 0xff;
+        let mut pages_beyond = valid.clone();
+        pages_beyond[28 + 8 + 20] = 0xff;
+        let mut unterminated = valid.clone();
+        unterminated.pop();
+        let mut name_beyond = valid.clone();
+        name_beyond[12] = 0xff;
+        for payload in [
+            &valid[..20],
+            &starts_beyond[..],
+            &pages_beyond[..],
+            &unterminated[..],
+            &name_beyond[..],
+        ] {
+            let error = parse_payload(payload, &[]).unwrap_err();
+            assert!(error.to_string().contains("truncated chained fixups"));
+        }
+        assert!(parse_payload(&valid, &[]).is_ok());
+    }
+
+    #[test]
+    fn walks_multiple_chains_per_page_and_skips_empty_pages() {
+        let rebase = |target| arm64e_rebase(target, 0, 0);
+        let data = data_with(&[
+            (0x10, rebase(0x1)),
+            (0x40, rebase(0x2)),
+            (0x88, rebase(0x3)),
+        ]);
+        let pages = vec![0x8000 | 2, START_NONE, 0x10, 0x8000 | 0x40];
+        let start = starts(format::ARM64E_USERLAND, 0x80, pages);
+        let context = FixupContext {
+            image: "t",
+            data: &data,
+            segments: &[],
+            base: BASE,
+        };
+        let fixups = ChainedFixups::default();
+        let mut decoded = Vec::new();
+        for page in [0, 1] {
+            fixups
+                .walk_page(&context, &start, page, &mut decoded)
+                .unwrap();
+        }
+        assert_eq!(
+            decoded,
+            [
+                Relocation::Rebase {
+                    offset: 0x10,
+                    target: 0x1
+                },
+                Relocation::Rebase {
+                    offset: 0x40,
+                    target: 0x2
+                },
+            ]
+        );
+        let single = walk(
+            starts(format::ARM64E_USERLAND, 0x80, vec![START_NONE, 0x8]),
+            &data,
+        );
+        assert_eq!(single.unwrap().len(), 1);
+        let dangling = walk(
+            starts(format::ARM64E_USERLAND, 0x80, vec![0x8000 | 5]),
+            &data,
+        );
+        assert!(
+            dangling
+                .unwrap_err()
+                .to_string()
+                .contains("index out of range")
+        );
+    }
+
+    #[test]
+    fn kernel_and_firmware_formats_use_their_strides() {
+        let next = |count: u64| count << NEXT_SHIFT;
+        let data = data_with(&[(0x0, 0x4000_1234 | next(2)), (0x8, 0x5678)]);
+        for pointer_format in [format::PTR_64_KERNEL_CACHE, format::ARM64E_KERNEL] {
+            let decoded = walk(starts(pointer_format, 0x100, vec![0]), &data).unwrap();
+            let targets: Vec<u64> = decoded
+                .iter()
+                .map(|relocation| match relocation {
+                    Relocation::Rebase { target, .. } => *target,
+                    Relocation::Bind { .. } => u64::MAX,
+                })
+                .collect();
+            assert_eq!(targets.len(), 2);
+            assert_eq!(targets[1], 0x5678);
+        }
+        let firmware = walk(starts(format::ARM64E_FIRMWARE, 0x100, vec![0]), &data).unwrap();
+        assert_eq!(firmware[1].offset(), 0x8);
+        let x86 = data_with(&[(0x0, 0x10 | next(8)), (0x8, 0x20)]);
+        let decoded = walk(starts(format::X86_64_KERNEL_CACHE, 0x100, vec![0]), &x86).unwrap();
+        assert_eq!(decoded[1].offset(), 0x8);
+    }
+
+    #[test]
+    fn rejects_unknown_formats_and_chains_leaving_the_image() {
+        let data = data_with(&[]);
+        let unknown = walk(starts(3, 0x100, vec![0]), &data).unwrap_err();
+        assert!(matches!(unknown, MachoError::Unsupported { .. }));
+        let beyond = walk(starts(format::ARM64E_USERLAND, 0x100, vec![0xfc]), &data);
+        assert!(beyond.unwrap_err().to_string().contains("exceeds image"));
+    }
+
+    #[test]
+    fn arm64e_absolute_rebase_below_base_is_malformed() {
+        let words = [arm64e_rebase(0x40, 0, 0)];
+        let error = decode_chain(format::ARM64E, &words).unwrap_err();
+        assert!(error.to_string().contains("precedes the image base"));
+    }
+
+    #[test]
+    fn narrow_bind_ordinals_past_the_imports_bind_nothing() {
+        let words = [arm64e_bind(7, 0, 0, true)];
+        assert_eq!(
+            decode_chain(format::ARM64E_USERLAND, &words).unwrap(),
+            [Relocation::Bind {
+                offset: 0x10,
+                symbol: String::new(),
+                addend: 0
+            }]
+        );
+        let generic = (1u64 << GENERIC64_BIND_BIT) | 1;
+        let decoded = decode_chain(format::PTR_64_OFFSET, &[generic]).unwrap();
+        assert!(
+            matches!(&decoded[0], Relocation::Bind { symbol, addend: 4, .. } if symbol == "_free")
         );
     }
 

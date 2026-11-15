@@ -245,6 +245,82 @@ mod tests {
         assert!(matches!(arm64_slice(&fat), Err(MachoError::MissingArm64e)));
     }
 
+    fn range_of(data: &[u8]) -> MachoResult<(u64, u64)> {
+        range_with_size(data, data.len() as u64)
+    }
+
+    fn range_with_size(data: &[u8], size: u64) -> MachoResult<(u64, u64)> {
+        arm64_range(
+            |offset, buffer| {
+                let start = usize::try_from(offset).unwrap_or(usize::MAX);
+                let source = data.get(start..start + buffer.len());
+                buffer.copy_from_slice(source.ok_or(io::ErrorKind::UnexpectedEof)?);
+                Ok(())
+            },
+            size,
+        )
+    }
+
+    fn read_all(data: &[u8]) -> MachoResult<Vec<u8>> {
+        read_arm64(&mut &data[..], data.len())
+    }
+
+    fn is_invalid<T>(result: &MachoResult<T>, reason: &str) -> bool {
+        matches!(result, Err(MachoError::InvalidFat(actual)) if *actual == reason)
+    }
+
+    #[test]
+    fn short_inputs_are_thin_images() {
+        let short = [0xcf, 0xfa];
+        assert_eq!(range_of(&short).ok(), Some((0, 2)));
+        assert_eq!(read_all(&short).ok(), Some(short.to_vec()));
+        let thin = [0xcf, 0xfa, 0xed, 0xfe, 0, 0];
+        assert_eq!(range_of(&thin).ok(), Some((0, 6)));
+    }
+
+    #[test]
+    fn rejects_truncated_universal_headers() {
+        let truncated = [0xca, 0xfe, 0xba, 0xbe, 0, 0];
+        assert!(is_invalid(&arm64_slice(&truncated), "truncated header"));
+        assert!(is_invalid(&range_of(&truncated), "truncated header"));
+        assert!(is_invalid(&read_all(&truncated), "truncated header"));
+    }
+
+    #[test]
+    fn rejects_invalid_architecture_counts() {
+        let empty = [0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0];
+        let mut excessive = fat_with_arm64e(b"x");
+        excessive[7] = 0xff;
+        for data in [&empty[..], &excessive[..]] {
+            assert!(is_invalid(&arm64_slice(data), "invalid architecture count"));
+            assert!(is_invalid(&range_of(data), "invalid architecture count"));
+            assert!(is_invalid(&read_all(data), "invalid architecture count"));
+        }
+    }
+
+    #[test]
+    fn missing_arm64e_is_reported_by_every_reader() {
+        let mut fat = fat_with_arm64e(b"x");
+        fat[8 + 20 + 7] = 1;
+        assert!(matches!(range_of(&fat), Err(MachoError::MissingArm64e)));
+        assert!(matches!(read_all(&fat), Err(MachoError::MissingArm64e)));
+    }
+
+    #[test]
+    fn read_errors_propagate() {
+        let fat = fat_with_arm64e(b"arm64e!");
+        assert!(matches!(
+            range_with_size(&fat[..12], fat.len() as u64),
+            Err(MachoError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        let declared = fat.len() + 5;
+        let short = read_arm64(&mut &fat[..], declared);
+        assert!(matches!(
+            short,
+            Err(MachoError::Io(error)) if error.to_string() == "universal binary truncated"
+        ));
+    }
+
     #[test]
     fn rejects_overlapping_slice() {
         let mut fat = fat_with_arm64e(b"x");

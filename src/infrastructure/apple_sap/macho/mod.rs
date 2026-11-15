@@ -25,6 +25,8 @@ mod symbols;
 
 #[cfg(test)]
 mod golden_tests;
+#[cfg(test)]
+mod test_support;
 
 pub use cache::PreparationCache;
 pub use error::{MachoError, MachoResult};
