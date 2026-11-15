@@ -6,8 +6,9 @@
 //! `anisette-v4.json.lock` and an atomic replace, so existing users keep their
 //! provisioning.
 
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,7 +27,9 @@ const STATE_FILE_NAME: &str = "anisette-v4.json";
 const LOCK_SUFFIX: &str = ".lock";
 const TEMPORARY_PREFIX: &str = ".anisette-v4-";
 const TEMPORARY_SUFFIX: &str = ".tmp";
+#[cfg(unix)]
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
+#[cfg(unix)]
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
 /// Upstream `anisetteState`: Go encodes the byte slices as standard base64
@@ -171,17 +174,16 @@ impl StateStore {
         ensure_private_directory(self.directory())?;
         let mut lock_path = self.path.clone().into_os_string();
         lock_path.push(LOCK_SUFFIX);
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .mode(PRIVATE_FILE_MODE)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(PathBuf::from(lock_path))
-            .map_err(io("open anisette state lock"))?;
-        file.set_permissions(Permissions::from_mode(PRIVATE_FILE_MODE))
-            .map_err(io("secure anisette state lock"))?;
+        let file = private_file(
+            OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false),
+        )
+        .open(PathBuf::from(lock_path))
+        .map_err(io("open anisette state lock"))?;
+        secure_file(&file).map_err(io("secure anisette state lock"))?;
         file.lock().map_err(io("lock anisette state"))?;
         Ok(StateLock { _file: file })
     }
@@ -191,10 +193,7 @@ impl StateStore {
     /// # Errors
     /// Fails on an I/O error, a symlinked or oversized file or invalid JSON.
     pub fn read(&self, _lock: &StateLock) -> StoreAuthResult<Option<AnisetteState>> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&self.path);
+        let file = private_file(OpenOptions::new().read(true)).open(&self.path);
         let file = match file {
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             other => other.map_err(io("open anisette state"))?,
@@ -236,9 +235,11 @@ fn io(action: &'static str) -> impl FnOnce(std::io::Error) -> StoreAuthError {
 }
 
 fn ensure_private_directory(path: &Path) -> StoreAuthResult<()> {
-    DirBuilder::new()
-        .recursive(true)
-        .mode(PRIVATE_DIRECTORY_MODE)
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(PRIVATE_DIRECTORY_MODE);
+    builder
         .create(path)
         .map_err(io("create anisette state directory"))?;
     let metadata =
@@ -246,8 +247,30 @@ fn ensure_private_directory(path: &Path) -> StoreAuthResult<()> {
     if !metadata.file_type().is_dir() {
         return Err(StoreAuthError::State("state path is not a real directory"));
     }
-    std::fs::set_permissions(path, Permissions::from_mode(PRIVATE_DIRECTORY_MODE))
-        .map_err(io("secure anisette state directory"))
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        path,
+        std::fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE),
+    )
+    .map_err(io("secure anisette state directory"))?;
+    Ok(())
+}
+
+/// Applies the owner-only mode and refuses symlinks where the OS supports it.
+fn private_file(options: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    options
+        .mode(PRIVATE_FILE_MODE)
+        .custom_flags(libc::O_NOFOLLOW);
+    options
+}
+
+fn secure_file(file: &File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    file.set_permissions(std::fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
 }
 
 /// A private temporary file removed on drop unless renamed away.
@@ -271,15 +294,10 @@ impl TemporaryFile {
     }
 
     fn write(&self, contents: &[u8]) -> StoreAuthResult<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(PRIVATE_FILE_MODE)
-            .custom_flags(libc::O_NOFOLLOW)
+        let mut file = private_file(OpenOptions::new().write(true).create_new(true))
             .open(&self.path)
             .map_err(io("create anisette state file"))?;
-        file.set_permissions(Permissions::from_mode(PRIVATE_FILE_MODE))
-            .map_err(io("secure anisette state file"))?;
+        secure_file(&file).map_err(io("secure anisette state file"))?;
         file.write_all(contents)
             .map_err(io("write anisette state"))?;
         file.sync_all().map_err(io("sync anisette state"))
@@ -296,6 +314,7 @@ impl Drop for TemporaryFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
     fn fixture_state() -> serde_json::Value {
@@ -306,6 +325,7 @@ mod tests {
         golden["anisette_state_json"].clone()
     }
 
+    #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
@@ -370,10 +390,13 @@ mod tests {
         };
         store.write(&lock, &state).unwrap();
         assert_eq!(store.read(&lock).unwrap(), Some(state));
-        assert_eq!(mode(store.path()), PRIVATE_FILE_MODE);
-        assert_eq!(mode(store.directory()), PRIVATE_DIRECTORY_MODE);
-        let lock_path = root.path().join("ipakeep").join("anisette-v4.json.lock");
-        assert_eq!(mode(&lock_path), PRIVATE_FILE_MODE);
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(store.path()), PRIVATE_FILE_MODE);
+            assert_eq!(mode(store.directory()), PRIVATE_DIRECTORY_MODE);
+            let lock_path = root.path().join("ipakeep").join("anisette-v4.json.lock");
+            assert_eq!(mode(&lock_path), PRIVATE_FILE_MODE);
+        }
         let leftovers = std::fs::read_dir(store.directory())
             .unwrap()
             .filter(|entry| {
@@ -385,17 +408,19 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn tightens_an_existing_loose_directory() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("ipakeep");
         std::fs::create_dir(&directory).unwrap();
-        std::fs::set_permissions(&directory, Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
         let store = StateStore::new(directory.join(STATE_FILE_NAME));
         drop(store.lock().unwrap());
         assert_eq!(mode(&directory), PRIVATE_DIRECTORY_MODE);
     }
 
     #[test]
+    #[cfg(unix)]
     fn refuses_symlinked_state_lock_and_directory() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("ipakeep");
