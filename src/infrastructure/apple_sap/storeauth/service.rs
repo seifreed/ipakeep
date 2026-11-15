@@ -281,8 +281,8 @@ impl SapService {
         self.call_blocking(move |worker| worker.kbsync(&hardware_id, dsid))
     }
 
-    /// Opens (or keeps) the SAP session for the bag's `sign-sap-setup`
-    /// endpoints; later [`Self::sign`] calls use it.
+    /// Opens a fresh SAP session for the bag's `sign-sap-setup` endpoints,
+    /// replacing any open one; later [`Self::sign`] calls use it.
     ///
     /// # Errors
     /// Invalid configuration, asset, guest or setup-handshake failures.

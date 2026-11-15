@@ -350,18 +350,12 @@ impl Worker {
         )?)
     }
 
-    /// Opens a SAP session for `config` unless one is already open for it.
+    /// Opens a fresh SAP session for `config`, replacing any open one, as
+    /// upstream does for every login attempt and DAAP operation.
     ///
     /// # Errors
     /// Fails on asset, guest or setup-handshake failures.
     pub(super) fn connect_sap(&mut self, config: SignerConfig) -> StoreAuthResult<()> {
-        if self
-            .signer
-            .as_ref()
-            .is_some_and(|(open, _)| *open == config)
-        {
-            return Ok(());
-        }
         self.signer = None;
         let bundle = self.bundle()?;
         let transport = ReqwestTransport::new(self.http.clone());
