@@ -347,7 +347,9 @@ pub(super) mod tests {
 
     pub(in super::super) fn resolver(server: &MockServer) -> StorefrontResolver {
         StorefrontResolver::with_urls(
-            reqwest::Client::new(),
+            crate::infrastructure::http::client_builder()
+                .build()
+                .expect("HTTP client"),
             &format!("{}{AVAILABLE_PATH}", server.uri()),
             &format!("{}{GENRE_PATH}", server.uri()),
         )

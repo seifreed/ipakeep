@@ -3,7 +3,7 @@
 mod response;
 
 use super::telemetry::{read_response_bytes, read_response_text, send_with_observability};
-use reqwest::{Client, ClientBuilder};
+use reqwest::Client;
 pub use response::HttpResponse;
 use response::{decode_json_or_plist, ensure_success_status, http_status_error};
 use serde::de::DeserializeOwned;
@@ -64,7 +64,7 @@ impl AppleHttpClient {
         let apple_root = reqwest::Certificate::from_pem(APPLE_ROOT_CA)
             .map_err(|e| crate::domain::error::AppStoreError::NetworkError(e.to_string()))?;
 
-        let client = ClientBuilder::new()
+        let client = super::client_builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
             .add_root_certificate(apple_root)
@@ -338,7 +338,9 @@ mod tests {
 
     #[test]
     fn plist_requests_apply_default_and_custom_headers() {
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let default = build_plist_request(&client, "https://example.test", b"plist", None)
             .build()
             .expect("default request");

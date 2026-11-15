@@ -391,7 +391,11 @@ mod tests {
 
     #[tokio::test]
     async fn app_token_errors_are_reported_without_account_state() {
-        let grandslam = GrandSlamClient::new(reqwest::Client::new());
+        let grandslam = GrandSlamClient::new(
+            crate::infrastructure::http::client_builder()
+                .build()
+                .expect("HTTP client"),
+        );
 
         assert!(
             app_token_for_account(&grandslam, &account(), None)

@@ -23,7 +23,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process
 async-trait = "0.1"
 
 # HTTP
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "cookies", "json", "form"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "cookies", "json", "form"] }
+# Pure-Rust TLS for reqwest on every platform, using the `ring` crypto provider
+# (installed by `infrastructure::http::client_builder`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # Persistent Store session cookie jar (`store-cookies.json`).
 cookie_store = { version = "0.22", default-features = false, features = ["serde_json"] }
 

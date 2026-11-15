@@ -101,7 +101,7 @@ pub fn machine_guid(hardware_id: &[u8]) -> String {
 pub fn store_client<C: reqwest::cookie::CookieStore + 'static>(
     cookies: Arc<C>,
 ) -> Result<reqwest::Client, AppStoreError> {
-    reqwest::Client::builder()
+    crate::infrastructure::http::client_builder()
         .cookie_provider(cookies)
         .redirect(reqwest::redirect::Policy::none())
         .build()

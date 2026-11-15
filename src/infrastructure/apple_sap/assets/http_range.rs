@@ -245,7 +245,7 @@ impl BlockingHttp {
             .enable_all()
             .build()
             .map_err(HttpRangeError::Runtime)?;
-        let client = reqwest::Client::builder()
+        let client = crate::infrastructure::http::client_builder()
             .build()
             .map_err(HttpRangeError::Client)?;
         Ok(Self {

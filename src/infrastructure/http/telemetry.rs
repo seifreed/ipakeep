@@ -216,7 +216,6 @@ mod tests {
         send_with_observability,
     };
     use crate::infrastructure::observability::log_capture::LogCapture;
-    use reqwest::Client;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -266,7 +265,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(503).set_body_string("response-secret"))
             .mount(&server)
             .await;
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let request = client.get(format!("{}/private?token=query-secret", server.uri()));
 
         let response = send_with_observability(&client, request)
@@ -294,7 +295,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let request = client.get(format!(
             "{}/private?token=sensitive-query-value",
             server.uri()
@@ -327,7 +330,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let (first, second) = tokio::join!(
             send_with_observability(&client, client.get(server.uri())),
             send_with_observability(&client, client.get(server.uri()))
@@ -349,7 +354,9 @@ mod tests {
         let address = listener.local_addr().expect("local address");
         drop(listener);
         let url = format!("http://{address}/?signature=private-value");
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
 
         let error = send_with_observability(&client, client.get(url))
             .await
@@ -367,7 +374,9 @@ mod tests {
             .respond_with(ResponseTemplate::new(404))
             .mount(&server)
             .await;
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
 
         send_with_observability(&client, client.get(server.uri()))
             .await
@@ -402,7 +411,9 @@ mod tests {
         });
         let capture = LogCapture::default();
         let _guard = capture.install();
-        let client = Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let response = client
             .get(format!("http://{address}/"))
             .send()
@@ -428,7 +439,7 @@ mod tests {
         });
         let capture = LogCapture::default();
         let _guard = capture.install();
-        let client = Client::builder()
+        let client = crate::infrastructure::http::client_builder()
             .timeout(std::time::Duration::from_millis(10))
             .build()
             .expect("HTTP client");

@@ -91,7 +91,7 @@ pub struct SapService {
 /// Fails when the TLS backend cannot be initialised.
 pub fn apple_auth_client() -> StoreAuthResult<reqwest::Client> {
     let root = reqwest::Certificate::from_pem(APPLE_ROOT_CA).map_err(client_error)?;
-    reqwest::Client::builder()
+    crate::infrastructure::http::client_builder()
         .add_root_certificate(root)
         .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .timeout(HTTP_TIMEOUT)

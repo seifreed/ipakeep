@@ -332,7 +332,9 @@ mod tests {
                 .await;
         }
 
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let url = |route: &str| format!("{}{route}", server.uri());
         assert!(
             request_trusted_device_notification_with_headers(
@@ -393,7 +395,9 @@ mod tests {
                 .mount(&server)
                 .await;
         }
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let url = |route: &str| format!("{}{route}", server.uri());
         assert!(
             request_trusted_device_notification_with_headers(
@@ -455,7 +459,9 @@ mod tests {
 
     #[tokio::test]
     async fn trusted_device_and_sms_endpoints_map_request_errors() {
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let url = "not a valid URL";
 
         assert!(

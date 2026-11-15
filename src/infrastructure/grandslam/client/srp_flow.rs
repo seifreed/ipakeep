@@ -270,7 +270,9 @@ mod tests {
             }
         });
         let server = mock_response("/init", response).await;
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let init = init_with_anisette(
             &client,
             &format!("{}/init", server.uri()),
@@ -303,7 +305,9 @@ mod tests {
 
     #[tokio::test]
     async fn complete_maps_server_status_and_two_factor_responses() {
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let failed = mock_response(
             "/complete",
             json!({"Response":{"Status":{"hsc":200,"ec":-1}}}),

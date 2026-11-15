@@ -936,7 +936,7 @@ mod tests {
             P: FnOnce(String) -> Fut,
             Fut: Future<Output = Result<HashMap<String, String>, AppStoreError>>,
         {
-            let client = reqwest::Client::builder()
+            let client = crate::infrastructure::http::client_builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("client");

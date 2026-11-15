@@ -1216,7 +1216,9 @@ mod tests {
                 server,
                 bag: bag(ent),
                 cache: KbsyncCache::new(directory.path().join("kbsync-v1.json")),
-                client: reqwest::Client::new(),
+                client: crate::infrastructure::http::client_builder()
+                    .build()
+                    .expect("HTTP client"),
                 generated: Cell::new(0),
                 _directory: directory,
             }

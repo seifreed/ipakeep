@@ -291,7 +291,9 @@ mod tests {
         server: &MockServer,
         owned: Result<(), AppStoreError>,
     ) -> (Result<(), AppStoreError>, bool) {
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let url = format!("{}{PURCHASE_PATH}", server.uri());
         let context = PurchaseContext {
             client: &client,

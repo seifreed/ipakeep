@@ -22,8 +22,10 @@ allow = [
     # unicorn-engine: the ARM64 emulator that runs Apple SAP/ADI code. Linking it
     # makes distributed ipakeep binaries GPL-2.0 (accepted by the maintainer).
     "GPL-2.0",
-    # libloading (via unicorn-engine build tooling).
+    # libloading (via unicorn-engine build tooling); ring.
     "ISC",
+    # webpki-root-certs (Mozilla root data, via rustls-platform-verifier).
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

@@ -231,7 +231,9 @@ mod tests {
             ("X-Apple-I-MD-LU".to_owned(), "lu".to_owned()),
             ("User-Agent".to_owned(), "other".to_owned()),
         ];
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let request = StoreProvisioningRequest {
             client: &client,
             challenge: "",

@@ -194,7 +194,9 @@ async fn post_plist_returns_status_error_before_decoding_body() {
         .mount(&server)
         .await;
 
-    let client = reqwest::Client::new();
+    let client = crate::infrastructure::http::client_builder()
+        .build()
+        .expect("HTTP client");
     let result = http::post_plist(
         &client,
         &format!("{}/grandslam", server.uri()),
@@ -233,7 +235,9 @@ async fn success_status_reports_response_body_read_failures() {
             .unwrap();
         stream.flush().unwrap();
     });
-    let response = reqwest::Client::new()
+    let response = crate::infrastructure::http::client_builder()
+        .build()
+        .expect("HTTP client")
         .get(format!("http://{address}/"))
         .send()
         .await

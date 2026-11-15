@@ -479,7 +479,9 @@ mod tests {
         let golden = golden();
         let server = recorded_gsa().await;
         let endpoints = local_endpoints(&server);
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let identifier = hex_at(&golden, "/identifier_hex");
         let spim = start_machine(&client, &endpoints, &identifier)
             .await
@@ -499,9 +501,15 @@ mod tests {
             .respond_with(ResponseTemplate::new(503))
             .mount(&server)
             .await;
-        let error = start_machine(&reqwest::Client::new(), &local_endpoints(&server), &[0; 16])
-            .await
-            .unwrap_err();
+        let error = start_machine(
+            &crate::infrastructure::http::client_builder()
+                .build()
+                .expect("HTTP client"),
+            &local_endpoints(&server),
+            &[0; 16],
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("HTTP 503"), "{error}");
     }
 }

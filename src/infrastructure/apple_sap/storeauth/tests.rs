@@ -102,7 +102,9 @@ async fn async_and_blocking_calls_share_one_worker() {
 async fn store_provisioning_requires_a_valid_challenge() {
     let directory = tempfile::tempdir().unwrap();
     let service = offline_service(&directory);
-    let client = reqwest::Client::new();
+    let client = crate::infrastructure::http::client_builder()
+        .build()
+        .expect("HTTP client");
     let request = StoreProvisioningRequest {
         client: &client,
         challenge: "%%%",

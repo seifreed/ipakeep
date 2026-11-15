@@ -631,7 +631,9 @@ mod tests {
         signed: &Arc<Mutex<Vec<Vec<u8>>>>,
         limit: u32,
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
-        let client = reqwest::Client::new();
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
         let recorder = Arc::clone(signed);
         let mut sign = move |body: &[u8]| {
             recorder.lock().expect("lock").push(body.to_vec());

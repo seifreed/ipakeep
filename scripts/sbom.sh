@@ -67,7 +67,7 @@ jq \
           else . end
       elif type == "array" then map(scrub_paths)
       elif type == "string" then
-        gsub("path\\+file://[^#]+#(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)(?<target> bin-target-[0-9]+)?"; "pkg:cargo/ipakeep@\(.version)\(.target // "")")
+        gsub("path\\+file://[^#]+#(ipakeep@)?(?<version>[0-9]+\\.[0-9]+\\.[0-9]+)(?<target> bin-target-[0-9]+)?"; "pkg:cargo/ipakeep@\(.version)\(.target // "")")
       else . end;
 
     scrub_paths
@@ -101,8 +101,7 @@ jq \
         | normalize_licenses
       )
     | .components |= map(
-        if .name == "openssl-macros" then add_vcs("https://github.com/sfackler/rust-openssl") else . end
-        | add_supplier
+        add_supplier
         | license_evidence
         | normalize_licenses
       )
