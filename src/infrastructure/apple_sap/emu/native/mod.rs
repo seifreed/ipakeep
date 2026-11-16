@@ -33,6 +33,7 @@
 mod branch;
 mod dpimm;
 mod dpreg;
+mod engine;
 mod ldst;
 mod simd;
 
