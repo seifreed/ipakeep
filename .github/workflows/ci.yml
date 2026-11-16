@@ -80,6 +80,29 @@ jobs:
       - name: Tests
         run: cargo test --all --locked
 
+  jit:
+    name: JIT tier (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          components: clippy
+
+      # Optional Cranelift JIT tier over the native interpreter (pure Rust).
+      - name: Clippy (jit feature)
+        run: >-
+          cargo clippy --all-targets --features jit --locked -- -D warnings
+
+      # Includes the JIT-vs-interpreter differential tests.
+      - name: Tests (jit feature)
+        run: cargo test --lib --features jit --locked
+
   unicorn-oracle:
     name: Unicorn backend + differential oracle
     runs-on: ubuntu-latest
