@@ -48,6 +48,14 @@ struct CodeHookEntry<'a> {
     hook: CodeHook<'a>,
 }
 
+impl CodeHookEntry<'_> {
+    /// Whether this hook fires at `pc`; `begin > end` means "all addresses".
+    #[inline]
+    fn covers(&self, pc: u64) -> bool {
+        self.begin > self.end || (pc >= self.begin && pc <= self.end)
+    }
+}
+
 /// A native ARM64 engine exposing the same surface the machine layer calls on
 /// the Unicorn `Engine`.
 pub struct NativeEngine<'a> {
@@ -188,18 +196,15 @@ impl<'a> NativeEngine<'a> {
     /// Fires every code hook covering `pc`. Hooks are moved out for the call so
     /// each receives `&mut self`; hooks added during the call are preserved.
     fn fire_code_hooks(&mut self, pc: u64) -> Result<(), EmuError> {
-        if self.code_hooks.is_empty() {
+        // Fast path: almost every instruction is outside every hook range, so
+        // skip moving the hook list out and back in when nothing covers `pc`.
+        if !self.code_hooks.iter().any(|entry| entry.covers(pc)) {
             return Ok(());
         }
         let mut hooks = std::mem::take(&mut self.code_hooks);
         let mut outcome = Ok(());
         for entry in &mut hooks {
-            let covers = if entry.begin > entry.end {
-                true // begin > end means "all addresses"
-            } else {
-                pc >= entry.begin && pc <= entry.end
-            };
-            if covers {
+            if entry.covers(pc) {
                 if let Err(error) = (entry.hook)(self, pc, INSN_SIZE as u32) {
                     self.fail(error.clone());
                     outcome = Err(error);
