@@ -13,6 +13,8 @@ mod engine;
 mod unsupported;
 
 #[cfg(feature = "unicorn")]
+mod diff_bugs;
+#[cfg(feature = "unicorn")]
 mod diff_int;
 #[cfg(feature = "unicorn")]
 mod diff_ldst;
