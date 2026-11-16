@@ -353,6 +353,40 @@ fn copy_dup(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     let esize = 8u32 << size;
     let lanes = if q == 1 { 128 / esize } else { 64 / esize };
 
+    // UMOV / SMOV: move one vector element into a general-purpose register.
+    if imm4 == 0b0111 || imm4 == 0b0101 {
+        let index = imm5 >> (size + 1);
+        let elem = get_lane(cpu.v(rn), index, esize);
+        let value = if imm4 == 0b0101 {
+            // SMOV: sign-extend the element.
+            let shift = 64 - esize;
+            (((elem << shift) as i64) >> shift) as u64
+        } else {
+            elem // UMOV: zero-extend.
+        };
+        if q == 1 {
+            cpu.set_x(rd, value);
+        } else {
+            cpu.set_w(rd, value as u32);
+        }
+        return Ok(Step::Next);
+    }
+
+    // INS (general): insert a general-purpose register into one vector lane.
+    if imm4 == 0b0011 {
+        let index = imm5 >> (size + 1);
+        let elem = match size {
+            0 => u64::from(cpu.w(rn) & 0xff),
+            1 => u64::from(cpu.w(rn) & 0xffff),
+            2 => u64::from(cpu.w(rn)),
+            _ => cpu.x(rn),
+        };
+        let mut vreg = cpu.v(rd);
+        set_lane(&mut vreg, index, esize, elem);
+        cpu.set_v(rd, vreg);
+        return Ok(Step::Next);
+    }
+
     let element = match imm4 {
         0b0000 => get_lane(cpu.v(rn), imm5 >> (size + 1), esize), // DUP element
         0b0001 => match size {

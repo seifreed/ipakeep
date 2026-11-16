@@ -293,7 +293,24 @@ fn exclusive(cpu: &mut NativeCpu, word: u32, size: u32) -> Result<Step, NativeEr
             }
             Ok(Step::Next)
         }
-        // Exclusive pair (STXP/LDXP) and compare-and-swap (CAS*) are not modelled.
+        // Exclusive pair: LDXP/STXP/LDAXP/STLXP (single-threaded model).
+        _ if o1 == 1 => {
+            let rt2 = (word >> 10) & 0x1f;
+            if l == 1 {
+                let lo = load_bytes(cpu, addr, bytes)?;
+                let hi = load_bytes(cpu, addr + bytes as u64, bytes)?;
+                cpu.set_x(rt, lo);
+                cpu.set_x(rt2, hi);
+            } else {
+                let lo = cpu.x(rt);
+                let hi = cpu.x(rt2);
+                store_bytes(cpu, addr, bytes, lo)?;
+                store_bytes(cpu, addr + bytes as u64, bytes, hi)?;
+                cpu.set_w(rs, 0); // monitor always succeeds
+            }
+            Ok(Step::Next)
+        }
+        // Compare-and-swap (CAS*) is not modelled.
         _ => Err(unsupported(cpu, word, "ldst/exclusive")),
     }
 }
