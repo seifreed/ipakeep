@@ -35,6 +35,31 @@ fn sign_extend(value: u64, bits: u32) -> u64 {
     (((value << shift) as i64) >> shift) as u64
 }
 
+/// Operand width of a 32/64-bit operation (keeps [`Op`] at 16 bytes where a
+/// `u64` value mask would not fit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Width {
+    /// 32-bit (`sf == 0`).
+    W,
+    /// 64-bit (`sf == 1`).
+    X,
+}
+
+impl Width {
+    fn of(sf: u32) -> Self {
+        if sf == 1 { Self::X } else { Self::W }
+    }
+
+    /// The width's value mask.
+    #[inline]
+    fn mask(self) -> u64 {
+        match self {
+            Self::W => 0xffff_ffff,
+            Self::X => u64::MAX,
+        }
+    }
+}
+
 /// How a loaded value is extended into `Rt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Ext {
@@ -58,19 +83,29 @@ pub(super) enum Op {
     Nop,
     /// `Xd(ZR) = value` (MOVZ/MOVN, ADR/ADRP).
     Mov { rd: u8, value: u64 },
-    /// `MOVK`: `Xd = ((Xs & keep) | bits) & mask` (`rs`/`rd` both name Rd,
-    /// as a source and as a destination slot).
+    /// `MOVK`: `Xd = ((Xs & !(0xffff << shift)) | bits) & mask` (`rs`/`rd`
+    /// both name Rd, as a source and as a destination slot).
     MovK {
         rd: u8,
         rs: u8,
-        keep: u64,
+        shift: u8,
         bits: u64,
-        mask: u64,
+        width: Width,
     },
     /// `ADD (imm)`: `Xd(SP) = (Xn(SP) + imm) & mask`.
-    AddImm { rd: u8, rn: u8, imm: u64, mask: u64 },
+    AddImm {
+        rd: u8,
+        rn: u8,
+        imm: u64,
+        width: Width,
+    },
     /// `SUB (imm)`: `Xd(SP) = (Xn(SP) - imm) & mask`.
-    SubImm { rd: u8, rn: u8, imm: u64, mask: u64 },
+    SubImm {
+        rd: u8,
+        rn: u8,
+        imm: u64,
+        width: Width,
+    },
     /// `ADDS/SUBS (imm)`; `Xd` is ZR-form.
     AddSubImmS {
         rd: u8,
@@ -80,17 +115,32 @@ pub(super) enum Op {
         sf: u8,
     },
     /// `AND (imm)`: `Xd(SP) = (Xn(ZR) & mask) & imm`.
-    AndImm { rd: u8, rn: u8, imm: u64, mask: u64 },
+    AndImm {
+        rd: u8,
+        rn: u8,
+        imm: u64,
+        width: Width,
+    },
     /// `ORR (imm)`.
-    OrrImm { rd: u8, rn: u8, imm: u64, mask: u64 },
+    OrrImm {
+        rd: u8,
+        rn: u8,
+        imm: u64,
+        width: Width,
+    },
     /// `EOR (imm)`.
-    EorImm { rd: u8, rn: u8, imm: u64, mask: u64 },
+    EorImm {
+        rd: u8,
+        rn: u8,
+        imm: u64,
+        width: Width,
+    },
     /// 64-bit `UBFM` (LSL/LSR/UBFX/UXT*): `Xd = ror(Xn, r) & mask`.
     Ubfm64 { rd: u8, rn: u8, r: u8, mask: u64 },
     /// 32-bit `UBFM`: `Xd = ror32(Wn, r) & mask`.
     Ubfm32 { rd: u8, rn: u8, r: u8, mask: u64 },
     /// `MOV (register)` = `ORR Xd, XZR, Xm`: `Xd = Xm & mask`.
-    MovReg { rd: u8, rm: u8, mask: u64 },
+    MovReg { rd: u8, rm: u8, width: Width },
     /// `AND/BIC (shifted register)` (no flags).
     AndReg {
         rd: u8,
@@ -98,7 +148,7 @@ pub(super) enum Op {
         rm: u8,
         shift: u8,
         amount: u8,
-        invert: u64,
+        invert: bool,
         sf: u8,
     },
     /// `ORR/ORN (shifted register)`.
@@ -108,7 +158,7 @@ pub(super) enum Op {
         rm: u8,
         shift: u8,
         amount: u8,
-        invert: u64,
+        invert: bool,
         sf: u8,
     },
     /// `EOR/EON (shifted register)`.
@@ -118,7 +168,7 @@ pub(super) enum Op {
         rm: u8,
         shift: u8,
         amount: u8,
-        invert: u64,
+        invert: bool,
         sf: u8,
     },
     /// `ADD (shifted register)`, no flags.
@@ -167,7 +217,7 @@ pub(super) enum Op {
         rm: u8,
         cond: u8,
         kind: u8,
-        mask: u64,
+        width: Width,
     },
     /// `MADD`: `Xd = (Xa + Xn * Xm) & mask`.
     Madd {
@@ -175,7 +225,7 @@ pub(super) enum Op {
         rn: u8,
         rm: u8,
         ra: u8,
-        mask: u64,
+        width: Width,
     },
     /// `UMADDL`: `Xd = (Xa + Wn * Wm) & mask`.
     Umaddl {
@@ -183,7 +233,7 @@ pub(super) enum Op {
         rn: u8,
         rm: u8,
         ra: u8,
-        mask: u64,
+        width: Width,
     },
     /// Integer load, `[Xn(SP) + offset]`.
     Load {
@@ -221,14 +271,14 @@ pub(super) enum Op {
     },
     /// `B target`.
     B { target: u64 },
-    /// `BL target` (`link` = return address).
-    Bl { target: u64, link: u64 },
+    /// `BL target`.
+    Bl { target: u64 },
     /// `B.cond target`.
     BCond { cond: u8, target: u64 },
     /// `CBZ/CBNZ`: branch when `(Xt & mask == 0) != nonzero`.
     Cbz {
         rt: u8,
-        mask: u64,
+        width: Width,
         nonzero: bool,
         target: u64,
     },
@@ -241,8 +291,8 @@ pub(super) enum Op {
     },
     /// `BR/RET Xn`.
     Br { rn: u8 },
-    /// `BLR Xn` (`link` = return address).
-    Blr { rn: u8, link: u64 },
+    /// `BLR Xn`.
+    Blr { rn: u8 },
 }
 
 /// Decodes `word` (located at `pc`) into its [`Op`].
@@ -312,13 +362,13 @@ fn dp_imm(word: u32, pc: u64) -> Option<Op> {
                     rd: rd_sp,
                     rn,
                     imm,
-                    mask,
+                    width: Width::of(sf),
                 },
                 (0, true) => Op::SubImm {
                     rd: rd_sp,
                     rn,
                     imm,
-                    mask,
+                    width: Width::of(sf),
                 },
                 _ => Op::AddSubImmS {
                     rd,
@@ -341,9 +391,24 @@ fn dp_imm(word: u32, pc: u64) -> Option<Op> {
             let imm = imm & mask;
             let rd = sp(word, 0);
             match (word >> 29) & 0b11 {
-                0b00 => Some(Op::AndImm { rd, rn, imm, mask }),
-                0b01 => Some(Op::OrrImm { rd, rn, imm, mask }),
-                0b10 => Some(Op::EorImm { rd, rn, imm, mask }),
+                0b00 => Some(Op::AndImm {
+                    rd,
+                    rn,
+                    imm,
+                    width: Width::of(sf),
+                }),
+                0b01 => Some(Op::OrrImm {
+                    rd,
+                    rn,
+                    imm,
+                    width: Width::of(sf),
+                }),
+                0b10 => Some(Op::EorImm {
+                    rd,
+                    rn,
+                    imm,
+                    width: Width::of(sf),
+                }),
                 _ => None, // ANDS
             }
         }
@@ -363,16 +428,13 @@ fn dp_imm(word: u32, pc: u64) -> Option<Op> {
                     rd,
                     value: !bits & mask,
                 }),
-                0b11 => {
-                    let (rs, keep) = (reg(word, 0), !(0xffffu64 << shift));
-                    Some(Op::MovK {
-                        rd,
-                        rs,
-                        keep,
-                        bits,
-                        mask,
-                    })
-                }
+                0b11 => Some(Op::MovK {
+                    rd,
+                    rs: reg(word, 0),
+                    shift: shift as u8,
+                    bits,
+                    width: Width::of(sf),
+                }),
                 _ => None,
             }
         }
@@ -402,7 +464,6 @@ fn dp_imm(word: u32, pc: u64) -> Option<Op> {
 
 fn dp_reg(word: u32) -> Option<Op> {
     let sf = (word >> 31) & 1;
-    let mask = width_mask(sf);
     let rd = dst(word, 0);
     let rn = reg(word, 5);
     let rm = reg(word, 16);
@@ -415,11 +476,13 @@ fn dp_reg(word: u32) -> Option<Op> {
     if (word >> 28) & 1 == 0 {
         if op2 & 0b1000 == 0 {
             // Logical (shifted register); ANDS/BICS fall back.
-            let invert = if (word >> 21) & 1 == 1 { mask } else { 0 };
+            let invert = (word >> 21) & 1 == 1;
             return match (word >> 29) & 0b11 {
-                0b01 if rn == 31 && shift == 0 && amount == 0 && invert == 0 => {
-                    Some(Op::MovReg { rd, rm, mask })
-                }
+                0b01 if rn == 31 && shift == 0 && amount == 0 && !invert => Some(Op::MovReg {
+                    rd,
+                    rm,
+                    width: Width::of(sf),
+                }),
                 0b00 => Some(Op::AndReg {
                     rd,
                     rn,
@@ -506,7 +569,7 @@ fn dp_reg(word: u32) -> Option<Op> {
                 rm,
                 cond,
                 kind,
-                mask,
+                width: Width::of(sf),
             })
         }
         o if o & 0b1000 != 0 => {
@@ -517,14 +580,14 @@ fn dp_reg(word: u32) -> Option<Op> {
                     rn,
                     rm,
                     ra,
-                    mask,
+                    width: Width::of(sf),
                 }),
                 (0b101, 0) => Some(Op::Umaddl {
                     rd,
                     rn,
                     rm,
                     ra,
-                    mask,
+                    width: Width::of(sf),
                 }),
                 _ => None,
             }
@@ -619,7 +682,6 @@ fn load_store(word: u32) -> Option<Op> {
 
 fn branch(word: u32, pc: u64) -> Option<Op> {
     let rel = |imm: u32, bits: u32| pc.wrapping_add(sign_extend(u64::from(imm) << 2, bits + 2));
-    let link = pc.wrapping_add(4);
     match (word >> 26) & 0x3f {
         0b000101 => {
             return Some(Op::B {
@@ -629,7 +691,6 @@ fn branch(word: u32, pc: u64) -> Option<Op> {
         0b100101 => {
             return Some(Op::Bl {
                 target: rel(word & 0x03ff_ffff, 26),
-                link,
             });
         }
         _ => {}
@@ -639,7 +700,7 @@ fn branch(word: u32, pc: u64) -> Option<Op> {
         0b011010 => {
             return Some(Op::Cbz {
                 rt,
-                mask: width_mask((word >> 31) & 1),
+                width: Width::of((word >> 31) & 1),
                 nonzero: (word >> 24) & 1 == 1,
                 target: rel((word >> 5) & 0x7_ffff, 19),
             });
@@ -665,7 +726,7 @@ fn branch(word: u32, pc: u64) -> Option<Op> {
         let rn = reg(word, 5);
         return match (word >> 21) & 0xf {
             0b0000 | 0b0010 => Some(Op::Br { rn }),
-            0b0001 => Some(Op::Blr { rn, link }),
+            0b0001 => Some(Op::Blr { rn }),
             _ => None,
         };
     }
@@ -714,13 +775,18 @@ fn shifted_operand(cpu: &NativeCpu, rm: u8, shift: u8, amount: u8, sf: u8) -> u6
 
 /// The second operand of a logical shifted-register op.
 #[inline]
-fn logical_operand(cpu: &NativeCpu, rm: u8, shift: u8, amount: u8, invert: u64, sf: u8) -> u64 {
-    shift_reg(
+fn logical_operand(cpu: &NativeCpu, rm: u8, shift: u8, amount: u8, invert: bool, sf: u8) -> u64 {
+    let operand = shift_reg(
         cpu.slot(rm),
         u32::from(shift),
         u32::from(amount),
         u32::from(sf),
-    ) ^ invert
+    );
+    if invert {
+        operand ^ width_mask(u32::from(sf))
+    } else {
+        operand
+    }
 }
 
 #[inline]
@@ -766,18 +832,19 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
         Op::MovK {
             rd,
             rs,
-            keep,
+            shift,
             bits,
-            mask,
+            width,
         } => {
-            cpu.set_slot(rd, ((x(cpu, rs) & keep) | bits) & mask);
+            let keep = !(0xffffu64 << shift);
+            cpu.set_slot(rd, ((x(cpu, rs) & keep) | bits) & width.mask());
         }
-        Op::AddImm { rd, rn, imm, mask } => {
-            let value = cpu.slot(rn).wrapping_add(imm) & mask;
+        Op::AddImm { rd, rn, imm, width } => {
+            let value = cpu.slot(rn).wrapping_add(imm) & width.mask();
             cpu.set_slot(rd, value);
         }
-        Op::SubImm { rd, rn, imm, mask } => {
-            let value = cpu.slot(rn).wrapping_sub(imm) & mask;
+        Op::SubImm { rd, rn, imm, width } => {
+            let value = cpu.slot(rn).wrapping_sub(imm) & width.mask();
             cpu.set_slot(rd, value);
         }
         Op::AddSubImmS {
@@ -793,9 +860,9 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             cpu.set_nzcv(nzcv);
             cpu.set_slot(rd, result);
         }
-        Op::AndImm { rd, rn, imm, mask } => cpu.set_slot(rd, x(cpu, rn) & mask & imm),
-        Op::OrrImm { rd, rn, imm, mask } => cpu.set_slot(rd, (x(cpu, rn) & mask) | imm),
-        Op::EorImm { rd, rn, imm, mask } => cpu.set_slot(rd, (x(cpu, rn) & mask) ^ imm),
+        Op::AndImm { rd, rn, imm, width } => cpu.set_slot(rd, x(cpu, rn) & width.mask() & imm),
+        Op::OrrImm { rd, rn, imm, width } => cpu.set_slot(rd, (x(cpu, rn) & width.mask()) | imm),
+        Op::EorImm { rd, rn, imm, width } => cpu.set_slot(rd, (x(cpu, rn) & width.mask()) ^ imm),
         Op::Ubfm64 { rd, rn, r, mask } => {
             cpu.set_slot(rd, x(cpu, rn).rotate_right(u32::from(r)) & mask);
         }
@@ -803,7 +870,7 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             let rotated = (x(cpu, rn) as u32).rotate_right(u32::from(r));
             cpu.set_slot(rd, u64::from(rotated) & mask);
         }
-        Op::MovReg { rd, rm, mask } => cpu.set_slot(rd, x(cpu, rm) & mask),
+        Op::MovReg { rd, rm, width } => cpu.set_slot(rd, x(cpu, rm) & width.mask()),
         Op::AndReg {
             rd,
             rn,
@@ -907,8 +974,9 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             rm,
             cond,
             kind,
-            mask,
+            width,
         } => {
+            let mask = width.mask();
             let result = if cond_holds(cpu.nzcv(), cond) {
                 x(cpu, rn)
             } else {
@@ -927,8 +995,9 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             rn,
             rm,
             ra,
-            mask,
+            width,
         } => {
+            let mask = width.mask();
             let product = (x(cpu, rn) & mask).wrapping_mul(x(cpu, rm) & mask);
             cpu.set_slot(rd, (x(cpu, ra) & mask).wrapping_add(product) & mask);
         }
@@ -937,8 +1006,9 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             rn,
             rm,
             ra,
-            mask,
+            width,
         } => {
+            let mask = width.mask();
             let product = u64::from(x(cpu, rn) as u32) * u64::from(x(cpu, rm) as u32);
             cpu.set_slot(rd, x(cpu, ra).wrapping_add(product) & mask);
         }
@@ -991,8 +1061,8 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             return Ok(after_write(cpu, pc));
         }
         Op::B { target } => return Ok(Step::Branch(target)),
-        Op::Bl { target, link } => {
-            cpu.set_slot(30, link);
+        Op::Bl { target } => {
+            cpu.set_slot(30, pc.wrapping_add(4));
             return Ok(Step::Branch(target));
         }
         Op::BCond { cond, target } => {
@@ -1002,11 +1072,11 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
         }
         Op::Cbz {
             rt,
-            mask,
+            width,
             nonzero,
             target,
         } => {
-            if (x(cpu, rt) & mask == 0) != nonzero {
+            if (x(cpu, rt) & width.mask() == 0) != nonzero {
                 return Ok(Step::Branch(target));
             }
         }
@@ -1021,9 +1091,9 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             }
         }
         Op::Br { rn } => return Ok(Step::Branch(x(cpu, rn))),
-        Op::Blr { rn, link } => {
+        Op::Blr { rn } => {
             let target = x(cpu, rn);
-            cpu.set_slot(30, link);
+            cpu.set_slot(30, pc.wrapping_add(4));
             return Ok(Step::Branch(target));
         }
     }
