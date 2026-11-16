@@ -246,3 +246,514 @@ fn fast_flags_match_add_with_carry() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Run-loop contracts through `NativeEngine` (block path) against the
+// per-instruction reference (`NativeCpu::run`).
+// ---------------------------------------------------------------------------
+
+mod engine {
+    use std::cell::{Cell, RefCell};
+    use std::hash::Hasher;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::super::super::error::EmuError;
+    use super::super::super::register::Register;
+    use super::super::block::{MAX_BLOCK_OPS, PcHasher};
+    use super::super::engine::NativeEngine;
+    use super::super::{NativeCpu, PAGE_SIZE, Step};
+    use super::{CODE, DATA, DATA_SIZE, Rng};
+
+    const END: u64 = 0xdead_0000;
+    const ADD_X0_1: u32 = 0x9100_0400;
+    const ADD_X0_5: u32 = 0x9100_1400;
+    const STR_W1_X2: u32 = 0xb900_0041; // str w1, [x2]
+    const STP_X3_X4_X2: u32 = 0xa900_1043; // stp x3, x4, [x2] (fallback op)
+    const LDR_X0_X18: u32 = 0xf940_0240; // ldr x0, [x18]
+    const BRK_0: u32 = 0xd420_0000;
+    const NOP: u32 = 0xd503_201f;
+    const B_BACK_4: u32 = 0x17ff_ffff; // b #-4
+    const SVC_0: u32 = 0xd400_0001;
+
+    fn engine_with(code: &[u32]) -> NativeEngine<'static> {
+        let mut e = NativeEngine::new().unwrap();
+        e.mem_map(CODE, 2 * PAGE_SIZE).unwrap();
+        e.mem_map(DATA, DATA_SIZE).unwrap();
+        write_code(&mut e, CODE, code);
+        e
+    }
+
+    fn write_code(e: &mut NativeEngine<'_>, at: u64, code: &[u32]) {
+        let bytes: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
+        e.mem_write(at, &bytes).unwrap();
+    }
+
+    fn x(e: &NativeEngine<'_>, n: u8) -> u64 {
+        e.reg_read(Register::X(n)).unwrap()
+    }
+
+    fn pc(e: &NativeEngine<'_>) -> u64 {
+        e.reg_read(Register::Pc).unwrap()
+    }
+
+    #[test]
+    fn instruction_limit_stops_exactly_mid_block() {
+        let mut e = engine_with(&[ADD_X0_1; 10]);
+        e.start_bounded(CODE, END, Duration::ZERO, 3).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (3, CODE + 12));
+        // Resuming mid-block runs a block that starts there.
+        e.start_bounded(CODE + 12, END, Duration::ZERO, 4).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (7, CODE + 28));
+    }
+
+    #[test]
+    fn until_inside_a_cached_block_stops_before_it() {
+        let mut e = engine_with(&[ADD_X0_1, ADD_X0_1, ADD_X0_1, ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (4, CODE + 16), "ran to the brk");
+        e.reg_write(Register::X(0), 0).unwrap();
+        e.start(CODE, CODE + 8).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (2, CODE + 8));
+        // An `until` that is not on an instruction boundary never matches.
+        e.reg_write(Register::X(0), 0).unwrap();
+        e.start(CODE, CODE + 6).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (4, CODE + 16));
+    }
+
+    #[test]
+    fn a_hook_added_after_caching_splits_the_block() {
+        let mut e = engine_with(&[ADD_X0_1, ADD_X0_1, ADD_X0_1, ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        let seen = Rc::new(Cell::new(u64::MAX));
+        let probe = Rc::clone(&seen);
+        let id = e
+            .add_code_hook(CODE + 8, CODE + 8, move |engine, address, size| {
+                assert_eq!((address, size), (CODE + 8, 4));
+                probe.set(engine.reg_read(Register::X(0))?);
+                Ok(())
+            })
+            .unwrap();
+        e.reg_write(Register::X(0), 0).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(seen.get(), 2, "fired before the third add");
+        assert_eq!(x(&e, 0), 4);
+        e.remove_hook(id).unwrap();
+        seen.set(u64::MAX);
+        e.start(CODE, END).unwrap();
+        assert_eq!(seen.get(), u64::MAX, "removed hooks no longer fire");
+    }
+
+    #[test]
+    fn a_hook_added_from_inside_a_hook_fires_in_the_same_run() {
+        let mut e = engine_with(&[ADD_X0_1, ADD_X0_1, ADD_X0_1, ADD_X0_1, BRK_0]);
+        let hits = Rc::new(RefCell::new(Vec::new()));
+        let outer = Rc::clone(&hits);
+        e.add_code_hook(CODE, CODE, move |engine, address, _| {
+            outer.borrow_mut().push(address);
+            let inner = Rc::clone(&outer);
+            engine.add_code_hook(CODE + 12, CODE + 12, move |engine, address, _| {
+                inner.borrow_mut().push(address);
+                // Redirect past the rest: the hooked add never runs.
+                engine.reg_write(Register::Pc, CODE + 16)
+            })?;
+            Ok(())
+        })
+        .unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(*hits.borrow(), [CODE, CODE + 12]);
+        assert_eq!((x(&e, 0), pc(&e)), (3, CODE + 16));
+    }
+
+    #[test]
+    fn a_hook_can_stop_mid_block() {
+        let mut e = engine_with(&[ADD_X0_1, ADD_X0_1, ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        e.add_code_hook(CODE + 4, CODE + 4, |engine, _, _| engine.stop())
+            .unwrap();
+        e.reg_write(Register::X(0), 0).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (1, CODE + 4));
+    }
+
+    #[test]
+    fn a_guest_store_into_the_running_block_takes_effect() {
+        // str w1, [x2] rewrites the instruction two slots ahead in its own block.
+        let code = [STR_W1_X2, ADD_X0_1, ADD_X0_1, BRK_0];
+        let mut e = engine_with(&code);
+        e.reg_write(Register::X(2), DATA).unwrap();
+        e.start(CODE, END).unwrap(); // caches the block
+        assert_eq!(x(&e, 0), 2);
+        for _ in 0..2 {
+            write_code(&mut e, CODE, &code);
+            e.reg_write(Register::X(0), 0).unwrap();
+            e.reg_write(Register::X(1), u64::from(ADD_X0_5)).unwrap();
+            e.reg_write(Register::X(2), CODE + 8).unwrap();
+            e.start(CODE, END).unwrap();
+            assert_eq!((x(&e, 0), pc(&e)), (6, CODE + 12));
+        }
+    }
+
+    #[test]
+    fn a_fallback_store_into_cached_code_takes_effect() {
+        // stp x3, x4, [x2] (no fast path) overwrites the next two slots.
+        let code = [STP_X3_X4_X2, ADD_X0_1, ADD_X0_1, ADD_X0_1, BRK_0];
+        let mut e = engine_with(&code);
+        e.reg_write(Register::X(2), DATA).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 3);
+        let pair = u64::from(ADD_X0_5) | (u64::from(ADD_X0_5) << 32);
+        e.reg_write(Register::X(0), 0).unwrap();
+        e.reg_write(Register::X(2), CODE + 4).unwrap();
+        e.reg_write(Register::X(3), pair).unwrap();
+        e.reg_write(Register::X(4), u64::from(NOP) | (u64::from(BRK_0) << 32))
+            .unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (10, CODE + 16));
+    }
+
+    #[test]
+    fn host_writes_and_unmaps_invalidate_cached_blocks() {
+        let mut e = engine_with(&[ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 1);
+        e.write_u32(CODE, ADD_X0_5).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 6, "host write seen");
+        e.write_return_stub(CODE).unwrap();
+        e.reg_write(Register::X(30), CODE + 4).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(pc(&e), CODE + 4, "ret stub seen");
+        e.mem_unmap(CODE, 2 * PAGE_SIZE).unwrap();
+        let error = e.start(CODE, END).unwrap_err();
+        assert!(matches!(
+            error,
+            EmuError::Unmapped {
+                address: CODE,
+                pc: Some(CODE),
+                ..
+            }
+        ));
+        e.mem_map(CODE, PAGE_SIZE).unwrap();
+        write_code(&mut e, CODE, &[ADD_X0_5, BRK_0]);
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 11, "remapped code seen");
+        // A host write that faults part-way still reports the code it hit.
+        let error = e.mem_write(CODE + PAGE_SIZE - 4, &[0; 8]).unwrap_err();
+        assert!(matches!(error, EmuError::Unmapped { pc: None, .. }));
+    }
+
+    #[test]
+    fn invalidated_link_targets_are_rebuilt() {
+        // Block A (page 1) branches to block B (page 2); rewriting B's page
+        // leaves A's link pointing at a dropped block.
+        let mut e = engine_with(&[0x1400_0400]); // b #0x1000
+        write_code(&mut e, CODE + PAGE_SIZE, &[ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 1);
+        write_code(&mut e, CODE + PAGE_SIZE, &[ADD_X0_5, BRK_0]);
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 6);
+        // Another page's block is rebuilt into the freed slot and is linked.
+        write_code(&mut e, CODE + PAGE_SIZE, &[ADD_X0_1, BRK_0]);
+        e.start(CODE, END).unwrap();
+        e.start(CODE, END).unwrap();
+        assert_eq!(x(&e, 0), 8);
+    }
+
+    #[test]
+    fn a_fault_mid_block_reports_its_pc_after_the_earlier_instructions() {
+        let mut e = engine_with(&[ADD_X0_1, ADD_X0_1, LDR_X0_X18, ADD_X0_1]);
+        e.reg_write(Register::X(18), 0xdead_0000_0000).unwrap();
+        let error = e.start(CODE, END).unwrap_err();
+        assert!(matches!(
+            error,
+            EmuError::Unmapped { address: 0xdead_0000_0000, pc: Some(p), .. } if p == CODE + 8
+        ));
+        assert_eq!((x(&e, 0), pc(&e)), (2, CODE + 8));
+        let mut e = engine_with(&[ADD_X0_1, SVC_0]);
+        assert!(e.start(CODE, END).is_err());
+        assert_eq!((x(&e, 0), pc(&e)), (1, CODE + 4));
+    }
+
+    #[test]
+    fn blocks_end_at_the_size_cap_and_the_page_end() {
+        let count = MAX_BLOCK_OPS * 2 + 3;
+        let mut code = vec![ADD_X0_1; count];
+        code.push(BRK_0);
+        let mut e = engine_with(&[]);
+        let at = CODE + PAGE_SIZE - 8; // straddles the page boundary
+        write_code(&mut e, at, &code);
+        e.start(at, END).unwrap();
+        assert_eq!(x(&e, 0), count as u64);
+        assert_eq!(pc(&e), at + 4 * count as u64);
+    }
+
+    #[test]
+    fn a_misaligned_pc_runs_single_instructions_as_the_decoder_does() {
+        // Words at CODE+2: nop, b #8 (to CODE+14), svc / brk.
+        let mut e = engine_with(&[]);
+        let mut bytes = vec![0u8; 2];
+        for word in [NOP, 0x1400_0002, SVC_0, BRK_0] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        e.mem_write(CODE, &bytes).unwrap();
+        e.start(CODE + 2, END).unwrap();
+        assert_eq!(pc(&e), CODE + 14, "nop, branch over the svc, brk");
+        assert!(e.start(CODE + 10, END).is_err(), "svc is rejected");
+        assert_eq!(pc(&e), CODE + 10);
+    }
+
+    #[test]
+    fn a_redirecting_hook_loop_still_times_out() {
+        let mut e = engine_with(&[NOP]);
+        e.add_code_hook(CODE, CODE, |engine, _, _| {
+            engine.reg_write(Register::Pc, CODE + 4)
+        })
+        .unwrap();
+        e.add_code_hook(CODE + 4, CODE + 4, |engine, _, _| {
+            engine.reg_write(Register::Pc, CODE)
+        })
+        .unwrap();
+        let timeout = Duration::from_millis(5);
+        let error = e.start_bounded(CODE, END, timeout, 0).unwrap_err();
+        assert!(matches!(error, EmuError::Timeout { .. }));
+    }
+
+    #[test]
+    fn an_endless_block_loop_honours_the_limit_and_the_timeout() {
+        let mut e = engine_with(&[ADD_X0_1, B_BACK_4]);
+        e.start_bounded(CODE, END, Duration::ZERO, 1001).unwrap();
+        assert_eq!((x(&e, 0), pc(&e)), (501, CODE + 4));
+        let error = e
+            .start_bounded(CODE, END, Duration::from_millis(5), 0)
+            .unwrap_err();
+        assert!(matches!(error, EmuError::Timeout { .. }));
+    }
+
+    #[test]
+    fn pc_hasher_byte_path_is_deterministic_and_order_sensitive() {
+        let hash = |bytes: &[u8]| {
+            let mut h = PcHasher::default();
+            h.write(bytes);
+            h.finish()
+        };
+        assert_eq!(hash(&[]), 0);
+        assert_eq!(hash(&[1, 2, 3]), hash(&[1, 2, 3]));
+        assert_ne!(hash(&[1, 2, 3]), hash(&[3, 2, 1]));
+    }
+
+    // --- random programs: block path vs per-instruction reference ---
+
+    /// Program words: mostly hot fast-path forms, some branches, and a few
+    /// arbitrary words (fallbacks, faults, unsupported encodings).
+    fn random_word(rng: &mut Rng) -> u32 {
+        use super::TEMPLATES;
+        let r = rng.next();
+        let (mask, bits) = TEMPLATES[(r % TEMPLATES.len() as u64) as usize];
+        // Keep branch offsets short so control mostly stays in the program.
+        let word = ((rng.next() as u32) & !mask) | bits;
+        match bits {
+            0x1400_0000 => (word & 0xfc00_0000) | ((r >> 8) as u32 & 0x1f),
+            0x3400_0000 | 0x3600_0000 | 0x5400_0000 => {
+                (word & !0x00ff_ffe0) | (((r >> 8) as u32 & 0x7) << 5)
+            }
+            _ => word,
+        }
+    }
+
+    type State = (Vec<u64>, u64, u64, u64, Vec<u8>);
+
+    fn engine_state(e: &NativeEngine<'_>) -> State {
+        let regs = (0..31).map(|n| x(e, n)).collect();
+        let mut memory = e.mem_read(CODE, PAGE_SIZE as usize).unwrap();
+        memory.extend(e.mem_read(DATA, DATA_SIZE as usize).unwrap());
+        let sp = e.reg_read(Register::Sp).unwrap();
+        (regs, sp, pc(e), e.reg_read(Register::Nzcv).unwrap(), memory)
+    }
+
+    fn cpu_state(cpu: &NativeCpu) -> State {
+        let regs = (0..31).map(|n| cpu.x(n)).collect();
+        let mut memory = vec![0u8; (PAGE_SIZE + DATA_SIZE) as usize];
+        let (code, data) = memory.split_at_mut(PAGE_SIZE as usize);
+        cpu.mem.read(CODE, code).unwrap();
+        cpu.mem.read(DATA, data).unwrap();
+        (regs, cpu.sp(), cpu.pc(), u64::from(cpu.nzcv()), memory)
+    }
+
+    #[test]
+    fn random_programs_match_the_per_instruction_path() {
+        let programs = if cfg!(debug_assertions) { 300 } else { 3000 };
+        let mut rng = Rng(0xb10c);
+        for program in 0..programs {
+            let code: Vec<u32> = (0..48).map(|_| random_word(&mut rng)).collect();
+            if code.iter().any(|&w| super::reserved_wide_shift(w)) {
+                continue;
+            }
+            let regs: Vec<u64> = (0..31)
+                .map(|_| match rng.next() % 5 {
+                    0 => rng.next(),
+                    1 => CODE + (rng.next() % 0x100) * 4, // self-modifying stores
+                    _ => DATA + 0x800 + rng.next() % 0x800,
+                })
+                .collect();
+            let steps = (rng.next() % 200) as usize + 1;
+
+            let mut reference = NativeCpu::new();
+            reference.mem.map(CODE, PAGE_SIZE);
+            reference.mem.map(DATA, DATA_SIZE);
+            let bytes: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
+            reference.mem.write(CODE, &bytes).unwrap();
+            for (n, value) in regs.iter().enumerate() {
+                reference.set_x(n as u32, *value);
+            }
+            reference.set_sp(DATA + 0x1000);
+            reference.set_pc(CODE);
+            let expected = reference.run(END, steps);
+
+            let mut e = NativeEngine::new().unwrap();
+            e.mem_map(CODE, PAGE_SIZE).unwrap();
+            e.mem_map(DATA, DATA_SIZE).unwrap();
+            e.mem_write(CODE, &bytes).unwrap();
+            for (n, value) in regs.iter().enumerate() {
+                e.reg_write(Register::X(n as u8), *value).unwrap();
+            }
+            e.reg_write(Register::Sp, DATA + 0x1000).unwrap();
+            let actual = e.start_bounded(CODE, END, Duration::ZERO, steps);
+
+            assert_eq!(
+                actual.is_ok(),
+                matches!(expected, Ok(Step::Next | Step::Break(_))),
+                "program {program}: {expected:?} vs {actual:?} for {code:08x?}"
+            );
+            assert_eq!(
+                engine_state(&e),
+                cpu_state(&reference),
+                "program {program} ({steps} steps) diverged: {code:08x?}"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Whole programs through `NativeEngine` (block cache) against Unicorn.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "unicorn")]
+mod unicorn_diff {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use super::super::super::UnicornEngine;
+    use super::super::super::register::Register;
+    use super::super::engine::NativeEngine;
+    use super::{CODE, DATA, DATA_SIZE};
+
+    /// A loop over loads/stores and the hot ALU forms, a call (`bl`/`ret`),
+    /// `cbz`/`tbnz`, ending at `CODE + 0x34`.
+    const LOOP: [u32; 17] = [
+        0xaa00_03f0, // 00 mov x16, x0
+        0xf940_0528, // 04 ldr x8, [x9, #8]
+        0xca48_1dad, // 08 eor x13, x13, x8, lsr #7
+        0x9ba5_39ae, // 0c umaddl x14, w13, w5, x14
+        0xf900_0928, // 10 str x8, [x9, #16]
+        0xf86c_796a, // 14 ldr x10, [x11, x12, lsl #3]
+        0x9100_0400, // 18 add x0, x0, #1
+        0xf100_04a5, // 1c subs x5, x5, #1
+        0x9a9f_05ef, // 20 csinc x15, x15, xzr, eq
+        0x54ff_ff01, // 24 b.ne 0x04
+        0x9400_0004, // 28 bl 0x38
+        0xb400_0046, // 2c cbz x6, 0x34
+        0x9100_1400, // 30 add x0, x0, #5
+        0xd420_0000, // 34 (stop point)
+        0x3718_0047, // 38 tbnz w7, #3, 0x40
+        0x9100_1400, // 3c add x0, x0, #5
+        0xd65f_03c0, // 40 ret
+    ];
+    const STOP: u64 = CODE + 0x34;
+    // Self-modifying code is not compared here: without an ISB the outcome is
+    // architecturally unpredictable and Unicorn keeps running its stale
+    // translation, whereas the native contract is the per-instruction path's
+    // (checked by `engine::a_guest_store_into_the_running_block_takes_effect`
+    // and the random-program test).
+
+    fn init() -> Vec<(u8, u64)> {
+        vec![
+            (5, 50),
+            (6, 0),
+            (7, 8),
+            (9, DATA + 0x100),
+            (11, DATA + 0x200),
+            (12, 3),
+            (13, 0x1234_5678_9abc_def0),
+            (14, 7),
+        ]
+    }
+
+    macro_rules! run {
+        ($engine:expr, $code:expr, $until:expr, $hook:expr) => {{
+            let mut e = $engine;
+            e.mem_map(CODE, 0x1000).unwrap();
+            e.mem_map(DATA, DATA_SIZE).unwrap();
+            let fill: Vec<u8> = (0..DATA_SIZE).map(|i| (i * 13 + 5) as u8).collect();
+            e.mem_write(DATA, &fill).unwrap();
+            let bytes: Vec<u8> = $code.iter().flat_map(|w: &u32| w.to_le_bytes()).collect();
+            e.mem_write(CODE, &bytes).unwrap();
+            let hits = Rc::new(Cell::new(0u64));
+            if $hook {
+                let counter = Rc::clone(&hits);
+                // Mid-block hook: accumulates x0 into x20 on every visit.
+                e.add_code_hook(CODE + 0x18, CODE + 0x18, move |engine, _, _| {
+                    counter.set(counter.get() + 1);
+                    let sum =
+                        engine.reg_read(Register::X(20))? + engine.reg_read(Register::X(0))?;
+                    engine.reg_write(Register::X(20), sum)
+                })
+                .unwrap();
+            }
+            // Twice: the second run executes from warm caches.
+            let mut dumps = Vec::new();
+            for _ in 0..2 {
+                for (n, value) in init() {
+                    e.reg_write(Register::X(n), value).unwrap();
+                }
+                e.reg_write(Register::X(0), 0).unwrap();
+                e.reg_write(Register::X(20), 0).unwrap();
+                e.reg_write(Register::Nzcv, 0).unwrap();
+                e.mem_write(CODE, &bytes).unwrap();
+                e.start_bounded(CODE, $until, Duration::from_secs(10), 0)
+                    .unwrap();
+                let regs: Vec<u64> = (0..31)
+                    .map(|n| e.reg_read(Register::X(n)).unwrap())
+                    .collect();
+                let pc = e.reg_read(Register::Pc).unwrap();
+                let nzcv = e.reg_read(Register::Nzcv).unwrap() & 0xf000_0000;
+                let mut data = vec![0u8; DATA_SIZE as usize];
+                e.mem_read_into(DATA, &mut data).unwrap();
+                let code = e.mem_read(CODE, 0x100).unwrap();
+                dumps.push((regs, pc, nzcv, data, code));
+            }
+            (dumps, hits.get())
+        }};
+    }
+
+    #[test]
+    fn programs_through_the_block_cache_match_unicorn() {
+        for hook in [false, true] {
+            let native = run!(NativeEngine::new().unwrap(), LOOP, STOP, hook);
+            let unicorn = run!(UnicornEngine::new().unwrap(), LOOP, STOP, hook);
+            assert_eq!(native, unicorn, "hook: {hook}");
+        }
+        let (dumps, hits) = run!(NativeEngine::new().unwrap(), LOOP, STOP, true);
+        assert_eq!(
+            hits, 100,
+            "the mid-block hook fired on every iteration of both runs"
+        );
+        assert_eq!(
+            dumps[0].0[0], 50,
+            "both conditional branches skip their add"
+        );
+        assert_eq!(dumps[0].0[20], (0..50).sum::<u64>());
+    }
+}

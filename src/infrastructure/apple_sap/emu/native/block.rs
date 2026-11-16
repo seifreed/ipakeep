@@ -123,10 +123,7 @@ pub(super) struct BlockCache {
 impl BlockCache {
     /// The live block with this id.
     pub(super) fn get(&self, id: BlockId) -> &Block {
-        match &self.blocks[id] {
-            Some(block) => block,
-            None => unreachable!("dangling block id"),
-        }
+        self.blocks[id].as_ref().expect("live block id")
     }
 
     /// Whether `id` names a live block starting at `pc`.
