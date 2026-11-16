@@ -125,6 +125,21 @@ mod tests {
     }
 
     #[test]
+    fn engine_error_codes_display_a_readable_text() {
+        for (code, text) in [
+            (EngineErrorCode::Map, "memory map rejected"),
+            (EngineErrorCode::ReadUnmapped, "unmapped read"),
+            (EngineErrorCode::WriteUnmapped, "unmapped write"),
+            (EngineErrorCode::FetchUnmapped, "unmapped fetch"),
+            (EngineErrorCode::Exception, "guest exception"),
+            (EngineErrorCode::InvalidInstruction, "invalid instruction"),
+            (EngineErrorCode::Other, "engine error"),
+        ] {
+            assert_eq!(code.to_string(), text);
+        }
+    }
+
+    #[test]
     fn guest_faults_keep_their_message() {
         assert_eq!(
             EmuError::guest("unsupported import _foo").to_string(),
