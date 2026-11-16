@@ -314,13 +314,18 @@ mod tests {
         let parent = directory.path().join("ipakeep");
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500))
             .expect("read-only directory");
+        let permissions_enforced = std::fs::File::create(parent.join("probe")).is_err();
 
         cache.invalidate(7, GUID, BLOB);
         let file_kept = parent.join("kbsync-v1.json").exists();
         std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
             .expect("restore directory");
 
-        assert!(file_kept);
-        assert_eq!(cache.cached(7, GUID).as_deref(), Some(BLOB));
+        // Root (e.g. a Docker build container) bypasses directory permissions.
+        assert_eq!(file_kept, permissions_enforced);
+        assert_eq!(
+            cache.cached(7, GUID).as_deref(),
+            permissions_enforced.then_some(BLOB)
+        );
     }
 }

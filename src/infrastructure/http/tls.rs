@@ -23,15 +23,21 @@ mod tests {
     use super::client_builder;
     use crate::infrastructure::apple_sap::storeauth::apple_auth_client;
 
-    const APPLE_ENDPOINTS: [&str; 7] = [
+    const PUBLIC_PKI_ENDPOINTS: [&str; 6] = [
         "https://init.itunes.apple.com/bag.xml?ix=6",
-        "https://gsa.apple.com/",
         "https://apps.apple.com/",
         "https://itunes.apple.com/",
         "https://developerservices2.apple.com/",
         "https://updates.cdn-apple.com/",
         "https://wkms-public.apple.com/",
     ];
+    /// Chains to Apple's private root, which only macOS trusts natively.
+    const APPLE_ROOT_ENDPOINT: &str = "https://gsa.apple.com/";
+
+    async fn assert_reachable(client: &reqwest::Client, url: &str) {
+        let response = client.get(url).send().await;
+        assert!(response.is_ok(), "{url}: {response:?}");
+    }
 
     #[test]
     fn builds_client_with_ring_provider() {
@@ -44,11 +50,10 @@ mod tests {
     async fn handshakes_with_apple_endpoints() {
         let general = client_builder().build().expect("general client");
         let pinned = apple_auth_client().expect("Apple-root client");
-        for client in [&general, &pinned] {
-            for url in APPLE_ENDPOINTS {
-                let response = client.get(url).send().await;
-                assert!(response.is_ok(), "{url}: {response:?}");
-            }
+        for url in PUBLIC_PKI_ENDPOINTS {
+            assert_reachable(&general, url).await;
+            assert_reachable(&pinned, url).await;
         }
+        assert_reachable(&pinned, APPLE_ROOT_ENDPOINT).await;
     }
 }
