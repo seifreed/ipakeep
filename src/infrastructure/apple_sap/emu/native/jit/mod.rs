@@ -46,6 +46,8 @@ mod decode;
 mod exec;
 mod translate;
 
+#[cfg(test)]
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
