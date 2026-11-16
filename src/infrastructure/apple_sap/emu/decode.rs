@@ -81,6 +81,10 @@ pub fn classify(word: u32) -> A64Class {
 }
 
 /// Best-effort specific mnemonic for `word`, or `"unknown (<Class>)"`.
+///
+/// Test-only: its sole caller is the opcode-histogram probe test; the
+/// interpreter itself needs only [`classify`].
+#[cfg(test)]
 pub fn mnemonic(word: u32) -> &'static str {
     match classify(word) {
         A64Class::DataProcImm => dp_imm(word),
@@ -97,6 +101,7 @@ pub fn mnemonic(word: u32) -> &'static str {
 // Data Processing -- Immediate (op0 == 100x). Sub-group is word[25:23].
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn dp_imm(word: u32) -> &'static str {
     match (word >> 23) & 0x7 {
         // PC-relative addressing: bit31 selects ADR (0) vs ADRP (1).
@@ -149,6 +154,7 @@ fn dp_imm(word: u32) -> &'static str {
 // Branches, Exception Generating and System instructions (op0 == 101x).
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn branch_system(word: u32) -> &'static str {
     // Unconditional branch (immediate): word[30:26] == 00101.
     match (word >> 26) & 0x3f {
@@ -205,6 +211,7 @@ fn branch_system(word: u32) -> &'static str {
     system(word)
 }
 
+#[cfg(test)]
 fn system(word: u32) -> &'static str {
     // System register move: word[31:20] == 0xD53 (MRS) / 0xD51 (MSR register).
     match (word >> 20) & 0xfff {
@@ -250,6 +257,7 @@ fn system(word: u32) -> &'static str {
 // Loads and Stores (op0 == x1x0).
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn load_store(word: u32) -> &'static str {
     // Load/store exclusive + load/store ordered + compare-and-swap all share
     // word[29:24] == 001000.
@@ -288,6 +296,7 @@ fn load_store(word: u32) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn ldst_exclusive(word: u32) -> &'static str {
     let o2 = (word >> 23) & 1;
     let l = (word >> 22) & 1;
@@ -331,6 +340,7 @@ fn ldst_exclusive(word: u32) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn ldst_atomic(word: u32) -> &'static str {
     let o3 = (word >> 15) & 1;
     let opc = (word >> 12) & 0x7;
@@ -364,6 +374,7 @@ fn ldst_atomic(word: u32) -> &'static str {
     "atomic (LSE)"
 }
 
+#[cfg(test)]
 fn ldst_literal(word: u32) -> &'static str {
     // word[31:30] = opc: 00 LDR(32), 01 LDR(64), 10 LDRSW, 11 PRFM.
     match (word >> 30) & 0x3 {
@@ -374,6 +385,7 @@ fn ldst_literal(word: u32) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn ldst_register(word: u32) -> &'static str {
     let size = (word >> 30) & 0x3;
     let v = (word >> 26) & 1;
@@ -390,6 +402,7 @@ fn ldst_register(word: u32) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn ldst_fp(opc: u32, unscaled: bool) -> &'static str {
     // For SIMD/FP load/store the low opc bit is the load flag.
     match (opc & 1, unscaled) {
@@ -400,6 +413,7 @@ fn ldst_fp(opc: u32, unscaled: bool) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn ldst_integer(size: u32, opc: u32, unscaled: bool) -> &'static str {
     // size: 11=doubleword, 10=word, 01=halfword, 00=byte.
     // opc:  00=store, 01=load, 10/11=load signed.
@@ -440,6 +454,7 @@ fn ldst_integer(size: u32, opc: u32, unscaled: bool) -> &'static str {
 // Data Processing -- Register (op0 == x101).
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn dp_reg(word: u32) -> &'static str {
     let op = (word >> 24) & 0x1f; // word[28:24]
 
@@ -541,6 +556,7 @@ fn dp_reg(word: u32) -> &'static str {
 // Data Processing -- Scalar FP and Advanced SIMD (op0 == x111).
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 fn simd_fp(word: u32) -> &'static str {
     // Crypto three-register (SHA3): EOR3 / BCAX share word & 0xffe08000.
     if word & 0xffe0_8000 == 0xce00_0000 {
