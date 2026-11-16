@@ -30,7 +30,10 @@
     clippy::needless_pass_by_value
 )]
 
+mod branch;
 mod dpimm;
+mod dpreg;
+mod ldst;
 
 use std::collections::HashMap;
 
@@ -254,6 +257,9 @@ impl NativeCpu {
         let word = self.mem.read_u32(pc)?;
         match classify(word) {
             A64Class::DataProcImm => dpimm::run(self, word),
+            A64Class::DataProcReg => dpreg::run(self, word),
+            A64Class::BranchSystem => branch::run(self, word),
+            A64Class::LoadStore => ldst::run(self, word),
             other => Err(NativeError::Unsupported {
                 pc,
                 word,
