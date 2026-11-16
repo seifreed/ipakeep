@@ -266,7 +266,11 @@ impl<'a> NativeEngine<'a> {
                 return Err(EmuError::Timeout { timeout });
             }
 
-            self.fire_code_hooks(pc)?;
+            if let Err(error) = self.fire_code_hooks(pc) {
+                // The hook path also recorded the fault; consume it so it can't
+                // leak into the next run. The first recorded fault wins.
+                return Err(self.fault.take().unwrap_or(error));
+            }
             if self.stopped {
                 return match self.fault.take() {
                     Some(error) => Err(error),
