@@ -13,6 +13,7 @@ use crate::domain::error::AppStoreError;
 use crate::infrastructure::apple_sap::machine::sap::test_support::{
     PRIMARY_SEED, SeededHost, environment, fixture,
 };
+use crate::infrastructure::observability::log_capture::LogCapture;
 
 const GOLDEN_IDENTIFIER: [u8; 16] = [
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
@@ -80,6 +81,54 @@ fn blocking_calls_report_worker_errors() {
     assert!(matches!(error, AppStoreError::AuthenticationFailed(_)));
 }
 
+#[test]
+fn operation_outcomes_are_logged_without_inputs_or_paths() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let directory = tempfile::tempdir().unwrap();
+    let service = offline_service(&directory);
+    let hardware_id = b"HWID-SENTINEL";
+    let dsid = 987_654_321_012;
+
+    assert!(service.kbsync_blocking(hardware_id, dsid).is_err());
+    assert!(service.store_amd_headers_blocking().is_err());
+    assert!(service.sign_blocking(b"SIGN-INPUT-SENTINEL").is_err());
+
+    let logs = capture.contents();
+    assert!(logs.contains("apple_sap.worker.started"), "{logs}");
+    assert!(logs.contains("WARN"), "{logs}");
+    assert!(logs.contains("event_name=\"apple_sap.operation.failed\""));
+    assert!(logs.contains("operation=\"kbsync\""));
+    assert!(logs.contains("error_type=\"assets\""));
+    assert!(logs.contains("operation=\"sign\""));
+    assert!(logs.contains("error_type=\"no_sap_session\""));
+    assert!(logs.contains("outcome=\"not_provisioned\""));
+    assert!(logs.contains("duration_ms="));
+    assert!(logs.contains("event_name=\"apple_sap.anisette.state_loaded\""));
+    assert!(logs.contains("outcome=\"missing\""));
+    assert!(!logs.contains("SENTINEL"));
+    assert!(!logs.contains(&hex::encode(hardware_id)));
+    assert!(!logs.contains(&dsid.to_string()));
+    let root = directory.path().to_string_lossy().into_owned();
+    assert!(!logs.contains(&root), "{logs}");
+}
+
+#[tokio::test]
+async fn anisette_failure_is_logged_at_the_service_boundary() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let directory = tempfile::tempdir().unwrap();
+    let service = offline_service(&directory);
+
+    assert!(service.anisette_headers().await.is_err());
+
+    let logs = capture.contents();
+    assert!(logs.contains("operation=\"anisette_headers\""), "{logs}");
+    assert!(logs.contains("event_name=\"apple_sap.operation.failed\""));
+    assert!(logs.contains("error_type=\"assets\""));
+    assert!(!logs.contains(&hex::encode(GOLDEN_IDENTIFIER)));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn async_and_blocking_calls_share_one_worker() {
     let directory = tempfile::tempdir().unwrap();
@@ -125,6 +174,8 @@ fn golden_headers() -> HashMap<String, String> {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the cached Apple SAP assets"]
 async fn provisions_from_scratch_reproducing_the_golden_headers() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
     let directory = tempfile::tempdir().unwrap();
     let server = recorded_gsa().await;
     let bundle = BundleSource::Directory(ipatool_assets());
@@ -141,6 +192,23 @@ async fn provisions_from_scratch_reproducing_the_golden_headers() {
     assert_eq!(saved["Provisioning"], expected["Provisioning"]);
     assert_eq!(saved["RoutingInfo"], serde_json::json!(84_215_040));
     server.verify().await;
+
+    let logs = capture.contents();
+    assert!(
+        logs.contains("apple_sap.anisette.provisioning_started"),
+        "{logs}"
+    );
+    assert!(logs.contains("apple_sap.anisette.provisioned"));
+    assert!(logs.contains("apple_sap.anisette.state_persisted"));
+    assert!(logs.contains("http.response.headers_received"));
+    for (name, value) in headers.entries() {
+        let identifying = name.starts_with("X-Apple-I-MD") || *name == "X-Mme-Device-Id";
+        assert!(
+            !identifying || !logs.contains(value.as_str()),
+            "{name} leaked"
+        );
+    }
+    assert!(!logs.contains(expected["Provisioning"].as_str().unwrap()));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -180,6 +248,8 @@ async fn reuses_persisted_provisioning_without_gsa() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs the cached Apple SAP assets"]
 async fn kbsync_matches_the_golden_vector() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
     let directory = tempfile::tempdir().unwrap();
     let golden = fixture("kbsync.json");
     let bundle = BundleSource::Directory(ipatool_assets());
@@ -188,5 +258,15 @@ async fn kbsync_matches_the_golden_vector() {
     let hardware = hex_at(&golden, "/hardware_id_hex");
     let dsid = golden["dsid"].as_u64().unwrap();
     let blob = service.kbsync(&hardware, dsid).await.unwrap();
-    assert_eq!(hex::encode(blob), golden["kbsync_hex"].as_str().unwrap());
+    assert_eq!(hex::encode(&blob), golden["kbsync_hex"].as_str().unwrap());
+
+    let logs = capture.contents();
+    assert!(logs.contains("operation=\"kbsync\""), "{logs}");
+    assert!(logs.contains("apple_sap.worker.assets_ready"));
+    assert!(!logs.contains(&hex::encode(&blob)));
+    assert!(!logs.contains(&base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &blob
+    )));
+    assert!(!logs.contains(&dsid.to_string()));
 }

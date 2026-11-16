@@ -121,13 +121,35 @@ impl SapSigner {
             machine,
             context: Some(context),
         };
-        let certificate = fetch_certificate(transport, &config.certificate_url).await?;
+        let certificate = fetch_certificate(transport, &config.certificate_url)
+            .await
+            .inspect_err(|error| log_setup_failure("fetch_certificate", error))?;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "connect_sap",
+            event_name = "apple_sap.sap.certificate_fetched",
+            certificate_bytes = certificate.len(),
+            "SAP setup certificate fetched"
+        );
         let request = signer.setup_step(config, &certificate, "setup", SETUP_PENDING_STATE)?;
         if request.is_empty() {
             return Err(SignerError::Empty("setup message"));
         }
-        let reply = exchange_setup(transport, &config.setup_url, &request).await?;
+        let reply = exchange_setup(transport, &config.setup_url, &request)
+            .await
+            .inspect_err(|error| log_setup_failure("exchange_setup", error))?;
         signer.setup_step(config, &reply, "setup completion", SETUP_COMPLETE_STATE)?;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "connect_sap",
+            event_name = "apple_sap.sap.session_established",
+            outcome = "success",
+            request_bytes = request.len(),
+            reply_bytes = reply.len(),
+            "SAP setup handshake completed"
+        );
         Ok(signer)
     }
 
@@ -143,6 +165,17 @@ impl SapSigner {
             .machine
             .exchange(config.version, &config.hardware_id, context, input)?;
         if step.state != expected {
+            tracing::warn!(
+                service = "ipakeep",
+                component = "apple_sap",
+                operation = "connect_sap",
+                event_name = "apple_sap.sap.unexpected_state",
+                outcome = "failure",
+                phase,
+                state = step.state,
+                expected,
+                "SAP setup step entered an unexpected state"
+            );
             return Err(SignerError::UnexpectedState {
                 phase,
                 state: step.state,
@@ -184,8 +217,41 @@ impl Drop for SapSigner {
     fn drop(&mut self) {
         // Best-effort release when the caller did not call `close`; the
         // emulator is discarded right after, so a failure has no effect.
-        let _ = self.teardown();
+        if let Err(error) = self.teardown() {
+            tracing::debug!(
+                service = "ipakeep",
+                component = "apple_sap",
+                operation = "close_sap",
+                event_name = "apple_sap.sap.teardown_failed",
+                outcome = "ignored",
+                %error,
+                "SAP session teardown failed while dropping the signer"
+            );
+        }
     }
+}
+
+/// Logs a failed setup HTTP step by phase and safe category only: the
+/// response body and server text are never copied into the event.
+fn log_setup_failure(phase: &'static str, error: &ProtocolError) {
+    let (error_type, status) = match error {
+        ProtocolError::Transport(_) => ("transport", None),
+        ProtocolError::Status(status) => ("http_status", Some(*status)),
+        ProtocolError::TooLarge => ("too_large", None),
+        ProtocolError::Plist(_) => ("invalid_plist", None),
+        ProtocolError::MissingKey(_) => ("missing_key", None),
+    };
+    tracing::warn!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "connect_sap",
+        event_name = "apple_sap.sap.setup_failed",
+        outcome = "failure",
+        phase,
+        error_type,
+        status,
+        "SAP setup HTTP step failed"
+    );
 }
 
 #[cfg(test)]

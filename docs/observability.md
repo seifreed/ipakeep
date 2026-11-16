@@ -290,6 +290,25 @@ Useful events include:
 - `download.artifact.saved` for the local IPA write.
 - `developer.csr.generated` and `developer.csr.failed` for the native RSA key
   and certificate signing request generation (never the subject or key).
+- `apple_sap.operation.completed` / `apple_sap.operation.failed` for every
+  `SapService` call (`anisette_headers`, `provision_store`, `store_amd_headers`,
+  `kbsync`, `connect_sap`, `sign`) with outcome, duration and a stable
+  `error_type`; `apple_sap.anisette.provisioning_started`,
+  `apple_sap.anisette.provisioned`, `apple_sap.anisette.reused`,
+  `apple_sap.anisette.reuse_rejected` and `apple_sap.store.provisioned` for the
+  provisioning lifecycle; `apple_sap.sap.*` for the SAP setup handshake.
+- `apple_sap.assets.cache_hit`, `cache_miss`, `cache_invalid`,
+  `integrity_failed`, `extraction_started`, `extraction_stage`, `extracted`,
+  `extraction_failed`, `range_read_retry`, `range_read_failed` and
+  `remote_transfer_summary` for the pinned Apple asset cache and the remote
+  restore-image reads (host only, never the URL path or query).
+
+The Apple SAP worker thread runs each job under the caller's subscriber and
+span, so worker events stay correlated with the command. Its events never carry
+OTP, MID, routing info, device identifiers, kbsync, SAP signatures or setup
+messages, DSIDs, hardware IDs, cookies, request/response bodies, cache paths or
+server-provided error text; only lengths, booleans, stable categories and
+emulator status text.
 
 Successful request/process detail and routine state resolution are DEBUG.
 Command and credential writes are INFO. Recoverable fallbacks, retries,

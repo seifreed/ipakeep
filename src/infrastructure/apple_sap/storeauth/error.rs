@@ -60,6 +60,26 @@ pub enum StoreAuthError {
 /// Result alias of the Store authentication service.
 pub type StoreAuthResult<T> = Result<T, StoreAuthError>;
 
+impl StoreAuthError {
+    /// A stable, secret-free category for structured log events.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::State(_) => "invalid_state",
+            Self::Io { .. } => "io",
+            Self::Bundle(_) => "assets",
+            Self::Machine(_) => "machine",
+            Self::Signer(_) => "signer",
+            Self::Http { .. } => "http_transport",
+            Self::Protocol(_) => "protocol",
+            Self::StoreNotProvisioned => "store_not_provisioned",
+            Self::NoSapSession => "no_sap_session",
+            Self::NotStarted(_) => "not_started",
+            Self::WorkerStopped => "worker_stopped",
+        }
+    }
+}
+
 impl From<StoreAuthError> for AppStoreError {
     fn from(error: StoreAuthError) -> Self {
         match error {
@@ -90,5 +110,42 @@ mod tests {
             AppStoreError::from(StoreAuthError::NoSapSession),
             AppStoreError::Unexpected(message) if message == "no Apple SAP session is open"
         ));
+    }
+
+    #[test]
+    fn kinds_are_stable_secret_free_categories() {
+        let transport = reqwest::Client::new().get("not a url").build().unwrap_err();
+        let io = std::io::Error::other("secret");
+        let cases = [
+            (StoreAuthError::State("x"), "invalid_state"),
+            (
+                StoreAuthError::Io {
+                    action: "x",
+                    source: io,
+                },
+                "io",
+            ),
+            (
+                StoreAuthError::Bundle(BundleError::NoCacheDirectory),
+                "assets",
+            ),
+            (StoreAuthError::Machine(MachineError::Busy), "machine"),
+            (StoreAuthError::Signer(SignerError::Empty("x")), "signer"),
+            (
+                StoreAuthError::Http {
+                    context: "x",
+                    source: transport,
+                },
+                "http_transport",
+            ),
+            (StoreAuthError::Protocol("secret".into()), "protocol"),
+            (StoreAuthError::StoreNotProvisioned, "store_not_provisioned"),
+            (StoreAuthError::NoSapSession, "no_sap_session"),
+            (StoreAuthError::NotStarted("x"), "not_started"),
+            (StoreAuthError::WorkerStopped, "worker_stopped"),
+        ];
+        for (error, kind) in cases {
+            assert_eq!(error.kind(), kind);
+        }
     }
 }

@@ -7,7 +7,10 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
+    time::Instant,
 };
+
+use crate::infrastructure::observability::elapsed_ms;
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -138,6 +141,23 @@ pub enum BundleError {
     Kernel(#[from] KernelError),
 }
 
+impl BundleError {
+    /// A stable, path-free category for structured log events.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoCacheDirectory => "no_cache_directory",
+            Self::Io { .. } => "io",
+            Self::Integrity(_) => "integrity",
+            Self::Http(_) => "http",
+            Self::Remote(_) => "remote_image",
+            Self::Apfs(_) => "apfs",
+            Self::Dyld(_) => "dyld",
+            Self::Kernel(_) => "kernel",
+        }
+    }
+}
+
 static LOADED: Mutex<Option<Arc<Bundle>>> = Mutex::new(None);
 
 /// Returns the bundle, loading it at most once per process.
@@ -163,17 +183,96 @@ pub fn load() -> Result<Arc<Bundle>, BundleError> {
 /// # Errors
 /// Fails when extraction or verification fails.
 pub fn load_or_extract(root: &Path) -> Result<Bundle, BundleError> {
+    let started = Instant::now();
     let directory = root.join(CACHE_DIRECTORY_NAME);
-    if let Ok(bundle) = read_bundle(&directory) {
-        return Ok(bundle);
+    match read_bundle(&directory) {
+        Ok(bundle) => {
+            log_cache_hit(started);
+            return Ok(bundle);
+        }
+        Err(error) => log_cache_miss(&error),
     }
+    let result = extract_and_install(root, &directory);
+    match &result {
+        Ok(_) => tracing::info!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "extract_assets",
+            event_name = "apple_sap.assets.extracted",
+            outcome = "success",
+            duration_ms = elapsed_ms(started),
+            "Apple SAP assets extracted and verified"
+        ),
+        Err(error) => tracing::error!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "extract_assets",
+            event_name = "apple_sap.assets.extraction_failed",
+            outcome = "failure",
+            error_type = error.kind(),
+            duration_ms = elapsed_ms(started),
+            "Apple SAP asset extraction failed"
+        ),
+    }
+    result
+}
+
+fn extract_and_install(root: &Path, directory: &Path) -> Result<Bundle, BundleError> {
+    tracing::info!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "extract_assets",
+        event_name = "apple_sap.assets.extraction_started",
+        cache_layout = CACHE_DIRECTORY_NAME,
+        "extracting Apple SAP assets from the macOS restore image; this can take minutes"
+    );
     let staging = root.join(format!(".staging-{}", std::process::id()));
     remove_directory(&staging)?;
     extract_remote(&staging)?;
     let bundle = read_bundle(&staging)?;
-    remove_directory(&directory)?;
-    fs::rename(&staging, &directory).map_err(|source| io_error("install", &directory, source))?;
+    remove_directory(directory)?;
+    fs::rename(&staging, directory).map_err(|source| io_error("install", directory, source))?;
     Ok(bundle)
+}
+
+fn log_cache_hit(started: Instant) {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "load_assets",
+        event_name = "apple_sap.assets.cache_hit",
+        outcome = "hit",
+        cache_layout = CACHE_DIRECTORY_NAME,
+        duration_ms = elapsed_ms(started),
+        "Apple SAP assets loaded from the verified cache"
+    );
+}
+
+fn log_cache_miss(error: &BundleError) {
+    let missing =
+        matches!(error, BundleError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound);
+    if missing {
+        tracing::info!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "load_assets",
+            event_name = "apple_sap.assets.cache_miss",
+            outcome = "miss",
+            cache_layout = CACHE_DIRECTORY_NAME,
+            "Apple SAP assets are not cached yet"
+        );
+    } else {
+        tracing::warn!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "load_assets",
+            event_name = "apple_sap.assets.cache_invalid",
+            outcome = "miss",
+            error_type = error.kind(),
+            cache_layout = CACHE_DIRECTORY_NAME,
+            "cached Apple SAP assets are unusable; extracting them again"
+        );
+    }
 }
 
 /// Reads and verifies the seven pinned files in `directory`.
@@ -199,6 +298,17 @@ fn read_verified(directory: &Path, file: &FileSpec) -> Result<Vec<u8>, BundleErr
     let data = fs::read(&path).map_err(|source| io_error("read", &path, source))?;
     let digest = hex::encode(Sha256::digest(&data));
     if data.len() != file.size || digest != file.digest {
+        tracing::warn!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "verify_assets",
+            event_name = "apple_sap.assets.integrity_failed",
+            outcome = "failure",
+            asset = file.name,
+            actual_bytes = data.len(),
+            expected_bytes = file.size,
+            "Apple SAP asset does not match its pinned size and SHA-256"
+        );
         return Err(BundleError::Integrity(file.name));
     }
     Ok(data)
@@ -206,11 +316,14 @@ fn read_verified(directory: &Path, file: &FileSpec) -> Result<Vec<u8>, BundleErr
 
 fn extract_remote(destination: &Path) -> Result<(), BundleError> {
     let restore = RestoreImage::open_pinned(Arc::new(BlockingHttp::new()?))?;
+    let stage = Instant::now();
     extract_apfs_files(
         restore.open_file_system_image()?,
         &FRAMEWORK_IMAGE_PATHS,
         destination,
     )?;
+    log_stage("framework_images", stage);
+    let stage = Instant::now();
     let system = ApfsExtractor::open(restore.open_system_os_image()?)?;
     let opener = |suffix: &str| -> io::Result<Box<dyn ReadAt + '_>> {
         let file = system
@@ -220,8 +333,25 @@ fn extract_remote(destination: &Path) -> Result<(), BundleError> {
     };
     let apple_media_services = extract_dyld_image(opener, APPLE_MEDIA_SERVICES_IMAGE)?;
     write_file(destination, "AppleMediaServices", &apple_media_services)?;
+    log_stage("apple_media_services", stage);
+    let stage = Instant::now();
     let kext = extract_fair_play_kext(&restore.read_member(&KERNEL_MEMBER)?)?;
-    write_file(destination, "FairPlayIOKit", &kext)
+    write_file(destination, "FairPlayIOKit", &kext)?;
+    log_stage("fairplay_kext", stage);
+    Ok(())
+}
+
+fn log_stage(stage: &'static str, started: Instant) {
+    tracing::info!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "extract_assets",
+        event_name = "apple_sap.assets.extraction_stage",
+        outcome = "success",
+        stage,
+        duration_ms = elapsed_ms(started),
+        "Apple SAP asset extraction stage completed"
+    );
 }
 
 fn write_file(directory: &Path, name: &str, data: &[u8]) -> Result<(), BundleError> {
@@ -249,6 +379,7 @@ fn io_error(context: &'static str, path: &Path, source: io::Error) -> BundleErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
 
     #[test]
     fn rejects_missing_and_tampered_files() {
@@ -260,10 +391,27 @@ mod tests {
         for file in &FILES {
             fs::write(directory.path().join(file.name), vec![0; file.size]).expect("write");
         }
+        let capture = LogCapture::default();
+        let guard = capture.install();
         assert!(matches!(
             read_bundle(directory.path()),
             Err(BundleError::Integrity("AppleMediaServices"))
         ));
+        drop(guard);
+        let logs = capture.contents();
+        assert!(logs.contains("apple_sap.assets.integrity_failed"), "{logs}");
+        assert!(logs.contains("asset=\"AppleMediaServices\""));
+        assert!(logs.contains("expected_bytes=14813888"));
+        let root = directory.path().to_string_lossy().into_owned();
+        assert!(!logs.contains(&root));
+    }
+
+    #[test]
+    fn error_kinds_are_path_free() {
+        let io = io_error("read", Path::new("/private/secret"), io::Error::other("x"));
+        assert_eq!(io.kind(), "io");
+        assert_eq!(BundleError::Integrity("adid").kind(), "integrity");
+        assert_eq!(BundleError::NoCacheDirectory.kind(), "no_cache_directory");
     }
 
     #[test]

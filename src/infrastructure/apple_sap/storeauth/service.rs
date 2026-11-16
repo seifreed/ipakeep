@@ -2,7 +2,7 @@
 
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
@@ -20,6 +20,7 @@ use crate::infrastructure::apple_sap::machine::modern_adi::{
 };
 use crate::infrastructure::apple_sap::machine::sap::GuestEnvironment;
 use crate::infrastructure::apple_sap::signer::SignerConfig;
+use crate::infrastructure::observability::elapsed_ms;
 
 const WORKER_THREAD_NAME: &str = "apple-sap";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -135,6 +136,14 @@ impl SapService {
             gsa: config.gsa,
             anisette: tokio::sync::Mutex::new(None),
         };
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "spawn",
+            event_name = "apple_sap.worker.started",
+            outcome = "success",
+            "Apple SAP worker thread started"
+        );
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -160,9 +169,19 @@ impl SapService {
         job: impl FnOnce(&mut Worker) -> StoreAuthResult<T> + Send + 'static,
         reply: impl FnOnce(StoreAuthResult<T>) + Send + 'static,
     ) -> StoreAuthResult<()> {
+        // Run the job under the caller's subscriber and span so worker
+        // events stay correlated with the command that requested them.
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let span = tracing::Span::current();
+        let job: Job = Box::new(move |worker| {
+            tracing::dispatcher::with_default(&dispatch, || {
+                let _entered = span.enter();
+                reply(job(worker));
+            });
+        });
         self.inner
             .jobs
-            .send(Box::new(move |worker| reply(job(worker))))
+            .send(job)
             .map_err(|_| StoreAuthError::WorkerStopped)
     }
 
@@ -207,11 +226,43 @@ impl SapService {
         if let Some(headers) = cached.as_ref() {
             return Ok(headers.clone());
         }
-        let headers = match self.call(Worker::reuse_headers).await? {
-            Some(headers) => headers,
-            None => self.provision_machine().await?,
-        };
+        let started = Instant::now();
+        let result = self.resolve_anisette().await;
+        let headers = observed("anisette_headers", started, result)?;
         *cached = Some(headers.clone());
+        Ok(headers)
+    }
+
+    async fn resolve_anisette(&self) -> StoreAuthResult<AnisetteHeaders> {
+        if let Some(headers) = self.call(Worker::reuse_headers).await? {
+            tracing::debug!(
+                service = "ipakeep",
+                component = "apple_sap",
+                operation = "anisette_headers",
+                event_name = "apple_sap.anisette.reused",
+                outcome = "success",
+                "reused the persisted anisette provisioning"
+            );
+            return Ok(headers);
+        }
+        tracing::info!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "provision_machine",
+            event_name = "apple_sap.anisette.provisioning_started",
+            "no reusable anisette provisioning; provisioning with GSA"
+        );
+        let started = Instant::now();
+        let headers = self.provision_machine().await?;
+        tracing::info!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "provision_machine",
+            event_name = "apple_sap.anisette.provisioned",
+            outcome = "success",
+            duration_ms = elapsed_ms(started),
+            "anisette machine provisioning completed"
+        );
         Ok(headers)
     }
 
@@ -237,6 +288,25 @@ impl SapService {
         request: &StoreProvisioningRequest<'_>,
     ) -> StoreAuthResult<()> {
         let _flow = self.inner.anisette.lock().await;
+        let started = Instant::now();
+        let result = self.run_store_provisioning(request).await;
+        observed("provision_store", started, result)?;
+        tracing::info!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "provision_store",
+            event_name = "apple_sap.store.provisioned",
+            outcome = "success",
+            duration_ms = elapsed_ms(started),
+            "Store AMD provisioning completed"
+        );
+        Ok(())
+    }
+
+    async fn run_store_provisioning(
+        &self,
+        request: &StoreProvisioningRequest<'_>,
+    ) -> StoreAuthResult<()> {
         let spim = decode_challenge(request.challenge)?;
         let start = self.call(move |worker| worker.begin_store(&spim)).await?;
         let finish = finish_store(request, &start.cpim).await?;
@@ -251,7 +321,9 @@ impl SapService {
     /// [`StoreAuthError::StoreNotProvisioned`] before the Store "SP" action;
     /// guest or state-file failures otherwise.
     pub async fn store_amd_headers(&self) -> StoreAuthResult<StoreAmdHeaders> {
-        self.call(Worker::store_amd).await
+        let started = Instant::now();
+        let result = self.call(Worker::store_amd).await;
+        observed("store_amd_headers", started, result)
     }
 
     /// Blocking [`Self::store_amd_headers`].
@@ -259,7 +331,9 @@ impl SapService {
     /// # Errors
     /// See [`Self::store_amd_headers`].
     pub fn store_amd_headers_blocking(&self) -> StoreAuthResult<StoreAmdHeaders> {
-        self.call_blocking(Worker::store_amd)
+        let started = Instant::now();
+        let result = self.call_blocking(Worker::store_amd);
+        observed("store_amd_headers", started, result)
     }
 
     /// Raw kbsync for account `dsid` on `hardware_id`.
@@ -267,9 +341,12 @@ impl SapService {
     /// # Errors
     /// Asset or guest failures (including a zero DSID).
     pub async fn kbsync(&self, hardware_id: &[u8], dsid: u64) -> StoreAuthResult<Vec<u8>> {
+        let started = Instant::now();
         let hardware_id = hardware_id.to_vec();
-        self.call(move |worker| worker.kbsync(&hardware_id, dsid))
-            .await
+        let result = self
+            .call(move |worker| worker.kbsync(&hardware_id, dsid))
+            .await;
+        observed("kbsync", started, result)
     }
 
     /// Blocking [`Self::kbsync`].
@@ -277,8 +354,10 @@ impl SapService {
     /// # Errors
     /// See [`Self::kbsync`].
     pub fn kbsync_blocking(&self, hardware_id: &[u8], dsid: u64) -> StoreAuthResult<Vec<u8>> {
+        let started = Instant::now();
         let hardware_id = hardware_id.to_vec();
-        self.call_blocking(move |worker| worker.kbsync(&hardware_id, dsid))
+        let result = self.call_blocking(move |worker| worker.kbsync(&hardware_id, dsid));
+        observed("kbsync", started, result)
     }
 
     /// Opens a fresh SAP session for the bag's `sign-sap-setup` endpoints,
@@ -287,7 +366,9 @@ impl SapService {
     /// # Errors
     /// Invalid configuration, asset, guest or setup-handshake failures.
     pub async fn connect_sap(&self, config: SignerConfig) -> StoreAuthResult<()> {
-        self.call(move |worker| worker.connect_sap(config)).await
+        let started = Instant::now();
+        let result = self.call(move |worker| worker.connect_sap(config)).await;
+        observed("connect_sap", started, result)
     }
 
     /// `X-Apple-ActionSignature` bytes for `input`.
@@ -296,8 +377,10 @@ impl SapService {
     /// [`StoreAuthError::NoSapSession`] before [`Self::connect_sap`]; guest
     /// failures otherwise.
     pub async fn sign(&self, input: &[u8]) -> StoreAuthResult<Vec<u8>> {
+        let started = Instant::now();
         let input = input.to_vec();
-        self.call(move |worker| worker.sign(&input)).await
+        let result = self.call(move |worker| worker.sign(&input)).await;
+        observed("sign", started, result)
     }
 
     /// Blocking [`Self::sign`].
@@ -305,7 +388,53 @@ impl SapService {
     /// # Errors
     /// See [`Self::sign`].
     pub fn sign_blocking(&self, input: &[u8]) -> StoreAuthResult<Vec<u8>> {
+        let started = Instant::now();
         let input = input.to_vec();
-        self.call_blocking(move |worker| worker.sign(&input))
+        let result = self.call_blocking(move |worker| worker.sign(&input));
+        observed("sign", started, result)
     }
+}
+
+/// Records the outcome of a service operation and passes `result` through.
+///
+/// Only the operation name, outcome, duration and a stable error category
+/// are logged: never inputs, outputs (OTP, MID, kbsync, signatures) or error
+/// text, which may carry server-provided detail or local paths.
+fn observed<T>(
+    operation: &'static str,
+    started: Instant,
+    result: StoreAuthResult<T>,
+) -> StoreAuthResult<T> {
+    let duration_ms = elapsed_ms(started);
+    match &result {
+        Ok(_) => tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation,
+            event_name = "apple_sap.operation.completed",
+            outcome = "success",
+            duration_ms,
+            "Apple SAP operation completed"
+        ),
+        Err(StoreAuthError::StoreNotProvisioned) => tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation,
+            event_name = "apple_sap.operation.completed",
+            outcome = "not_provisioned",
+            duration_ms,
+            "Store AMD state is not provisioned yet"
+        ),
+        Err(error) => tracing::warn!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation,
+            event_name = "apple_sap.operation.failed",
+            outcome = "failure",
+            error_type = error.kind(),
+            duration_ms,
+            "Apple SAP operation failed"
+        ),
+    }
+    result
 }

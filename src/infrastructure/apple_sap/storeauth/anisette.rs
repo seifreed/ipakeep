@@ -15,6 +15,7 @@ use super::error::{StoreAuthError, StoreAuthResult};
 use super::state::AnisetteState;
 use super::xml::{XmlValue, document};
 use crate::infrastructure::apple_sap::machine::modern_adi::AdiOtp;
+use crate::infrastructure::http::telemetry::send_with_observability;
 
 /// Largest accepted response body and decoded field (Go `anisetteLimit`).
 pub const ANISETTE_LIMIT: usize = 1 << 20;
@@ -247,7 +248,7 @@ async fn send(
     body: Vec<u8>,
 ) -> StoreAuthResult<plist::Dictionary> {
     let (local_user, device) = identity_headers(identifier);
-    let response = client
+    let request = client
         .post(url)
         .header("Accept", "*/*")
         .header("Connection", "close")
@@ -256,10 +257,9 @@ async fn send(
         .header(LU_HEADER, local_user)
         .header(CLIENT_INFO_HEADER, ANISETTE_CLIENT_INFO)
         .header(DEVICE_ID_HEADER, device)
-        .body(body)
-        .send()
-        .await
-        .map_err(http("send anisette provisioning request"))?;
+        .body(body);
+    let sent = send_with_observability(client, request).await;
+    let response = sent.map_err(http("send anisette provisioning request"))?;
     let status = response.status().as_u16();
     let body = read_limited(response, "read anisette provisioning response").await?;
     parse_response(status, &body)
@@ -337,6 +337,7 @@ pub(super) fn http(context: &'static str) -> impl FnOnce(reqwest::Error) -> Stor
 mod tests {
     use super::super::test_support::{golden, hex_at, local_endpoints, recorded_gsa};
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use std::time::{Duration, UNIX_EPOCH};
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -476,6 +477,8 @@ mod tests {
 
     #[tokio::test]
     async fn replays_the_recorded_gsa_exchanges_over_http() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
         let golden = golden();
         let server = recorded_gsa().await;
         let endpoints = local_endpoints(&server);
@@ -492,6 +495,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(finish.routing_info, 84_215_040);
+
+        let logs = capture.contents();
+        assert!(logs.contains("http.response.headers_received"), "{logs}");
+        assert!(logs.contains("method=\"POST\""));
+        assert!(logs.contains("status=200"));
+        let (local_user, device) = identity_headers(&identifier);
+        for secret in [
+            hex::encode(&identifier),
+            local_user,
+            device,
+            STANDARD.encode(&spim),
+            STANDARD.encode(&cpim),
+            STANDARD.encode(&finish.setting_info),
+            STANDARD.encode(&finish.transport_key),
+            "MidService".to_owned(),
+        ] {
+            assert!(!logs.contains(&secret), "{secret} leaked");
+        }
     }
 
     #[tokio::test]

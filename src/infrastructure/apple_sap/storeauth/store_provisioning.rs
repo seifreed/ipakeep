@@ -13,6 +13,7 @@ use super::anisette::{
 };
 use super::error::StoreAuthResult;
 use super::xml::{XmlValue, document};
+use crate::infrastructure::http::telemetry::send_with_observability;
 
 /// Upstream `privateAppStoreProvisioningURL`.
 pub const STORE_PROVISIONING_URL: &str = "https://auth.itunes.apple.com/auth/v1/otp/1.5/finish";
@@ -85,14 +86,13 @@ pub async fn finish_store(
     for (name, value) in identity_headers(request.identity) {
         builder = builder.header(name, value);
     }
-    let response = builder
+    let builder = builder
         .header("Accept", "*/*")
         .header("Content-Type", "application/x-apple-plist")
         .header("User-Agent", request.user_agent)
-        .body(finish_body(cpim, request.kbsync))
-        .send()
-        .await
-        .map_err(http("send Apple Store provisioning request"))?;
+        .body(finish_body(cpim, request.kbsync));
+    let sent = send_with_observability(request.client, builder).await;
+    let response = sent.map_err(http("send Apple Store provisioning request"))?;
     let status = response.status().as_u16();
     let body = read_limited(response, "read Apple Store provisioning response").await?;
     parse_finish(status, &body)
@@ -156,6 +156,7 @@ fn key_bag(result: &plist::Dictionary) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use wiremock::matchers::{body_bytes, header, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -242,7 +243,15 @@ mod tests {
             hardware_id: &[2, 0, 0, 0, 0, 1],
             identity: &identity,
         };
+        let capture = LogCapture::default();
+        let guard = capture.install();
         finish_store(&request, &[7]).await.unwrap();
+        drop(guard);
+        let logs = capture.contents();
+        assert!(logs.contains("http.response.headers_received"), "{logs}");
+        for secret in ["otp", "mid", "\"lu\"", "kb", "AQID", "BAU=", "/finish"] {
+            assert!(!logs.contains(secret), "{secret} leaked: {logs}");
+        }
         let received = &server.received_requests().await.unwrap()[0];
         assert!(received.headers.get("X-Apple-I-MD").is_none());
         assert!(received.headers.get("X-Apple-I-MD-M").is_none());

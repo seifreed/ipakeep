@@ -8,12 +8,14 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use zip::result::ZipError;
 use zip::{CompressionMethod, ZipArchive};
 
 use super::aea::{AeaError, AeaReader};
 use super::http_range::{BlockingHttp, HttpRangeError, ReadAt, RemoteFile, SectionReader};
+use crate::infrastructure::observability::elapsed_ms;
 
 /// Pinned macOS version.
 pub const MACOS_VERSION: &str = "27.0.1";
@@ -189,7 +191,20 @@ impl RestoreImage<RemoteFile> {
     /// # Errors
     /// See [`RestoreImage::open_pinned`].
     pub fn open_url(http: Arc<BlockingHttp>, url: &str) -> Result<Self, RemoteError> {
-        Self::new(RemoteFile::open(http, url)?)
+        let started = Instant::now();
+        let image = Self::new(RemoteFile::open(http, url)?)?;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "open_restore_image",
+            event_name = "apple_sap.assets.restore_image_opened",
+            outcome = "success",
+            image_bytes = image.source.size(),
+            entries = image.len(),
+            duration_ms = elapsed_ms(started),
+            "opened the remote macOS restore image"
+        );
+        Ok(image)
     }
 
     /// Opens a pinned encrypted member, downloading its FCS key.
@@ -208,6 +223,16 @@ impl RestoreImage<RemoteFile> {
                 source,
             })?;
         check_image_size(member, &image, decrypted_size)?;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "open_encrypted_image",
+            event_name = "apple_sap.assets.encrypted_image_opened",
+            outcome = "success",
+            member = member.name,
+            decrypted_bytes = decrypted_size,
+            "opened an encrypted restore image member"
+        );
         Ok(image)
     }
 
@@ -298,6 +323,7 @@ impl<R: ReadAt> RestoreImage<R> {
     /// # Errors
     /// Fails on mismatches, read or inflate errors, or a wrong decoded size.
     pub fn read_member(&self, member: &PinnedMember) -> Result<Vec<u8>, RemoteError> {
+        let started = Instant::now();
         self.member_data_range(member)?;
         let mut archive = self.lock_archive();
         let entry = archive.by_name(member.name)?;
@@ -316,6 +342,17 @@ impl<R: ReadAt> RestoreImage<R> {
                 expected: member.uncompressed_size,
             });
         }
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "read_member",
+            event_name = "apple_sap.assets.member_read",
+            outcome = "success",
+            member = member.name,
+            member_bytes = data.len(),
+            duration_ms = elapsed_ms(started),
+            "read and verified a restore image member"
+        );
         Ok(data)
     }
 

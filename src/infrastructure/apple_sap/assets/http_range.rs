@@ -12,11 +12,15 @@
 
 use std::future::Future;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use reqwest::StatusCode;
 use reqwest::header::{CONTENT_RANGE, RANGE, USER_AGENT};
 use tokio::runtime::{Builder, Runtime};
+
+use crate::infrastructure::observability::elapsed_ms;
 
 /// Number of attempts made to complete one HTTP range read.
 const REMOTE_READ_ATTEMPTS: usize = 3;
@@ -289,7 +293,15 @@ impl BlockingHttp {
             .runtime
             .as_ref()
             .ok_or(HttpRangeError::RuntimeUnavailable)?;
-        std::thread::scope(|scope| scope.spawn(|| runtime.block_on(future)).join())
+        // Keep the caller's subscriber and span on the scoped thread.
+        let dispatch = tracing::dispatcher::get_default(Clone::clone);
+        let span = tracing::Span::current();
+        let run = || {
+            tracing::dispatcher::with_default(&dispatch, || {
+                span.in_scope(|| runtime.block_on(future))
+            })
+        };
+        std::thread::scope(|scope| scope.spawn(run).join())
             .map_err(|_| HttpRangeError::WorkerPanicked)
     }
 
@@ -423,6 +435,14 @@ pub struct RemoteFile {
     url: String,
     size: u64,
     cache: Mutex<ReadCache>,
+    transfers: TransferStats,
+}
+
+/// Network volume of one [`RemoteFile`], reported when it is dropped.
+#[derive(Debug, Default)]
+struct TransferStats {
+    requests: AtomicU64,
+    bytes: AtomicU64,
 }
 
 impl RemoteFile {
@@ -431,12 +451,25 @@ impl RemoteFile {
     /// # Errors
     /// Fails when the server lacks byte-range support or answers inconsistently.
     pub fn open(http: Arc<BlockingHttp>, url: &str) -> Result<Self, HttpRangeError> {
+        let started = Instant::now();
         let size = http.block_on(probe_size(&http, url))??;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "open_remote_file",
+            event_name = "apple_sap.assets.remote_file_opened",
+            outcome = "success",
+            host = host_of(url),
+            remote_bytes = size,
+            duration_ms = elapsed_ms(started),
+            "probed a remote file for byte-range reads"
+        );
         Ok(Self {
             http,
             url: url.to_owned(),
             size,
             cache: Mutex::new(ReadCache::default()),
+            transfers: TransferStats::default(),
         })
     }
 
@@ -482,7 +515,12 @@ impl RemoteFile {
         };
         let mut buffer = vec![0; fetch_size];
         self.http
-            .block_on(read_range(&self.http, self, &mut buffer, offset))??;
+            .block_on(read_range(&self.http, self, &mut buffer, offset))?
+            .inspect_err(|error| log_range_failure(&self.url, offset, error))?;
+        self.transfers.requests.fetch_add(1, Ordering::Relaxed);
+        self.transfers
+            .bytes
+            .fetch_add(fetch_size as u64, Ordering::Relaxed);
         data.copy_from_slice(&buffer[..wanted]);
         if fetch_size <= REMOTE_READ_AHEAD_SIZE {
             let mut cache = self.lock_cache();
@@ -509,6 +547,61 @@ impl ReadAt for RemoteFile {
     fn size(&self) -> u64 {
         self.size
     }
+}
+
+impl Drop for RemoteFile {
+    fn drop(&mut self) {
+        let requests = self.transfers.requests.load(Ordering::Relaxed);
+        if requests == 0 {
+            return;
+        }
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "read_remote_file",
+            event_name = "apple_sap.assets.remote_transfer_summary",
+            host = host_of(&self.url),
+            requests,
+            transferred_bytes = self.transfers.bytes.load(Ordering::Relaxed),
+            remote_bytes = self.size,
+            "remote byte-range transfer summary"
+        );
+    }
+}
+
+/// The URL's host only: paths and queries may carry signed parameters.
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+/// A stable category for a range-read failure; error text is not logged.
+fn range_error_type(error: &HttpRangeError) -> &'static str {
+    match error {
+        HttpRangeError::Status { .. } => "http_status",
+        HttpRangeError::RangeMismatch { .. } | HttpRangeError::InvalidContentRange(_) => {
+            "invalid_range"
+        }
+        HttpRangeError::Incomplete { .. } => "incomplete",
+        HttpRangeError::Request { .. } => "transport",
+        _ => "other",
+    }
+}
+
+fn log_range_failure(url: &str, offset: u64, error: &HttpRangeError) {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "read_remote_file",
+        event_name = "apple_sap.assets.range_read_failed",
+        outcome = "failure",
+        host = host_of(url),
+        offset,
+        error_type = range_error_type(error),
+        "remote byte-range read failed"
+    );
 }
 
 async fn probe_size(http: &BlockingHttp, url: &str) -> Result<u64, HttpRangeError> {
@@ -542,7 +635,7 @@ async fn read_range(
 ) -> Result<(), HttpRangeError> {
     let mut total = 0;
     let mut last_error = String::from("unexpected EOF");
-    for _ in 0..REMOTE_READ_ATTEMPTS {
+    for attempt in 1..=REMOTE_READ_ATTEMPTS {
         if total == data.len() {
             break;
         }
@@ -550,13 +643,22 @@ async fn read_range(
             Ok((count, None)) => total += count,
             Ok((count, Some(reason))) => {
                 total += count;
+                log_range_retry(file, attempt, offset + total as u64, "interrupted_body");
                 last_error = reason;
             }
             Err(error @ (HttpRangeError::Status { .. } | HttpRangeError::RangeMismatch { .. })) => {
                 return Err(error);
             }
             Err(error @ HttpRangeError::InvalidContentRange(_)) => return Err(error),
-            Err(error) => last_error = error.to_string(),
+            Err(error) => {
+                log_range_retry(
+                    file,
+                    attempt,
+                    offset + total as u64,
+                    range_error_type(&error),
+                );
+                last_error = error.to_string();
+            }
         }
     }
     if total == data.len() {
@@ -566,6 +668,22 @@ async fn read_range(
         offset: offset + total as u64,
         reason: last_error,
     })
+}
+
+fn log_range_retry(file: &RemoteFile, attempt: usize, offset: u64, error_type: &'static str) {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "read_remote_file",
+        event_name = "apple_sap.assets.range_read_retry",
+        outcome = "retry",
+        host = host_of(&file.url),
+        attempt,
+        max_attempts = REMOTE_READ_ATTEMPTS,
+        offset,
+        error_type,
+        "remote byte-range read was interrupted; resuming"
+    );
 }
 
 /// One request for `data`: returns bytes received and a retryable failure.
@@ -620,6 +738,7 @@ async fn fill_from_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use wiremock::matchers::method;
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -781,6 +900,94 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logs_transfer_summary_by_host_only() {
+        let fixture = serve(pattern(4096)).await;
+        let url = format!("{}?signature=SIGNED-SENTINEL", fixture.url);
+        let logs = tokio::task::spawn_blocking(move || {
+            let capture = LogCapture::default();
+            let _guard = capture.install();
+            let remote = open(&url);
+            let mut data = [0; 64];
+            remote.read_at(&mut data, 100).unwrap();
+            drop(remote);
+            capture.contents()
+        })
+        .await
+        .unwrap();
+        assert!(
+            logs.contains("apple_sap.assets.remote_file_opened"),
+            "{logs}"
+        );
+        assert!(logs.contains("apple_sap.assets.remote_transfer_summary"));
+        assert!(logs.contains("host=\"127.0.0.1\""));
+        assert!(logs.contains("requests=1"));
+        assert!(logs.contains("transferred_bytes=64"));
+        assert!(!logs.contains("SIGNED-SENTINEL"));
+        assert!(!logs.contains("restore.ipsw"));
+    }
+
+    struct ProbeOnly;
+
+    impl Respond for ProbeOnly {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let range = request.headers.get("range").and_then(|v| v.to_str().ok());
+            if range == Some("bytes=0-0") {
+                return ResponseTemplate::new(206)
+                    .insert_header("content-range", "bytes 0-0/100")
+                    .set_body_bytes(vec![0]);
+            }
+            ResponseTemplate::new(503)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn logs_range_failures_with_a_stable_category() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ProbeOnly)
+            .mount(&server)
+            .await;
+        let url = format!("{}/image?token=TOKEN-SENTINEL", server.uri());
+        let logs = tokio::task::spawn_blocking(move || {
+            let capture = LogCapture::default();
+            let _guard = capture.install();
+            let remote = open(&url);
+            let mut data = [0; 8];
+            assert!(remote.read_at(&mut data, 10).is_err());
+            capture.contents()
+        })
+        .await
+        .unwrap();
+        assert!(logs.contains("WARN"), "{logs}");
+        assert!(logs.contains("apple_sap.assets.range_read_failed"));
+        assert!(logs.contains("error_type=\"http_status\""));
+        assert!(logs.contains("offset=10"));
+        assert!(!logs.contains("TOKEN-SENTINEL"));
+        assert!(!logs.contains("remote_transfer_summary"));
+    }
+
+    #[test]
+    fn classifies_range_errors_without_their_text() {
+        let status = HttpRangeError::Status {
+            context: "x",
+            status: StatusCode::SERVICE_UNAVAILABLE,
+        };
+        assert_eq!(range_error_type(&status), "http_status");
+        let invalid = HttpRangeError::InvalidContentRange("x".into());
+        assert_eq!(range_error_type(&invalid), "invalid_range");
+        let incomplete = HttpRangeError::Incomplete {
+            offset: 0,
+            reason: "x".into(),
+        };
+        assert_eq!(range_error_type(&incomplete), "incomplete");
+        assert_eq!(
+            range_error_type(&HttpRangeError::RuntimeUnavailable),
+            "other"
+        );
+        assert_eq!(host_of("not a url"), "unknown");
     }
 
     #[test]

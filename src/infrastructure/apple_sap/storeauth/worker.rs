@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
 use super::anisette::{AnisetteHeaders, MachineFinish, build_headers};
 use super::error::{StoreAuthError, StoreAuthResult};
@@ -21,6 +22,7 @@ use crate::infrastructure::apple_sap::machine::modern_adi::{
 use crate::infrastructure::apple_sap::machine::sap::{GuestEnvironment, MachineError};
 use crate::infrastructure::apple_sap::protocol::ReqwestTransport;
 use crate::infrastructure::apple_sap::signer::{SapSigner, SignerConfig};
+use crate::infrastructure::observability::elapsed_ms;
 
 /// adid status for a DSID that was never provisioned.
 const NOT_PROVISIONED_STATUS: i32 = -45061;
@@ -113,6 +115,14 @@ pub(super) fn run(config: WorkerConfig, jobs: &Receiver<Job>) {
     for job in jobs {
         job(&mut worker);
     }
+    tracing::debug!(
+        service = "ipakeep",
+        component = "apple_sap",
+        operation = "shutdown",
+        event_name = "apple_sap.worker.stopped",
+        outcome = "success",
+        "Apple SAP worker thread stopped"
+    );
 }
 
 fn is_not_provisioned(error: &MachineError) -> bool {
@@ -130,10 +140,23 @@ impl Worker {
         if let Some(bundle) = &self.bundle {
             return Ok(Arc::clone(bundle));
         }
-        let bundle = match &self.bundle_source {
-            BundleSource::Shared => bundle::load()?,
-            BundleSource::Directory(directory) => Arc::new(bundle::read_bundle(directory)?),
+        let started = Instant::now();
+        let (bundle, source) = match &self.bundle_source {
+            BundleSource::Shared => (bundle::load()?, "shared_cache"),
+            BundleSource::Directory(directory) => {
+                (Arc::new(bundle::read_bundle(directory)?), "directory")
+            }
         };
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "load_assets",
+            event_name = "apple_sap.worker.assets_ready",
+            outcome = "success",
+            source,
+            duration_ms = elapsed_ms(started),
+            "Apple SAP assets ready on the worker"
+        );
         self.bundle = Some(Arc::clone(&bundle));
         Ok(bundle)
     }
@@ -156,7 +179,17 @@ impl Worker {
 
     fn persist(&self, state: &AnisetteState) -> StoreAuthResult<()> {
         let lock = self.state.lock()?;
-        self.state.write(&lock, state)
+        self.state.write(&lock, state)?;
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "persist_state",
+            event_name = "apple_sap.anisette.state_persisted",
+            outcome = "success",
+            provisioning_bytes = state.provisioning.len(),
+            "persisted the anisette provisioning state"
+        );
+        Ok(())
     }
 
     /// Opens the persisted provisioning once; `false` when there is none.
@@ -164,7 +197,21 @@ impl Worker {
         if self.machine.is_some() {
             return Ok(true);
         }
-        let Some(state) = self.read_state()?.filter(AnisetteState::is_provisioned) else {
+        let state = self.read_state()?;
+        let outcome = match &state {
+            None => "missing",
+            Some(state) if !state.is_provisioned() => "not_provisioned",
+            Some(_) => "found",
+        };
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "load_state",
+            event_name = "apple_sap.anisette.state_loaded",
+            outcome,
+            "read the persisted anisette provisioning state"
+        );
+        let Some(state) = state.filter(AnisetteState::is_provisioned) else {
             return Ok(false);
         };
         self.machine = Some(self.open_session(state)?);
@@ -198,12 +245,29 @@ impl Worker {
             return Ok(None);
         };
         if session.state.routing_info == 0 {
+            tracing::debug!(
+                service = "ipakeep",
+                component = "apple_sap",
+                operation = "anisette_headers",
+                event_name = "apple_sap.anisette.reuse_skipped",
+                outcome = "missing_routing_info",
+                "persisted anisette provisioning has no routing information"
+            );
             return Ok(None);
         }
         let otp = match session.adi.request_otp(MACHINE_PROVISIONING_DSID) {
             Ok(otp) => otp,
             Err(error) => {
-                tracing::debug!(%error, "persisted anisette provisioning is not reusable");
+                tracing::warn!(
+                    service = "ipakeep",
+                    component = "apple_sap",
+                    operation = "anisette_headers",
+                    event_name = "apple_sap.anisette.reuse_rejected",
+                    outcome = "reprovision",
+                    error_type = "machine",
+                    %error,
+                    "persisted anisette provisioning is not reusable; provisioning again"
+                );
                 return Ok(None);
             }
         };
@@ -304,9 +368,19 @@ impl Worker {
         let mut pending = self.take_pending()?;
         let adi = &mut pending.adi;
         adi.end_provisioning(session, &finish.setting_info, &finish.transport_key)?;
-        if !finish.key_bag.is_empty() {
+        let key_bag_imported = !finish.key_bag.is_empty();
+        if key_bag_imported {
             adi.import_key_bag(hardware_id, &finish.key_bag)?;
         }
+        tracing::debug!(
+            service = "ipakeep",
+            component = "apple_sap",
+            operation = "provision_store",
+            event_name = "apple_sap.store.provisioning_finished",
+            outcome = "success",
+            key_bag_imported,
+            "Store ADI provisioning finished on the worker"
+        );
         pending.state.provisioning = adi.state()?;
         self.persist(&pending.state)?;
         self.machine = Some(pending);

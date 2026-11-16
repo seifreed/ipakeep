@@ -11,6 +11,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use thiserror::Error;
 
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
+
 /// Plist key of the setup certificate in the bag's certificate document.
 pub const SETUP_CERTIFICATE_KEY: &str = "sign-sap-setup-cert";
 /// Plist key of the setup message in both directions.
@@ -111,13 +113,11 @@ impl SetupTransport for ReqwestTransport {
         for (name, value) in request.headers {
             builder = builder.header(name, value);
         }
-        let response = builder.send().await.map_err(transport)?;
+        let sent = send_with_observability(&self.client, builder).await;
+        let response = sent.map_err(transport)?;
         let status = response.status().as_u16();
-        let body = response.bytes().await.map_err(transport)?;
-        Ok(SetupResponse {
-            status,
-            body: body.to_vec(),
-        })
+        let body = read_response_bytes(response).await.map_err(transport)?;
+        Ok(SetupResponse { status, body })
     }
 }
 
@@ -205,6 +205,7 @@ pub async fn exchange_setup(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
 
     fn golden() -> serde_json::Value {
         let path = concat!(
@@ -323,6 +324,8 @@ mod tests {
             .mount(&server)
             .await;
         let transport = ReqwestTransport::new(reqwest::Client::new());
+        let capture = LogCapture::default();
+        let guard = capture.install();
 
         let certificate = fetch_certificate(&transport, &format!("{}/cert", server.uri()))
             .await
@@ -331,8 +334,22 @@ mod tests {
             .await
             .unwrap();
 
+        drop(guard);
         assert_eq!(certificate, b"cert");
         assert_eq!(reply, b"reply");
+        let logs = capture.contents();
+        assert!(logs.contains("http.response.headers_received"), "{logs}");
+        assert!(logs.contains("http.response.body_read"));
+        for secret in [
+            "/cert",
+            "/setup",
+            "Y2VydA==",
+            "cmVwbHk=",
+            "aGVsbG8=",
+            SETUP_BUFFER_KEY,
+        ] {
+            assert!(!logs.contains(secret), "{secret} leaked: {logs}");
+        }
     }
 
     #[tokio::test]
