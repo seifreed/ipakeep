@@ -584,13 +584,18 @@ mod tests {
     const NOW: u64 = 1_700_000_000;
     const SESSION: u32 = 42;
     const REVISION: u32 = 99;
+    // Distinctive fake secrets: they cannot appear in logs by coincidence.
+    const TOKEN: &str = "fake-token-QZ7XK4M9";
+    const DSID: &str = "9073814265031";
+    const SIGNATURE: &[u8] = b"fake-signature-QZ7XP5C3";
+    const SIGNATURE_B64: &str = "ZmFrZS1zaWduYXR1cmUtUVo3WFA1QzM=";
 
     fn account() -> Account {
         Account {
             email: String::new(),
             name: String::new(),
-            password_token: "token".into(),
-            directory_services_id: "1234".into(),
+            password_token: TOKEN.into(),
+            directory_services_id: DSID.into(),
             store_front: "143441-1,29".into(),
             pod: String::new(),
             idms_token: None,
@@ -667,7 +672,7 @@ mod tests {
         let recorder = Arc::clone(signed);
         let mut sign = move |body: &[u8]| {
             recorder.lock().expect("lock").push(body.to_vec());
-            Ok(b"sig".to_vec())
+            Ok(SIGNATURE.to_vec())
         };
         let mut context = OwnedAppsContext {
             client: &client,
@@ -731,7 +736,7 @@ mod tests {
             assert_eq!(logs.matches(&event).count(), 2, "{step}");
         }
         assert!(logs.contains("appstore.owned_apps.merged") && logs.contains("count=1"));
-        for secret in ["token", "1234", GUID, "c2ln", "session-id"] {
+        for secret in [TOKEN, DSID, GUID, SIGNATURE_B64, "session-id"] {
             assert!(!logs.contains(secret), "{secret} leaked");
         }
     }
@@ -751,9 +756,9 @@ mod tests {
                 .all(|request| header(request, "Date").is_none())
         );
         let common = [
-            ("X-Dsid", "1234"),
-            ("iCloud-DSID", "1234"),
-            ("X-Token", "token"),
+            ("X-Dsid", DSID),
+            ("iCloud-DSID", DSID),
+            ("X-Token", TOKEN),
             ("X-Guid", GUID),
             ("Client-DAAP-Version", "3.12"),
             ("Client-Cloud-Purchase-Daap-Version", "1.1/Configurator-2.0"),
@@ -773,7 +778,7 @@ mod tests {
             assert_eq!(header(&requests[index], name).as_deref(), Some(value));
         };
         expect(1, "Content-Type", "application/x-www-form-urlencoded");
-        expect(1, "X-Apple-ActionSignature", "c2ln");
+        expect(1, "X-Apple-ActionSignature", SIGNATURE_B64);
         expect(2, "Content-Type", "application/x-dmap-tagged");
     }
 

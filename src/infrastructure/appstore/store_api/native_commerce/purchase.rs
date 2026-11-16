@@ -301,7 +301,7 @@ mod tests {
         let owned = MockServer::start().await;
         let license = failure(
             FAILURE_LICENSE_EXISTS,
-            "You already own it, user@example.com",
+            &format!("You already own it, {EMAIL}"),
         );
         mount(&owned, PRICING_APP_STORE, 200, license).await;
         let rejected = MockServer::start().await;
@@ -314,20 +314,24 @@ mod tests {
         let logs = capture.contents();
         assert!(logs.contains("outcome=\"already_owned\"") && logs.contains("failure_type=5002"));
         assert!(logs.contains("outcome=\"failure\"") && logs.contains("customer_message=redacted"));
-        for secret in ["user@example.com", "token", "1234", GUID] {
+        for secret in [EMAIL, TOKEN, DSID, GUID] {
             assert!(!logs.contains(secret), "{secret} leaked");
         }
     }
 
     const GUID: &str = "AABBCCDDEEFF";
+    // Distinctive fake secrets: they cannot appear in logs by coincidence.
+    const EMAIL: &str = "fake-user-QZ7XM3T6@example.com";
+    const TOKEN: &str = "fake-token-QZ7XK4M9";
+    const DSID: &str = "9073814265031";
     const APP: i64 = 1_234_567_890;
 
     fn account() -> Account {
         Account {
-            email: "user@example.com".into(),
+            email: EMAIL.into(),
             name: "User".into(),
-            password_token: "token".into(),
-            directory_services_id: "1234".into(),
+            password_token: TOKEN.into(),
+            directory_services_id: DSID.into(),
             store_front: "143441-1,29".into(),
             pod: "48".into(),
             idms_token: None,
@@ -425,13 +429,13 @@ mod tests {
             Some("application/x-apple-plist")
         );
         assert_eq!(header("User-Agent").as_deref(), Some(STORE_USER_AGENT));
-        assert_eq!(header("iCloud-DSID").as_deref(), Some("1234"));
-        assert_eq!(header("X-Dsid").as_deref(), Some("1234"));
+        assert_eq!(header("iCloud-DSID").as_deref(), Some(DSID));
+        assert_eq!(header("X-Dsid").as_deref(), Some(DSID));
         assert_eq!(
             header("X-Apple-Store-Front").as_deref(),
             Some("143441-1,29")
         );
-        assert_eq!(header("X-Token").as_deref(), Some("token"));
+        assert_eq!(header("X-Token").as_deref(), Some(TOKEN));
         assert_eq!(header("Accept-Language").as_deref(), Some("en"));
         assert_eq!(
             header("X-Apple-Client-Application").as_deref(),

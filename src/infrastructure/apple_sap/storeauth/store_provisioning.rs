@@ -215,20 +215,25 @@ mod tests {
 
     #[tokio::test]
     async fn sends_identity_without_machine_proof() {
+        // Distinctive fake secrets: they cannot appear in logs by coincidence.
+        const OTP: &str = "fake-otp-QZ7XB8L4";
+        const MID: &str = "fake-mid-QZ7XD6F1";
+        const LU: &str = "fake-lu-QZ7XG9S7";
+        const KBSYNC: &str = "fake-kbsync-QZ7XJ3V2";
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(header("X-Apple-I-MD-LU", "lu"))
+            .and(header("X-Apple-I-MD-LU", LU))
             .and(header("User-Agent", "ua"))
             .and(header("Content-Type", "application/x-apple-plist"))
-            .and(body_bytes(finish_body(&[7], "kb")))
+            .and(body_bytes(finish_body(&[7], KBSYNC)))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(response(None)))
             .expect(1)
             .mount(&server)
             .await;
         let identity = [
-            ("X-Apple-I-MD".to_owned(), "otp".to_owned()),
-            ("x-apple-i-md-m".to_owned(), "mid".to_owned()),
-            ("X-Apple-I-MD-LU".to_owned(), "lu".to_owned()),
+            ("X-Apple-I-MD".to_owned(), OTP.to_owned()),
+            ("x-apple-i-md-m".to_owned(), MID.to_owned()),
+            ("X-Apple-I-MD-LU".to_owned(), LU.to_owned()),
             ("User-Agent".to_owned(), "other".to_owned()),
         ];
         let client = crate::infrastructure::http::client_builder()
@@ -239,7 +244,7 @@ mod tests {
             challenge: "",
             endpoint: &server.uri(),
             user_agent: "ua",
-            kbsync: "kb",
+            kbsync: KBSYNC,
             hardware_id: &[2, 0, 0, 0, 0, 1],
             identity: &identity,
         };
@@ -249,7 +254,7 @@ mod tests {
         drop(guard);
         let logs = capture.contents();
         assert!(logs.contains("http.response.headers_received"), "{logs}");
-        for secret in ["otp", "mid", "\"lu\"", "kb", "AQID", "BAU=", "/finish"] {
+        for secret in [OTP, MID, LU, KBSYNC, "AQID", "BAU=", "/finish"] {
             assert!(!logs.contains(secret), "{secret} leaked: {logs}");
         }
         let received = &server.received_requests().await.unwrap()[0];

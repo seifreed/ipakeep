@@ -10,6 +10,10 @@ const AUTHENTICATE_PATH: &str = "/WebObjects/MZFinance.woa/wa/authenticate/";
 const BUY_PATH: &str = "/WebObjects/MZFinance.woa/wa/buyProduct";
 const VOLUME_PATH: &str = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct";
 const BAD_LOGIN: &str = "MZFinance.BadLogin.Configurator_message";
+// Distinctive fake secrets: they cannot appear in logs by coincidence.
+const PASSWORD: &str = "fake-password-QZ7XH2N5";
+const TOKEN: &str = "fake-token-QZ7XK4M9";
+const DSID: &str = "9073814265031";
 
 #[derive(Default)]
 struct FakeMachine {
@@ -141,11 +145,11 @@ fn plist_response(entries: &str) -> ResponseTemplate {
 }
 
 fn signed_in() -> ResponseTemplate {
-    plist_response(
-        "<key>passwordToken</key><string>pt</string>\
-         <key>dsPersonId</key><string>8765</string>\
+    plist_response(&format!(
+        "<key>passwordToken</key><string>{TOKEN}</string>\
+         <key>dsPersonId</key><string>{DSID}</string>\
          <key>accountInfo</key><dict><key>appleId</key><string>user@example.com</string></dict>",
-    )
+    ))
     .insert_header("X-Set-Apple-Store-Front", "143441-1,29")
     .insert_header("pod", "48")
 }
@@ -153,7 +157,7 @@ fn signed_in() -> ResponseTemplate {
 fn credentials(auth_code: Option<&str>) -> Credentials<'_> {
     Credentials {
         email: "user@example.com",
-        password: "secret",
+        password: PASSWORD,
         auth_code,
     }
 }
@@ -167,8 +171,8 @@ fn account() -> Account {
     Account {
         email: "user@example.com".into(),
         name: "User".into(),
-        password_token: "pt".into(),
-        directory_services_id: "8765".into(),
+        password_token: TOKEN.into(),
+        directory_services_id: DSID.into(),
         store_front: "143441-1,29".into(),
         pod: String::new(),
         idms_token: None,
@@ -209,8 +213,8 @@ async fn two_factor_sign_in_reuses_the_persisted_cookie_session() {
         .await
         .expect("coded sign-in");
 
-    assert_eq!(account.password_token, "pt");
-    assert_eq!(account.directory_services_id, "8765");
+    assert_eq!(account.password_token, TOKEN);
+    assert_eq!(account.directory_services_id, DSID);
     assert_eq!(account.store_front, "143441-1,29");
     assert!(harness.directory.path().join(STORE_COOKIES_FILE).exists());
     let sap = harness
@@ -248,7 +252,7 @@ async fn sign_in_runs_store_provisioning_and_retries_with_the_store_amd_proof() 
         .await
         .expect("sign-in after Store provisioning");
 
-    assert_eq!(account.password_token, "pt");
+    assert_eq!(account.password_token, TOKEN);
     assert_eq!(
         *harness.machine.provisioned_challenges.lock().expect("lock"),
         ["Y2hhbGxlbmdl"]
@@ -420,10 +424,11 @@ fn find_event<'a>(
 fn assert_no_secrets(logs: &str) {
     for secret in [
         "user@example.com",
-        "secret",
+        PASSWORD,
+        TOKEN,
         "123456",
         GUID,
-        "8765",
+        DSID,
         "pending-2fa",
         "anisette-otp",
         "anisette-mid",

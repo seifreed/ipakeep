@@ -893,7 +893,10 @@ mod tests {
     const GUID: &str = "AABBCCDDEEFF";
     const AUTH_PATH: &str = "/WebObjects/MZFinance.woa/wa/authenticate/";
     const EMAIL: &str = "user@example.com";
-    const PASSWORD: &str = "secret";
+    // Distinctive fake secrets: they cannot appear in logs by coincidence.
+    const PASSWORD: &str = "fake-password-QZ7XH2N5";
+    const TOKEN: &str = "fake-token-QZ7XK4M9";
+    const DSID: &str = "9073814265031";
 
     fn plist_body(entries: &str) -> String {
         format!(
@@ -902,19 +905,19 @@ mod tests {
     }
 
     fn success_body() -> String {
-        plist_body(
-            "<key>passwordToken</key><string>pt</string>\
-             <key>dsPersonId</key><string>8765</string>\
+        plist_body(&format!(
+            "<key>passwordToken</key><string>{TOKEN}</string>\
+             <key>dsPersonId</key><string>{DSID}</string>\
              <key>accountInfo</key><dict><key>appleId</key><string>real@example.com</string>\
              <key>address</key><dict><key>firstName</key><string>Jane</string><key>lastName</key><string>Doe</string></dict></dict>",
-        )
+        ))
     }
 
     fn success() -> ResponseTemplate {
         ResponseTemplate::new(200)
             .insert_header(HEADER_STORE_FRONT, "143441-1,29")
             .insert_header(HEADER_POD, "48")
-            .append_header("Set-Cookie", "mz_at_ssl-8765=abc; Path=/")
+            .append_header("Set-Cookie", format!("mz_at_ssl-{DSID}=abc; Path=/"))
             .set_body_string(success_body())
     }
 
@@ -1030,14 +1033,14 @@ mod tests {
             ("X-Apple-I-MD-RINFO".to_string(), "17106176".to_string()),
         ]);
         let account = harness.login(None, headers).await.expect("account");
-        assert_eq!(account.password_token, "pt");
-        assert_eq!(account.directory_services_id, "8765");
-        assert_eq!(account.dsid.as_deref(), Some("8765"));
+        assert_eq!(account.password_token, TOKEN);
+        assert_eq!(account.directory_services_id, DSID);
+        assert_eq!(account.dsid.as_deref(), Some(DSID));
         assert_eq!(account.email, "real@example.com");
         assert_eq!(account.name, "Jane Doe");
         assert_eq!(account.store_front, "143441-1,29");
         assert_eq!(account.pod, "48");
-        assert_eq!(account.cookies, ["mz_at_ssl-8765=abc; Path=/"]);
+        assert_eq!(account.cookies, [format!("mz_at_ssl-{DSID}=abc; Path=/")]);
         let requests = harness.requests().await;
         assert_eq!(harness.signed.lock().expect("lock")[0], requests[0].body);
         assert_signed_request(&requests[0]);
@@ -1125,7 +1128,10 @@ mod tests {
             .expect_err("stale");
         assert!(error.to_string().contains("try a fresh 2FA code"));
         let requests = harness.requests().await;
-        assert_eq!(field(&sent(&requests[1]), "password"), "secret123456");
+        assert_eq!(
+            field(&sent(&requests[1]), "password"),
+            format!("{PASSWORD}123456")
+        );
     }
 
     #[tokio::test]
@@ -1813,7 +1819,8 @@ mod tests {
             "otp-secret",
             "c2lnbmF0dXJl",
             "mz_at_ssl",
-            "8765",
+            TOKEN,
+            DSID,
         ] {
             assert!(!logs.contains(secret), "{secret} leaked");
         }
