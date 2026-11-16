@@ -442,6 +442,11 @@ mod diff;
 #[cfg(test)]
 mod coverage_tests;
 
+/// Guest-memory access micro-benchmark (a fast unit test unless
+/// `IPAKEEP_MEM_BENCH_ITERS` asks for a real measurement).
+#[cfg(test)]
+mod memory_bench;
+
 #[cfg(test)]
 mod memory_tests {
     use super::{Memory, NativeError, PAGE_SIZE};
