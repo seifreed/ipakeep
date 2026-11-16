@@ -7,6 +7,9 @@ out = ["Stdout", "Json"]
 output-dir = "target/tarpaulin"
 
 [coverage]
+# The engine must also be set here: tarpaulin traces each named table except
+# `[report]`, and its Linux default is Ptrace (see the note above).
+engine = "Llvm"
 fail-under = 100
 all-features = true
 workspace = true
