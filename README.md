@@ -152,12 +152,10 @@ The default build needs only the Rust toolchain: the Apple guest code runs on
 ipakeep's native Rust ARM64 interpreter (`native-cpu` feature). Apple's signed
 framework assets are downloaded and verified on the first sign-in.
 
-Optional, faster build: `scripts/pgo.sh` makes a profile-guided (PGO) build at
-`target/pgo/release/ipakeep`. It trains on the real-asset golden tests, so it
-needs the cached Apple assets and `rustup component add llvm-tools`.
-`scripts/pgo.sh --verify` builds and times the kbsync golden test instead. In
-local measurements, PGO cut the interpreter's kbsync CPU time by ~18%. The
-default build does not use it.
+Optional profile-guided (PGO) build: `scripts/pgo.sh` builds
+`target/pgo/release/ipakeep`. On the current interpreter it is slower than
+the default build (see [Performance](#performance)), so the default build
+does not use it.
 
 The legacy Unicorn backend is still available but **deprecated**:
 `cargo build --release --no-default-features --features unicorn`. It builds
@@ -652,9 +650,25 @@ The dyld and kext exports are byte-identical to upstream ipatool's.
   registers, so `MRS`/`MSR` are rejected. An access to unmapped memory
   reports both the faulting address and the PC.
 - **Memory:** sparse 4 KiB pages kept in a frame vector, indexed by a
-  Fibonacci-hashed page map. One-entry caches for the last instruction-fetch
-  page and the last data page let straight-line code and buffer loops skip
-  the lookup. Copies are page-wise instead of byte-wise.
+  Fibonacci-hashed page map. Data accesses go through a 1024-entry
+  direct-mapped software TLB (a hit is one tag compare), and an access that
+  stays inside one page (every aligned A64 load or store) is a fixed-width
+  1/2/4/8/16-byte copy with no `memcpy` call. Instruction fetch keeps its own
+  one-entry page cache. Page-straddling copies are page-wise, not byte-wise.
+- **Block cache:** the first time the run loop reaches a PC, it pre-decodes a
+  straight-line basic block (up to the first branch, 64 instructions, the end
+  of the page, or the next hooked address) into compact 16-byte ops with
+  fields, immediates and masks already extracted and register 31 resolved to
+  XZR or SP. Later visits run the ops without fetching or decoding. Each
+  block remembers the blocks its exits last reached (chaining), so the next
+  block is usually found without a hash lookup. Encodings without a fast
+  form run through the full decoder, so every op behaves exactly as the
+  decoder does, and `Unsupported` errors are unchanged.
+- **Self-modifying code:** a page holding cached code is flagged in `Memory`.
+  The first write to it (a guest store on any path, including the TLB fast
+  path, a host write, or an unmap) clears the flag and records the page, and
+  the engine drops that page's blocks. A guest store into the running block
+  ends the block after that instruction, so the modified code runs next.
 - **Host functions (shims):** every emulated symbol gets a `ret` stub, and
   one code hook covers the shim area. The Rust handler runs before the
   `ret`: it reads arguments from `X0`–`X7`, writes `X0`, and the stub
@@ -662,8 +676,8 @@ The dyld and kext exports are byte-identical to upstream ipatool's.
   over unchanged.
 - **Hot loop:** the wall-clock deadline is checked every 4096 instructions,
   not on every instruction. A two-compare range check skips hook dispatch
-  for addresses no hook covers. Fetch does a single page lookup plus a
-  4-byte load.
+  for addresses no hook covers. Code hooks fire only at block entry, because
+  a block never contains a hooked address after its first instruction.
 
 ### How it is verified
 
@@ -690,22 +704,39 @@ accepted. All of them are fixed and covered by regression tests.
 
 ### Performance
 
-These are wall times of the golden tests in release builds on an Apple M5
-Max, including loading and relocating the guest images:
+These are the CPU user times of the golden tests (`/usr/bin/time -l`), not
+wall times, because the measuring machine was heavily loaded. Each is the
+median of 3 interleaved runs of a release build with `--test-threads=1` on an
+Apple M5 Max, including loading and relocating the guest images:
 
-| Workload | Native interpreter | Unicorn (deprecated) |
-|----------|--------------------|----------------------|
-| SAP session and signatures | ~0.7 s | ~0.45 s |
-| ADI provisioning | ~2.1 s | ~1.4 s |
-| kbsync, two blobs | ~19 s | ~2.6 s |
+| Workload | Native interpreter | Unicorn (legacy, being removed) |
+|----------|--------------------|---------------------------------|
+| SAP session and signatures (`connect_and_sign_reproduce_golden_signatures`) | 0.44 s | 0.44 s |
+| ADI provisioning (`provisioning_reproduces_golden_vectors`) | 0.99 s | 1.09 s |
+| kbsync, two blobs (`kbsync_reproduces_golden_vectors`) | 3.56 s | 2.59 s |
 
 Unicorn translates guest code to host code with a JIT (QEMU TCG). The
-interpreter decodes every instruction it executes, so long guest runs such
-as kbsync are several times slower. kbsync is generated once per account and
-device and cached in `kbsync-v1.json`, so a normal download doesn't pay that
-cost. Earlier optimisation work (page-wise memory, page caches, the hook and
-deadline fast paths) already made the SAP signing test about 5× faster in
+interpreter stays a pure, safe-Rust interpreter, but the block cache and the
+software TLB remove most of its per-instruction cost: it now matches Unicorn
+on SAP, beats it on ADI provisioning, and is about 1.4× slower on kbsync, the
+longest guest run. kbsync is generated once per account and device and cached
+in `kbsync-v1.json`, so a normal download doesn't pay that cost anyway.
+Earlier optimisation work (page-wise memory, page caches, the hook and
+deadline fast paths) had already made the SAP signing test about 5× faster in
 release and 13× faster in debug.
+
+**PGO (optional).** The interpreter is branch-heavy decode and dispatch code,
+which is what profile-guided optimisation helps most. `scripts/pgo.sh` trains
+an instrumented build on the kbsync, SAP session and ADI provisioning golden
+tests, merges the profiles and builds `target/pgo/release/ipakeep`. It needs
+the cached Apple assets and `rustup component add llvm-tools`.
+`scripts/pgo.sh --verify` builds the PGO-optimised test binary and runs the
+kbsync golden test instead. Before the block cache, PGO cut the
+interpreter's kbsync CPU time by ~18%. On the current interpreter it no
+longer helps: measured the same way as the table above, the PGO test binary
+took 4.12 s of CPU time for kbsync against 3.32 s for the plain release
+build, so PGO is currently not recommended. The default build and CI do not
+use PGO.
 
 ### Backends
 

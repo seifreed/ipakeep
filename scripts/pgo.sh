@@ -3,6 +3,9 @@
 #
 # The native ARM64 interpreter is branch-heavy decode/dispatch code, which is
 # what PGO helps most. The default build never depends on this script.
+# Since the block cache landed, the PGO build measures slower than the plain
+# release build on kbsync (see README "Performance"); re-check with --verify
+# before relying on it.
 #
 # Steps:
 #   1. build the lib test binary instrumented with -Cprofile-generate;
