@@ -347,7 +347,8 @@ mod tests {
         })
         .unwrap();
 
-        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
+        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16)
+            .unwrap();
 
         assert_eq!(e.reg_read(Register::X(0)).unwrap(), 42);
         assert_eq!(e.reg_read(Register::Pc).unwrap(), RETURN_ADDRESS);
@@ -368,7 +369,8 @@ mod tests {
         })
         .unwrap();
 
-        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
+        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16)
+            .unwrap();
         assert_eq!(e.reg_read(Register::Pc).unwrap(), RETURN_ADDRESS);
     }
 
@@ -382,7 +384,9 @@ mod tests {
             Err(EmuError::guest("boom"))
         })
         .unwrap();
-        let error = e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap_err();
+        let error = e
+            .start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16)
+            .unwrap_err();
         assert!(matches!(error, EmuError::Guest(_)));
     }
 }
