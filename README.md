@@ -110,7 +110,7 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
-| **Cross-platform Anisette** | Native in-process anisette on every platform; no Docker, Go or remote server |
+| **Cross-platform Anisette** | Native in-process anisette on every platform, run on a built-in Rust ARM64 interpreter; no Docker, Go, remote server or C toolchain |
 | **MCP server** | `mcp` runs ipakeep as a Model Context Protocol server over stdio, exposing `search`, `list_versions`, `auth_info`, `download` and `purchases` as tools for AI agents |
 | **CLI + Library** | Use as a command-line tool or as a Rust crate |
 
@@ -148,11 +148,16 @@ cargo build --release
 # binary at target/release/ipakeep
 ```
 
-Building needs a C toolchain, CMake and libclang for the bundled Unicorn
-emulator (`unicorn-engine-sys`): `cmake libclang-dev pkg-config` on Debian/Ubuntu,
-Xcode command line tools plus `cmake` on macOS, and MSVC with CMake, Ninja and
-LLVM (`LIBCLANG_PATH`) on Windows. Apple's signed framework assets are
-downloaded and verified on the first sign-in.
+The default build needs only the Rust toolchain: the Apple guest code runs on
+ipakeep's native Rust ARM64 interpreter (`native-cpu` feature). Apple's signed
+framework assets are downloaded and verified on the first sign-in.
+
+The legacy Unicorn backend is still available but **deprecated**:
+`cargo build --release --no-default-features --features unicorn`. It builds
+`unicorn-engine-sys` from source and needs a C toolchain, CMake and libclang:
+`cmake libclang-dev pkg-config` on Debian/Ubuntu, Xcode command line tools plus
+`cmake` on macOS, and MSVC with CMake, Ninja and LLVM (`LIBCLANG_PATH`) on
+Windows. Enabling `unicorn` makes the binary GPL-2.0 (see [License](#license)).
 
 ### Install the binary
 
@@ -579,7 +584,8 @@ main.rs          Wires concrete infrastructure into the presentation handlers
 ## Requirements
 
 - Rust toolchain (edition 2024)
-- CMake, libclang and a C toolchain (see Installation) for the Unicorn emulator
+- Only for the deprecated `unicorn` feature: CMake, libclang and a C toolchain
+  (see Installation)
 - See [Cargo.toml](Cargo.toml) for dependencies
 
 ## SBOM
@@ -625,13 +631,16 @@ If this project is useful in your workflows, you can support development:
 
 This project is licensed under the MIT license. See [Cargo.toml](Cargo.toml).
 
-The ipakeep source code is MIT-licensed (see [LICENSE](LICENSE)). The native
-Apple SAP/anisette stack statically links the
+The ipakeep source code is MIT-licensed (see [LICENSE](LICENSE)). Binaries
+built with the default features run the Apple SAP/anisette stack on the native
+Rust ARM64 interpreter and are MIT-licensed as well.
+
+The optional, deprecated `unicorn` feature statically links the
 [Unicorn](https://www.unicorn-engine.org/) emulator through the `unicorn-engine`
 crate, which is licensed under the
-[GPL-2.0](https://github.com/unicorn-engine/unicorn/blob/master/COPYING).
-Unicorn is a mandatory dependency, so every compiled `ipakeep` binary is a
-combined work: distributing binaries is governed by the GPL-2.0 (including its
+[GPL-2.0](https://github.com/unicorn-engine/unicorn/blob/master/COPYING). A
+binary built with `unicorn` enabled (including `--all-features`) is a combined
+work: distributing it is governed by the GPL-2.0 (including its
 source-availability and license-text requirements), while the MIT terms still
 apply to the ipakeep source on its own. The full dependency license list is in
 the CycloneDX SBOM at [sbom/ipakeep.cdx.json](sbom/ipakeep.cdx.json).
