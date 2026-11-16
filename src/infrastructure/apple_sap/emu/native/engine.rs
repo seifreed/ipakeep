@@ -295,7 +295,7 @@ impl<'a> NativeEngine<'a> {
             // wall-clock bound is only checked every `DEADLINE_CHECK_INTERVAL`
             // instructions (the timeout is a coarse safety net, not exact).
             if let Some(deadline) = deadline
-                && iterations % DEADLINE_CHECK_INTERVAL == 0
+                && iterations.is_multiple_of(DEADLINE_CHECK_INTERVAL)
                 && Instant::now() >= deadline
             {
                 return Err(EmuError::Timeout { timeout });

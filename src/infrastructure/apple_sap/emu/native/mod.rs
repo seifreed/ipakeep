@@ -79,7 +79,7 @@ pub(crate) enum Step {
 }
 
 /// Hasher for page-aligned addresses. Keys are already well-distributed
-/// integers, so a single multiply (Fibonacci hashing) replaces SipHash, which
+/// integers, so a single multiply (Fibonacci hashing) replaces `SipHash`, which
 /// dominated the interpreter's profile (two hashes per guest byte accessed).
 #[derive(Default)]
 struct PageHasher(u64);
