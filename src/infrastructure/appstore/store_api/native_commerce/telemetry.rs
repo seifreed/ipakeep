@@ -45,17 +45,19 @@ pub(crate) fn endpoint(url: &str) -> String {
 /// `MZFinance.BadLogin.Configurator_message`); free text, which can name the
 /// account, is replaced by `redacted`.
 pub(crate) fn apple_code(value: &str) -> String {
-    let value = value.trim();
-    if value.is_empty() {
+    if value.trim().is_empty() {
         return NO_CODE.to_string();
     }
+    known_apple_code(value).unwrap_or_else(|| REDACTED.to_string())
+}
+
+/// `value` trimmed when it looks like one of Apple's machine-readable codes;
+/// `None` for empty or free text.
+pub(crate) fn known_apple_code(value: &str) -> Option<String> {
+    let value = value.trim();
     let allowed = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-');
-    let code_like = value.len() <= MAX_CODE_LEN && value.bytes().all(allowed);
-    if code_like {
-        value.to_string()
-    } else {
-        REDACTED.to_string()
-    }
+    let code_like = !value.is_empty() && value.len() <= MAX_CODE_LEN && value.bytes().all(allowed);
+    code_like.then(|| value.to_string())
 }
 
 #[cfg(test)]
@@ -121,5 +123,12 @@ mod tests {
         assert_eq!(apple_code("user@example.com"), "redacted");
         assert_eq!(apple_code("Your password has changed."), "redacted");
         assert_eq!(apple_code(&"9".repeat(65)), "redacted");
+    }
+
+    #[test]
+    fn known_apple_code_drops_empty_and_free_text() {
+        assert_eq!(known_apple_code(" 2034 ").as_deref(), Some("2034"));
+        assert_eq!(known_apple_code("  "), None);
+        assert_eq!(known_apple_code("Slow down, please."), None);
     }
 }

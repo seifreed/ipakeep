@@ -23,7 +23,7 @@ use super::bag::{
 };
 use super::kbsync_cache::KbsyncCache;
 use super::storefront::{DEFAULT_USER_AGENT, StorefrontResolver};
-use super::telemetry::{apple_code, endpoint, error_type};
+use super::telemetry::{apple_code, endpoint, error_type, known_apple_code};
 use crate::domain::entity::{Account, AppVersion, DownloadItem};
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::appstore::store_api::parsing::parse_download_item;
@@ -869,10 +869,7 @@ async fn read_store_response(response: reqwest::Response) -> Attempt {
         .await
         .map_err(|error| failure(None, network("read Store commerce response", &error)))?;
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        let text = String::from_utf8_lossy(&bytes).trim().to_string();
-        let error =
-            AppStoreError::NetworkError(format!("rate limited by Apple (HTTP 429): {text}"));
-        return Err(failure(None, error));
+        return Err(failure(None, rate_limited(&bytes)));
     }
     let status = status.as_u16();
     if (300..400).contains(&status) {
@@ -890,6 +887,26 @@ async fn read_store_response(response: reqwest::Response) -> Attempt {
                 && bytes.trim_ascii().is_empty(),
         }),
     }
+}
+
+/// Apple's 429 body is never echoed: only its `failureType` and
+/// `customerMessage` survive, and only when they look like codes.
+fn rate_limited(bytes: &[u8]) -> AppStoreError {
+    let body = decode_body(bytes).unwrap_or(Value::Null);
+    let fields = [
+        ("failureType", failure_type(&body)),
+        ("customerMessage", customer_message(&body)),
+    ];
+    let codes: Vec<String> = fields
+        .iter()
+        .filter_map(|(key, value)| known_apple_code(value).map(|code| format!("{key}={code}")))
+        .collect();
+    let message = if codes.is_empty() {
+        "rate limited by Apple (HTTP 429)".to_string()
+    } else {
+        format!("rate limited by Apple (HTTP 429; {})", codes.join(", "))
+    };
+    AppStoreError::NetworkError(message)
 }
 
 fn decode_body(bytes: &[u8]) -> Result<Value, AppStoreError> {
@@ -2006,12 +2023,30 @@ mod tests {
         harness
             .mount(
                 VOLUME_STORE_PATH,
-                ResponseTemplate::new(429).set_body_string(" slow down "),
+                ResponseTemplate::new(429).set_body_string(" slow down SENTINEL-429-BODY "),
             )
             .await;
+        let error = download_error(&harness, Some(VERSION)).await;
+        assert!(!error.to_string().contains("SENTINEL-429-BODY"), "{error}");
         assert!(matches!(
-            download_error(&harness, Some(VERSION)).await,
-            AppStoreError::NetworkError(m) if m == "rate limited by Apple (HTTP 429): slow down"
+            error,
+            AppStoreError::NetworkError(m) if m == "rate limited by Apple (HTTP 429)"
+        ));
+
+        let harness = Harness::new(false).await;
+        harness
+            .mount(
+                VOLUME_STORE_PATH,
+                ResponseTemplate::new(429).set_body_string(
+                    r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>failureType</key><string>2059</string><key>customerMessage</key><string>Slow down SENTINEL-429-BODY</string><key>dsPersonId</key><string>SENTINEL-429-BODY</string></dict></plist>"#,
+                ),
+            )
+            .await;
+        let error = download_error(&harness, Some(VERSION)).await;
+        assert!(!error.to_string().contains("SENTINEL-429-BODY"), "{error}");
+        assert!(matches!(
+            error,
+            AppStoreError::NetworkError(m) if m == "rate limited by Apple (HTTP 429; failureType=2059)"
         ));
 
         let harness = Harness::new(false).await;
