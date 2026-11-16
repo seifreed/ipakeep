@@ -28,14 +28,14 @@ fn sign_extend(value: u64, bits: u32) -> u64 {
 }
 
 /// Reads `bytes` (1/2/4/8) from guest memory, zero-extended into a `u64`.
-fn load_bytes(cpu: &NativeCpu, addr: u64, bytes: usize) -> Result<u64, NativeError> {
+pub(super) fn load_bytes(cpu: &NativeCpu, addr: u64, bytes: usize) -> Result<u64, NativeError> {
     let mut buf = [0u8; 8];
     cpu.mem.read(addr, &mut buf[..bytes])?;
     Ok(u64::from_le_bytes(buf))
 }
 
 /// Writes the low `bytes` of `value` to guest memory.
-fn store_bytes(
+pub(super) fn store_bytes(
     cpu: &mut NativeCpu,
     addr: u64,
     bytes: usize,
@@ -48,7 +48,7 @@ fn store_bytes(
 /// Applies the `ExtendRegister` (option/shift) used by register-offset
 /// addressing: `UXTW`/`SXTW` take the low 32 bits, `LSL`/`SXTX` the full 64,
 /// then shift left by `shift`.
-fn extend_reg(value: u64, option: u32, shift: u32) -> u64 {
+pub(super) fn extend_reg(value: u64, option: u32, shift: u32) -> u64 {
     // option low bit: 0 -> 32-bit source (UXTW/SXTW), 1 -> 64-bit (UXTX/SXTX).
     let extended = if option & 1 == 0 {
         if option & 0b100 != 0 {

@@ -29,11 +29,13 @@
     clippy::needless_pass_by_value
 )]
 
+mod block;
 mod branch;
 mod dpimm;
 mod dpreg;
 pub(crate) mod engine;
 mod ldst;
+mod predecode;
 mod simd;
 
 use std::cell::Cell;
@@ -119,11 +121,18 @@ const NO_PAGE: (u64, usize) = (u64::MAX, 0);
 /// buffer skip the hash lookup. Frame indices only change on `unmap`, which
 /// resets both caches; writes go through the frames, so they never stale a
 /// cache.
+///
+/// Code-page tracking (for the block cache): `code[frame]` is set while the
+/// page holds instructions the block cache translated. The first write to (or
+/// unmap of) such a page clears the flag and records the page in
+/// `code_writes`; the engine drains that list and drops the stale blocks.
 pub(crate) struct Memory {
     index: PageIndex,
     frames: Vec<Frame>,
     fetch_cache: Cell<(u64, usize)>,
     data_cache: Cell<(u64, usize)>,
+    code: Vec<bool>,
+    code_writes: Vec<u64>,
 }
 
 impl Default for Memory {
@@ -133,6 +142,8 @@ impl Default for Memory {
             frames: Vec::new(),
             fetch_cache: Cell::new(NO_PAGE),
             data_cache: Cell::new(NO_PAGE),
+            code: Vec::new(),
+            code_writes: Vec::new(),
         }
     }
 }
@@ -152,9 +163,10 @@ impl Memory {
     }
 
     fn page_mut(&mut self, page: u64) -> &mut [u8; PAGE_SIZE as usize] {
-        let frames = &mut self.frames;
+        let (frames, code) = (&mut self.frames, &mut self.code);
         let frame = *self.index.entry(page).or_insert_with(|| {
             frames.push(Box::new([0u8; PAGE_SIZE as usize]));
+            code.push(false);
             frames.len() - 1
         });
         &mut self.frames[frame]
@@ -180,6 +192,9 @@ impl Memory {
         let mut page = start;
         while page < end {
             if let Some(frame) = self.index.remove(&page) {
+                if self.code.swap_remove(frame) {
+                    self.code_writes.push(page);
+                }
                 // `swap_remove` moves the last frame into the hole; repoint
                 // the page that owned it (unmap is rare, so a scan is fine).
                 self.frames.swap_remove(frame);
@@ -232,10 +247,34 @@ impl Memory {
             let frame = self
                 .frame_of(addr, &self.data_cache)
                 .ok_or(NativeError::Unmapped { address: addr })?;
+            if self.code[frame] {
+                self.code[frame] = false;
+                self.code_writes.push(addr & !(PAGE_SIZE - 1));
+            }
             self.frames[frame][offset..offset + chunk].copy_from_slice(&data[done..done + chunk]);
             done += chunk;
         }
         Ok(())
+    }
+
+    /// Flags the (mapped) page containing `address` as holding cached code, so
+    /// the next write to it is reported by [`Memory::take_code_writes`].
+    pub(crate) fn mark_code(&mut self, address: u64) {
+        if let Some(&frame) = self.index.get(&(address & !(PAGE_SIZE - 1))) {
+            self.code[frame] = true;
+        }
+    }
+
+    /// Whether a page holding cached code was written or unmapped since the
+    /// last [`Memory::take_code_writes`].
+    #[inline]
+    pub(crate) fn code_written(&self) -> bool {
+        !self.code_writes.is_empty()
+    }
+
+    /// Drains the pages whose cached code went stale.
+    pub(crate) fn take_code_writes(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.code_writes)
     }
 
     /// Fetches the instruction word at `address` (through the fetch cache).
@@ -292,12 +331,20 @@ pub(crate) fn nzcv_bits(result: u64, carry: bool, overflow: bool) -> u32 {
     (n << 31) | (z << 30) | (u32::from(carry) << 29) | (u32::from(overflow) << 28)
 }
 
+/// Register-file slot that always reads as zero (register 31 as XZR).
+pub(crate) const SLOT_ZR: usize = 31;
+/// Register-file slot that swallows writes to XZR (never read).
+pub(crate) const SLOT_SINK: usize = 32;
+/// Register-file slot holding the stack pointer (register 31 in SP-form).
+pub(crate) const SLOT_SP: usize = 33;
+
 /// The native A64 CPU: register file + flags + vectors + memory.
 pub(crate) struct NativeCpu {
-    /// X0..X30.
-    x: [u64; 31],
-    /// Stack pointer (register 31 in SP-form).
-    sp: u64,
+    /// Integer register file: X0..X30 in slots 0..=30, then [`SLOT_ZR`],
+    /// [`SLOT_SINK`] and [`SLOT_SP`]. Register-31 reads and writes map onto
+    /// those slots without a branch; the array is 64 long so a 6-bit masked
+    /// index needs no bounds check.
+    r: [u64; 64],
     /// Program counter.
     pc: u64,
     /// Condition flags in bits [31:28] (N,Z,C,V).
@@ -311,8 +358,7 @@ pub(crate) struct NativeCpu {
 impl NativeCpu {
     pub(crate) fn new() -> Self {
         Self {
-            x: [0; 31],
-            sp: 0,
+            r: [0; 64],
             pc: 0,
             nzcv: 0,
             v: [0; 32],
@@ -322,30 +368,40 @@ impl NativeCpu {
 
     // --- register access with reg-31 semantics ---
 
+    /// Reads register-file slot `slot` (see [`NativeCpu::r`]).
+    #[inline]
+    pub(crate) fn slot(&self, slot: u8) -> u64 {
+        self.r[usize::from(slot) & 63]
+    }
+
+    /// Writes register-file slot `slot`; never pass [`SLOT_ZR`].
+    #[inline]
+    pub(crate) fn set_slot(&mut self, slot: u8, value: u64) {
+        self.r[usize::from(slot) & 63] = value;
+    }
+
     /// Reads register `n` as a 64-bit value; register 31 reads as zero (XZR).
+    #[inline]
     pub(crate) fn x(&self, n: u32) -> u64 {
-        if n == 31 { 0 } else { self.x[n as usize] }
+        self.r[(n & 31) as usize]
     }
 
     /// Writes register `n`; register 31 is discarded (XZR).
+    #[inline]
     pub(crate) fn set_x(&mut self, n: u32, value: u64) {
-        if n != 31 {
-            self.x[n as usize] = value;
-        }
+        self.r[(n & 31) as usize + usize::from(n & 31 == 31)] = value;
     }
 
     /// Reads register `n` where 31 denotes the stack pointer (SP-form).
+    #[inline]
     pub(crate) fn x_sp(&self, n: u32) -> u64 {
-        if n == 31 { self.sp } else { self.x[n as usize] }
+        self.r[(n & 31) as usize + 2 * usize::from(n & 31 == 31)]
     }
 
     /// Writes register `n` where 31 denotes the stack pointer (SP-form).
+    #[inline]
     pub(crate) fn set_x_sp(&mut self, n: u32, value: u64) {
-        if n == 31 {
-            self.sp = value;
-        } else {
-            self.x[n as usize] = value;
-        }
+        self.r[(n & 31) as usize + 2 * usize::from(n & 31 == 31)] = value;
     }
 
     /// Reads a 32-bit view of register `n` (31 = WZR).
@@ -371,10 +427,10 @@ impl NativeCpu {
         self.nzcv = nzcv & 0xf000_0000;
     }
     pub(crate) fn sp(&self) -> u64 {
-        self.sp
+        self.r[SLOT_SP]
     }
     pub(crate) fn set_sp(&mut self, sp: u64) {
-        self.sp = sp;
+        self.r[SLOT_SP] = sp;
     }
 
     /// Reads SIMD/FP register `n` (V0..V31) as a 128-bit little-endian value.
@@ -388,8 +444,13 @@ impl NativeCpu {
 
     /// Runs the instruction at `pc` and returns the control-flow outcome.
     pub(crate) fn step(&mut self) -> Result<Step, NativeError> {
+        let word = self.mem.read_u32(self.pc)?;
+        self.execute(word)
+    }
+
+    /// Runs the already-fetched instruction `word` as if it sat at `pc`.
+    pub(crate) fn execute(&mut self, word: u32) -> Result<Step, NativeError> {
         let pc = self.pc;
-        let word = self.mem.read_u32(pc)?;
         match classify(word) {
             A64Class::DataProcImm => dpimm::run(self, word),
             A64Class::DataProcReg => dpreg::run(self, word),
@@ -441,6 +502,9 @@ mod diff;
 /// test modules.
 #[cfg(test)]
 mod coverage_tests;
+
+#[cfg(test)]
+mod block_tests;
 
 #[cfg(test)]
 mod memory_tests {
