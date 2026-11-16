@@ -24,11 +24,16 @@ const DEADLINE_CHECK_INTERVAL: usize = 4096;
 /// Little-endian `RET X30`.
 pub(crate) const RET_INSTRUCTION: [u8; 4] = [0xc0, 0x03, 0x5f, 0xd6];
 
-fn native_err(error: NativeError) -> EmuError {
+/// Maps a native fault to an [`EmuError`]; `pc` is the faulting guest
+/// instruction, or `None` for a host-side memory access.
+fn native_err(error: NativeError, pc: Option<u64>) -> EmuError {
     match error {
-        NativeError::Unmapped { .. } => {
-            EmuError::engine("mem_access", EngineErrorCode::ReadUnmapped)
-        }
+        NativeError::Unmapped { address } => EmuError::Unmapped {
+            operation: "mem_access",
+            code: EngineErrorCode::ReadUnmapped,
+            address,
+            pc,
+        },
         NativeError::Unsupported { .. } => {
             EmuError::engine("execute", EngineErrorCode::InvalidInstruction)
         }
@@ -92,16 +97,25 @@ impl<'a> NativeEngine<'a> {
 
     pub(crate) fn mem_read(&self, address: u64, size: usize) -> Result<Vec<u8>, EmuError> {
         let mut buf = vec![0u8; size];
-        self.cpu.mem.read(address, &mut buf).map_err(native_err)?;
+        self.cpu
+            .mem
+            .read(address, &mut buf)
+            .map_err(|error| native_err(error, None))?;
         Ok(buf)
     }
 
     pub(crate) fn mem_read_into(&self, address: u64, buffer: &mut [u8]) -> Result<(), EmuError> {
-        self.cpu.mem.read(address, buffer).map_err(native_err)
+        self.cpu
+            .mem
+            .read(address, buffer)
+            .map_err(|error| native_err(error, None))
     }
 
     pub(crate) fn mem_write(&mut self, address: u64, data: &[u8]) -> Result<(), EmuError> {
-        self.cpu.mem.write(address, data).map_err(native_err)
+        self.cpu
+            .mem
+            .write(address, data)
+            .map_err(|error| native_err(error, None))
     }
 
     pub(crate) fn read_u32(&self, address: u64) -> Result<u32, EmuError> {
@@ -319,7 +333,11 @@ impl<'a> NativeEngine<'a> {
                 continue;
             }
 
-            match self.cpu.step().map_err(native_err)? {
+            match self
+                .cpu
+                .step()
+                .map_err(|error| native_err(error, Some(pc)))?
+            {
                 Step::Next => self.cpu.set_pc(pc + INSN_SIZE),
                 Step::Branch(target) => self.cpu.set_pc(target),
                 Step::Break(_) => return Ok(()),
@@ -376,6 +394,26 @@ mod tests {
         e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16)
             .unwrap();
         assert_eq!(e.reg_read(Register::Pc).unwrap(), RETURN_ADDRESS);
+    }
+
+    /// A guest access to unmapped memory reports the address and the PC.
+    #[test]
+    fn unmapped_guest_access_reports_address_and_pc() {
+        let mut e = NativeEngine::new().unwrap();
+        e.mem_map(CODE, 0x1000).unwrap();
+        e.write_u32(CODE, 0xf940_0120).unwrap(); // ldr x0, [x9]
+        e.reg_write(Register::X(9), 0xdead_0000_0000).unwrap();
+        let error = e
+            .start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            EmuError::Unmapped {
+                address: 0xdead_0000_0000,
+                pc: Some(CODE),
+                ..
+            }
+        ));
     }
 
     /// A hook returning Err stops the run and surfaces the error.

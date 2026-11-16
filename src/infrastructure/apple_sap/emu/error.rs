@@ -58,6 +58,20 @@ pub enum EmuError {
         /// The backend-neutral failure classification.
         code: EngineErrorCode,
     },
+    /// A memory access hit unmapped memory at a known address. Raised by the
+    /// native interpreter, which (unlike Unicorn) knows where it faulted.
+    #[error("engine {operation} failed: {code} at {address:#x}{}", pc_suffix(*.pc))]
+    Unmapped {
+        /// The host operation that failed (for example `mem_access`).
+        operation: &'static str,
+        /// The backend-neutral failure classification.
+        code: EngineErrorCode,
+        /// The first unmapped byte of the access.
+        address: u64,
+        /// The guest instruction that faulted, when the access came from
+        /// executing guest code (`None` for a host-side memory access).
+        pc: Option<u64>,
+    },
     /// Guest execution did not reach its stop address before the deadline.
     #[error("emulation timed out after {timeout:?}")]
     Timeout {
@@ -105,10 +119,15 @@ impl EmuError {
     /// Returns the backend-neutral failure code, if this error carries one.
     pub fn engine_code(&self) -> Option<EngineErrorCode> {
         match self {
-            Self::Engine { code, .. } => Some(*code),
+            Self::Engine { code, .. } | Self::Unmapped { code, .. } => Some(*code),
             _ => None,
         }
     }
+}
+
+/// Formats the optional faulting PC of [`EmuError::Unmapped`].
+fn pc_suffix(pc: Option<u64>) -> String {
+    pc.map(|pc| format!(" (pc {pc:#x})")).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -122,6 +141,31 @@ mod tests {
         assert_eq!(error.engine_code(), Some(EngineErrorCode::Map));
         assert!(error.to_string().contains("mem_map"));
         assert_eq!(EmuError::guest("boom").engine_code(), None);
+    }
+
+    #[test]
+    fn unmapped_errors_name_the_address_and_pc() {
+        let error = EmuError::Unmapped {
+            operation: "mem_access",
+            code: EngineErrorCode::ReadUnmapped,
+            address: 0xdead_beef,
+            pc: Some(0x1000),
+        };
+        assert_eq!(error.engine_code(), Some(EngineErrorCode::ReadUnmapped));
+        assert_eq!(
+            error.to_string(),
+            "engine mem_access failed: unmapped read at 0xdeadbeef (pc 0x1000)"
+        );
+        let host = EmuError::Unmapped {
+            operation: "mem_access",
+            code: EngineErrorCode::ReadUnmapped,
+            address: 0x10,
+            pc: None,
+        };
+        assert_eq!(
+            host.to_string(),
+            "engine mem_access failed: unmapped read at 0x10"
+        );
     }
 
     #[test]
