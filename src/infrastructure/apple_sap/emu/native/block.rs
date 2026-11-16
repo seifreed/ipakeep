@@ -204,11 +204,6 @@ impl BlockCache {
         self.by_page.clear();
         self.free.clear();
     }
-
-    /// Number of live blocks.
-    pub(super) fn live(&self) -> usize {
-        self.by_pc.len()
-    }
 }
 
 /// Decodes the block starting at `start`.
