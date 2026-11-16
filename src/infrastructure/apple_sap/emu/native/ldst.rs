@@ -3,7 +3,7 @@
 //! Covers the integer load/store surface the SAP/ADI guest exercises:
 //! register (unsigned-offset, unscaled, pre/post-indexed and register-offset),
 //! load/store pair, load-literal, the load/store-exclusive + load-acquire /
-//! store-release ordered forms and the single LSE atomic (`SWP`). No SIMD/FP or
+//! store-release ordered forms, compare-and-swap (`CAS*`) and the LSE `SWP`. No SIMD/FP or
 //! system state is touched, so the `V == 1` vectors and the unmodelled LSE
 //! read-modify-write ops report [`NativeError::Unsupported`].
 //!
@@ -293,8 +293,26 @@ fn exclusive(cpu: &mut NativeCpu, word: u32, size: u32) -> Result<Step, NativeEr
             }
             Ok(Step::Next)
         }
-        // Exclusive pair: LDXP/STXP/LDAXP/STLXP (single-threaded model).
-        _ if o1 == 1 => {
+        // Compare-and-swap: CAS/CASA/CASL/CASAL (B/H/W/X by `size`). `Rs`
+        // holds the compare value and receives the old memory value
+        // (zero-extended); `Rt` is the new value and is never written.
+        (1, 1) => {
+            let old = load_bytes(cpu, addr, bytes)?;
+            let mask = if bytes == 8 {
+                u64::MAX
+            } else {
+                (1u64 << (bytes * 8)) - 1
+            };
+            if old == cpu.x(rs) & mask {
+                let value = cpu.x(rt);
+                store_bytes(cpu, addr, bytes, value)?;
+            }
+            cpu.set_x(rs, old);
+            Ok(Step::Next)
+        }
+        // Exclusive pair: LDXP/STXP/LDAXP/STLXP (single-threaded model). With
+        // `size` 0x the same o2/o1 encoding is CASP, which is not modelled.
+        (0, 1) if size >= 2 => {
             let rt2 = (word >> 10) & 0x1f;
             if l == 1 {
                 let lo = load_bytes(cpu, addr, bytes)?;
@@ -310,7 +328,7 @@ fn exclusive(cpu: &mut NativeCpu, word: u32, size: u32) -> Result<Step, NativeEr
             }
             Ok(Step::Next)
         }
-        // Compare-and-swap (CAS*) is not modelled.
+        // Compare-and-swap pair (CASP*) is not modelled.
         _ => Err(unsupported(cpu, word, "ldst/exclusive")),
     }
 }
@@ -574,6 +592,56 @@ mod tests {
             init_x(&[(0, DATA), (1, 0x4444)]),
         );
         assert_eq!(d.x[2], 0x4444);
+    }
+
+    #[test]
+    fn casal_word_leaves_rt_untouched() {
+        // Regression: CAS shares the o2/o1 == 1/1 slot of the exclusive group
+        // and was executed as LDAXP, clobbering Rt with the loaded value.
+        // str x1,[x0] ; casal w15,w11,[x0] (match) ; ldr x4,[x0]
+        let d = check(
+            &[0xf900_0001, 0x88ef_fc0b, 0xf940_0004],
+            init_x(&[
+                (0, DATA),
+                (1, 0x1111_2222_0000_5d96),
+                (11, 0xa94ef),
+                (15, 0xffff_ffff_0000_5d96), // upper half ignored by the W compare
+            ]),
+        );
+        assert_eq!(d.x[11], 0xa94ef); // Rt (new value) is not written
+        assert_eq!(d.x[15], 0x5d96); // Rs receives the old word, zero-extended
+        assert_eq!(d.x[4], 0x1111_2222_000a_94ef); // only the low word stored
+    }
+
+    #[test]
+    fn cas_mismatch_and_byte_halfword_doubleword_forms() {
+        // str x1,[x0] ; cas w2,w3,[x0] (mismatch) ; casb w5,w6,[x0] (match) ;
+        // cash w7,w8,[x0] (mismatch) ; casal x9,x10,[x0] (mismatch) ; ldr x4,[x0]
+        let d = check(
+            &[
+                0xf900_0001,
+                0x88a2_7c03,
+                0x08a5_7c06,
+                0x48a7_7c08,
+                0xc8e9_fc0a,
+                0xf940_0004,
+            ],
+            init_x(&[
+                (0, DATA),
+                (1, 0x8877_6655_4433_2211),
+                (2, 0x1234),
+                (3, 0xdead),
+                (5, 0x11),
+                (6, 0xab),
+                (7, 0x9999),
+                (8, 0xcdef),
+                (9, 0x42),
+                (10, 0x4343),
+            ]),
+        );
+        assert_eq!(d.x[2], 0x4433_2211);
+        assert_eq!(d.x[5], 0x11);
+        assert_eq!(d.x[4], 0x8877_6655_4433_22ab);
     }
 
     #[test]
