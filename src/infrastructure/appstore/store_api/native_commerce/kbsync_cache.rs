@@ -259,6 +259,13 @@ mod tests {
         assert!(!directory.path().join("ipakeep/kbsync-v1.json").exists());
     }
 
+    /// `std::fs::read` of a directory fails on every OS and for every user
+    /// (root included): `EISDIR` on Unix, `ERROR_ACCESS_DENIED` on Windows.
+    #[cfg(unix)]
+    const DIRECTORY_READ_ERROR: &str = "error_type=IsADirectory";
+    #[cfg(windows)]
+    const DIRECTORY_READ_ERROR: &str = "error_type=PermissionDenied";
+
     #[test]
     fn logs_unreadable_files_and_rejections_without_the_blob() {
         let capture = LogCapture::default();
@@ -267,14 +274,15 @@ mod tests {
         let path = directory.path().join("kbsync-v1.json");
         std::fs::write(&path, format!("{{\"data\":\"{BLOB}\"")).expect("write");
         assert_eq!(KbsyncCache::new(path).cached(7, GUID), None);
-        let blocker = directory.path().join("file");
-        std::fs::write(&blocker, b"x").expect("write");
-        KbsyncCache::new(blocker.join("kbsync-v1.json")).invalidate(7, GUID, BLOB);
+        let unreadable = directory.path().join("unreadable").join("kbsync-v1.json");
+        std::fs::create_dir_all(&unreadable).expect("directory in the cache's place");
+        KbsyncCache::new(unreadable).invalidate(7, GUID, BLOB);
         assert_eq!(cache_in(&directory).cached(7, GUID), None);
 
         let logs = capture.contents();
         assert_eq!(logs.matches("appstore.kbsync_cache.read_failed").count(), 2);
-        assert!(logs.contains("invalid_json") && logs.contains("NotADirectory"));
+        assert!(logs.contains("error_type=\"invalid_json\""), "{logs}");
+        assert!(logs.contains(DIRECTORY_READ_ERROR), "{logs}");
         assert!(logs.contains("appstore.kbsync_cache.invalidated"));
         assert!(!logs.contains(BLOB) && !logs.contains(GUID));
     }

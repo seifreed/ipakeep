@@ -11,7 +11,7 @@ use cookie_store::{CookieStore, RawCookie};
 use reqwest::Url;
 use reqwest::header::HeaderValue;
 use std::fs::File;
-use std::io::{BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -59,9 +59,12 @@ fn save_error(detail: &str) -> AppStoreError {
     AppStoreError::Unexpected(format!("save Store cookies: {detail}"))
 }
 
+/// Read the whole file before parsing so every I/O failure (including a
+/// directory in the jar's place, which opens fine on Unix) is reported as
+/// unreadable rather than as corrupt JSON.
 fn read_store(path: &Path) -> Option<CookieStore> {
-    let file = File::open(path).inspect_err(warn_unreadable).ok()?;
-    let store = cookie_store::serde::json::load_all(BufReader::new(file));
+    let bytes = std::fs::read(path).inspect_err(warn_unreadable).ok()?;
+    let store = cookie_store::serde::json::load_all(bytes.as_slice());
     store.inspect_err(|_| warn_corrupt()).ok()
 }
 
@@ -215,6 +218,13 @@ mod tests {
         );
     }
 
+    /// `std::fs::read` of a directory fails on every OS and for every user
+    /// (root included): `EISDIR` on Unix, `ERROR_ACCESS_DENIED` on Windows.
+    #[cfg(unix)]
+    const DIRECTORY_READ_ERROR: &str = "error_type=IsADirectory";
+    #[cfg(windows)]
+    const DIRECTORY_READ_ERROR: &str = "error_type=PermissionDenied";
+
     #[test]
     fn unreadable_jars_are_logged_without_their_contents() {
         let capture = LogCapture::default();
@@ -225,12 +235,15 @@ mod tests {
         assert_eq!(capture.contents(), "");
 
         std::fs::write(&missing, b"{\"mz_at0-42\":\"cookie-secret\"").expect("corrupt file");
-        drop(PersistentCookies::load(missing.clone()));
-        drop(PersistentCookies::load(missing.join(STORE_COOKIES_FILE)));
+        drop(PersistentCookies::load(missing));
+        let unreadable = directory.path().join("unreadable").join(STORE_COOKIES_FILE);
+        std::fs::create_dir_all(&unreadable).expect("directory in the jar's place");
+        drop(PersistentCookies::load(unreadable));
 
         let logs = capture.contents();
         assert_eq!(logs.matches("appstore.cookies.load_failed").count(), 2);
-        assert!(logs.contains("invalid_json") && logs.contains("NotADirectory"));
+        assert!(logs.contains("error_type=\"invalid_json\""), "{logs}");
+        assert!(logs.contains(DIRECTORY_READ_ERROR), "{logs}");
         assert!(!logs.contains("cookie-secret") && !logs.contains("mz_at0"));
     }
 
