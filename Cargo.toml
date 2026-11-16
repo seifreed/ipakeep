@@ -14,6 +14,16 @@ path = "src/main.rs"
 name = "ipakeep"
 path = "src/lib.rs"
 
+[features]
+# ARM64 emulation backend that runs the Apple SAP/ADI guest binaries.
+# `unicorn` links the GPLv2 unicorn-engine (makes distributed binaries GPL-2.0);
+# `native-cpu` is the in-progress, permissively-licensed native Rust ARM64
+# interpreter (src/infrastructure/apple_sap/emu/) that replaces it so binaries
+# revert to MIT. Exactly one backend is selected at build time.
+default = ["unicorn"]
+unicorn = ["dep:unicorn-engine"]
+native-cpu = []
+
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -76,7 +86,7 @@ lzfse_rust = "0.2"
 p256 = { version = "0.14", features = ["ecdh", "pem", "pkcs8"] }
 ctr = "0.9"
 hkdf = "0.12"
-unicorn-engine = { version = "2.1", default-features = false, features = ["arch_aarch64"] }
+unicorn-engine = { version = "2.1", default-features = false, features = ["arch_aarch64"], optional = true }
 
 # Developer certificate request (RSA-2048 key + PKCS#10 CSR)
 rsa = { version = "0.10", default-features = false, features = ["std", "encoding", "pkcs1v15"] }
