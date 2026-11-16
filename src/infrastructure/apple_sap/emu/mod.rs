@@ -19,14 +19,16 @@ mod consts;
 mod error;
 mod register;
 
-// Unicorn backend (GPLv2): compiled only when the `unicorn` feature is on.
-#[cfg(feature = "unicorn")]
+// Unicorn backend (GPLv2): compiled only when it is the selected backend, i.e.
+// `unicorn` is on and `native-cpu` (which takes priority) is off. Compiling it
+// alongside `native-cpu` would leave the whole backend dead.
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 mod arm64;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 mod engine;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 mod guard;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 mod hook;
 
 /// Backend-neutral A64 instruction classifier (decode-only, no execution).
@@ -45,12 +47,13 @@ pub use register::{
 };
 
 // Backend selection — `native-cpu` takes priority when both features are on.
-#[cfg(feature = "native-cpu")]
-pub use native::engine::{HookId, NativeEngine as Engine};
 #[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 pub use engine::{Engine, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE};
 #[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
+#[cfg(feature = "native-cpu")]
+pub use native::engine::{HookId, NativeEngine as Engine};
 
-#[cfg(all(test, feature = "unicorn"))]
+// Unicorn-backend tests: they exercise APIs only the Unicorn `Engine` exposes.
+#[cfg(all(test, feature = "unicorn", not(feature = "native-cpu")))]
 mod tests;
