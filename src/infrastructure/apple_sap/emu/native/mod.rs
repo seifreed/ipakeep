@@ -1,18 +1,17 @@
-//! Native Rust ARM64 (A64) interpreter — a permissively-licensed replacement
-//! for the `unicorn-engine` backend.
+//! Native Rust ARM64 (A64) interpreter — ipakeep's default emulation engine
+//! (`native-cpu` feature), a permissively-licensed replacement for the
+//! deprecated `unicorn-engine` backend.
 //!
-//! This module executes the already-PAC-stripped A64 code of the Apple SAP/ADI
-//! guest binaries. It is developed standalone and validated **differentially
-//! against the Unicorn backend** (see [`diff`]) and against the golden vectors;
-//! only once it reproduces them is it wired in as the selected engine.
+//! It executes the already-PAC-stripped A64 code of the Apple SAP/ADI/kbsync
+//! guest binaries. It is validated **differentially against Unicorn** (see
+//! [`diff`] and `coverage_tests::decode_oracle`, built with the `unicorn`
+//! feature) and end to end against the golden vectors of the real Apple guests.
 //!
-//! Scope (from the OTP opcode histogram): the hot path is ~99.98% integer, so
-//! the integer core is built first; the small NEON/FP + `eor3`/`swpal` surface
-//! follows. No system registers are touched by the guest, so there is no
-//! system-register file.
-//!
-//! The whole module compiles only under `cfg(test)` for now; it is un-gated and
-//! wired behind the `native-cpu` feature once it passes the golden suite.
+//! Scope (from the OTP opcode histogram): the hot path is ~99.98% integer; the
+//! small NEON/FP + `eor3`/`swpal` surface follows. Anything outside the modelled
+//! set stops with [`NativeError::Unsupported`] instead of being guessed. No
+//! system registers are touched by the guest, so there is no system-register
+//! file.
 #![allow(dead_code)]
 // Interpreter code inherently truncates and reinterprets integer widths (W vs X
 // registers, sign/zero extension, flag packing) and uses dense bit-encoded

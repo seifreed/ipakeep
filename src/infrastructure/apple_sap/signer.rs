@@ -4,7 +4,7 @@
 //! starts a SAP session in the emulated `AppleMediaServices`, completes the
 //! setup handshake with Apple and then signs request payloads.
 //!
-//! The signer owns a Unicorn emulator, so it is `!Send`; drive it from one
+//! The signer owns an emulator engine, so it is `!Send`; drive it from one
 //! thread (for example inside `spawn_blocking` with a current-thread runtime).
 
 use reqwest::Url;

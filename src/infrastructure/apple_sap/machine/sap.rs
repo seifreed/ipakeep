@@ -2,7 +2,7 @@
 //!
 //! Port of upstream ipatool's `internal/sap/machine/machine.go` and
 //! `macos27.go`: loads `CoreFP`, `AppleMediaServices` (plus one optional
-//! profile image) into a Unicorn emulator, binds their imports to the shim
+//! profile image) into the emulator engine, binds their imports to the shim
 //! layer and calls guest functions with the AAPCS64 convention.
 
 use std::cell::RefMut;

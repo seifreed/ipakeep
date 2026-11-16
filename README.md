@@ -110,7 +110,7 @@ only a 16-byte per-account credential minted once from a jailbroken device):
 | **Version pinning** | List and download specific external version IDs |
 | **Simulator prep** | Patch extracted arm64 Mach-O app bundles/dylibs for Apple Silicon Simulator |
 | **Secure credentials** | macOS Keychain or `0600` file keychain at `~/.ipakeep/auth.json` |
-| **Cross-platform Anisette** | Native in-process anisette on every platform, run on a built-in Rust ARM64 interpreter; no Docker, Go, remote server or C toolchain |
+| **Cross-platform Anisette** | Native in-process anisette on every platform, run on ipakeep's own Rust ARM64 interpreter ([Native ARM64 Emulation Engine](#native-arm64-emulation-engine)); no Docker, Go, remote server or C toolchain |
 | **MCP server** | `mcp` runs ipakeep as a Model Context Protocol server over stdio, exposing `search`, `list_versions`, `auth_info`, `download` and `purchases` as tools for AI agents |
 | **CLI + Library** | Use as a command-line tool or as a Rust crate |
 
@@ -574,10 +574,139 @@ depend on outer ones):
 
 ```text
 domain/          Entities, repository traits (ports), use cases, errors — zero external deps
-infrastructure/  HTTP client, plist codec, App Store API, IPA patching, keychains, GrandSlam
+infrastructure/  HTTP client, plist codec, App Store API, IPA patching, keychains, GrandSlam,
+                 and apple_sap/ (Apple asset extraction, Mach-O loader, shims, ARM64 emulator)
 presentation/    Clap CLI commands and output formatting
 main.rs          Wires concrete infrastructure into the presentation handlers
 ```
+
+---
+
+## Native ARM64 Emulation Engine
+
+Signing in to the App Store and downloading apps depends on three Apple
+algorithms that Apple doesn't document: **FairPlay SAP** (request
+signatures), **ADI** (machine provisioning and the anisette / Store AMD
+one-time passwords) and **kbsync** (the account- and hardware-bound blob that
+`ent/download` requires). These algorithms are obfuscated white-box code, so
+ipakeep doesn't try to reimplement them. Instead it runs **Apple's own macOS
+27.0.1 arm64e binaries** in-process, on every OS, on an ARM64 interpreter
+written in Rust as part of this project. It needs no Mac, no Docker, no Go
+helper, no remote anisette server and no C toolchain.
+
+### From restore image to running guest
+
+```text
+macOS 27.0.1 restore image (IPSW, ~26 GB)   pinned; read lazily over HTTP byte ranges, never downloaded whole
+ └─ AEA1 archive                             key HPKE-wrapped (P-256 / HKDF-SHA256 / AES-256-GCM) to Apple's FCS key;
+     │                                       segments HMAC-SHA256-checked, AES-256-CTR-decrypted, LZFSE-decoded
+     └─ APFS cryptex (sealed volume)         object maps, file-system B-tree, decmpfs (LZVN / LZFSE / LZBITMAP)
+         ├─ dyld shared cache                slide info v5; images exported as standalone thin Mach-O
+         ├─ CoreFP, AppleMediaServices, CommerceKit `commerce`, CoreADI `adid`, `fairplayd`, CoreFP.icxs
+         └─ IM4P kernel collection           LZFSE; FairPlayIOKit kext exported as a standalone Mach-O
+→ Mach-O loader     arm64e slice, PAC stripped from code, rebases / binds / chained fixups, guest base
+→ shim layer        ~200 libc, CoreFoundation, IOKit, XPC, Mach, pthread and dispatch functions in Rust
+→ emulator engine   runs the guest code (native interpreter by default)
+```
+
+Every extracted file is cached and pinned to its size and SHA-256 digest.
+The dyld and kext exports are byte-identical to upstream ipatool's.
+
+| Machine | Apple code it runs | What it produces |
+|---------|-------------------|------------------|
+| SAP | `CoreFP` + `AppleMediaServices` | FairPlay SAP session and `X-Apple-ActionSignature` request signatures |
+| Modern ADI | four cooperating guests: the `commerce` client runtime, the `adid` daemon (via faked XPC), `fairplayd` (via faked Mach ports) and the `FairPlayIOKit` kext (via faked IOKit) | machine provisioning, `X-Apple-I-MD*` anisette and Store `X-Apple-AMD` headers |
+| StoreAgent / kbsync | the `commerce` daemon's FairPlay StoreAgent profile | the kbsync blob, FairPlay decryption sessions |
+
+### The interpreter (`src/infrastructure/apple_sap/emu/native/`)
+
+- **What it is:** a fetch / decode / execute A64 interpreter in safe Rust,
+  with no `unsafe`, no JIT and no C dependencies. It implements the same
+  `Engine` API as the old Unicorn wrapper: memory map/read/write, X and V
+  registers, NZCV, code hooks, stop/fail, and runs bounded by a timeout or
+  an instruction count. The machine layer above it is unchanged.
+- **Decoding:** it dispatches on the top-level encoding class (`op0`,
+  bits\[28:25\]) into one module per ARM ARM group:
+
+  | Module | Coverage |
+  |--------|----------|
+  | `dpimm.rs` | PC-relative, add/sub and logical immediate, move wide, bitfield, extract |
+  | `dpreg.rs` | shifted/extended add/sub, logical, ADC/SBC, conditional compare/select, 1- and 2-source, multiply / multiply-long / divide |
+  | `branch.rs` | B/BL, B.cond, CBZ/CBNZ, TBZ/TBNZ, BR/BLR/RET, BRK; hints and barriers are no-ops |
+  | `ldst.rs` | integer loads/stores (unsigned-offset, unscaled, pre/post-indexed, register-offset), pairs, literals, exclusive / acquire-release, `CAS*`, `SWP` |
+  | `simd.rs` | the NEON / scalar-FP / `EOR3` subset Apple's white-boxes use (~0.01% of executed instructions): three-same, two-register-misc, across-lanes, shifts, permutes, EXT, INS/DUP/UMOV/SMOV, TBL/TBX, vector loads/stores, FP compare and convert |
+
+  An encoding outside the modelled set stops the guest with
+  `Unsupported { pc, word, what }`. The interpreter never guesses a
+  neighbouring instruction.
+- **Execution model:** single-threaded, so the exclusive monitor always
+  succeeds. Pointer authentication is stripped at load time, so only the
+  plain branch forms reach the decoder. The guest touches no system
+  registers, so `MRS`/`MSR` are rejected. An access to unmapped memory
+  reports both the faulting address and the PC.
+- **Memory:** sparse 4 KiB pages kept in a frame vector, indexed by a
+  Fibonacci-hashed page map. One-entry caches for the last instruction-fetch
+  page and the last data page let straight-line code and buffer loops skip
+  the lookup. Copies are page-wise instead of byte-wise.
+- **Host functions (shims):** every emulated symbol gets a `ret` stub, and
+  one code hook covers the shim area. The Rust handler runs before the
+  `ret`: it reads arguments from `X0`–`X7`, writes `X0`, and the stub
+  returns to `LR`. This is the same model Unicorn used, so all shims carried
+  over unchanged.
+- **Hot loop:** the wall-clock deadline is checked every 4096 instructions,
+  not on every instruction. A two-compare range check skips hook dispatch
+  for addresses no hook covers. Fetch does a single page lookup plus a
+  4-byte load.
+
+### How it is verified
+
+- **Golden vectors:** 13 `#[ignore]`d tests run the real Apple binaries and
+  must reproduce, byte for byte, the outputs recorded from upstream ipatool:
+  SAP setup and signatures, ADI provisioning (two seeds), Store AMD headers,
+  kbsync, persisted provisioning, and the dyld, kext and APFS exports. See
+  [Contributing](#contributing) for how to run them.
+- **Differential testing against Unicorn:** with the `unicorn` feature
+  enabled, every instruction group's tests run each encoding on both engines
+  and compare X0–X30, SP, PC, NZCV and V0–V31.
+- **Decode oracle:** every size, Q and U combination of the
+  two-register-misc, across-lanes, EXT and INS (element) groups (1,360
+  encodings) is classified with `llvm-mc`. Encodings LLVM rejects or that
+  ipakeep doesn't model must be rejected; every modelled one must match
+  Unicorn.
+- **100% line coverage** is enforced in CI (`tarpaulin.toml`), including the
+  rejection path of every unsupported encoding.
+
+Writing these tests found real interpreter bugs that the golden vectors had
+not exposed: `CASAL` executed as `LDAXP`, `UZP`/`ZIP`/`TRN` and `EXT`
+executed as `TBL`, `FRECPE` executed as `SCVTF`, and reserved element sizes
+accepted. All of them are fixed and covered by regression tests.
+
+### Performance
+
+These are wall times of the golden tests in release builds on an Apple M5
+Max, including loading and relocating the guest images:
+
+| Workload | Native interpreter | Unicorn (deprecated) |
+|----------|--------------------|----------------------|
+| SAP session and signatures | ~0.7 s | ~0.45 s |
+| ADI provisioning | ~2.1 s | ~1.4 s |
+| kbsync, two blobs | ~19 s | ~2.6 s |
+
+Unicorn translates guest code to host code with a JIT (QEMU TCG). The
+interpreter decodes every instruction it executes, so long guest runs such
+as kbsync are several times slower. kbsync is generated once per account and
+device and cached in `kbsync-v1.json`, so a normal download doesn't pay that
+cost. Earlier optimisation work (page-wise memory, page caches, the hook and
+deadline fast paths) already made the SAP signing test about 5× faster in
+release and 13× faster in debug.
+
+### Backends
+
+| Build | Engine | License of the binary |
+|-------|--------|-----------------------|
+| default (`native-cpu`) | native interpreter | MIT |
+| `--features unicorn` / `--all-features` | native interpreter, with Unicorn compiled as the differential oracle | GPL-2.0 |
+| `--no-default-features --features unicorn` | Unicorn (deprecated legacy backend) | GPL-2.0 |
 
 ---
 
@@ -599,9 +728,13 @@ Generate and verify the committed CycloneDX SBOM:
 The gate scores the SBOM with the project `sbomqs` profile and `sbom-tools`,
 verifies NTIA minimum elements, and scans it with `osv-scanner` and `grype`.
 
-CI runs the Rust formatting, compile, Clippy, coverage, dependency, license,
-and SBOM checks, and the test suite on Linux, macOS and Windows. CodeQL
-analyzes the Rust crate.
+CI runs the Rust formatting, compile, Clippy, dependency, license and SBOM
+checks, and the test suite on Linux, macOS and Windows, all with the default
+features and no C toolchain. A separate Linux job installs CMake and libclang
+and runs the `unicorn` configurations: Clippy and tests with `--all-features`
+(which run the native interpreter's differential tests against Unicorn), the
+legacy `--no-default-features --features unicorn` backend, and coverage.
+CodeQL analyzes the Rust crate.
 
 ---
 
@@ -613,6 +746,8 @@ Contributions are welcome.
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
 4. Run the gates: `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all`, `cargo machete`, `cargo +nightly udeps --workspace --all-targets`, `cargo audit`, `cargo deny check`, `cargo tarpaulin --all-features --workspace`, `cargo license --json`, `./scripts/sbom.sh`
+   - The `--all-features` gates build the deprecated `unicorn` feature, so they need CMake and libclang (see Installation). With it enabled, `cargo test --all-features` also runs the native interpreter's differential tests against Unicorn. Changes to the emulator should pass them, plus `cargo clippy --all-targets --no-default-features --features unicorn -- -D warnings`.
+   - The golden tests against Apple's real binaries are `#[ignore]`d because they need the cached Apple assets. Run them by name, for example `cargo test --release --lib -- --ignored --test-threads=1 connect_and_sign_reproduce_golden_signatures`. A bare `--ignored` also runs tests that download the multi-gigabyte macOS restore image.
 5. Open a Pull Request
 
 ---

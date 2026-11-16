@@ -1,4 +1,4 @@
-//! The dedicated thread that owns every `!Send` machine (Unicorn engines).
+//! The dedicated thread that owns every `!Send` machine (emulator engines).
 //!
 //! Jobs arrive as boxed closures and run one at a time against [`Worker`],
 //! which lazily loads the asset bundle and keeps one live modern ADI (the
