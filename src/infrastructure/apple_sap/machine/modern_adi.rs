@@ -773,4 +773,191 @@ mod golden_tests {
         let session = golden["alt_seed"]["session"].as_u64().unwrap();
         assert_eq!(u64::from(start.session), session);
     }
+
+    // ---- Dynamic instrumentation probe (native-reproduction feasibility) ----
+    // Question: is the ADI OTP a pure function of (adi_state, time), or does it
+    // consume fresh host entropy per request? Wraps the host to count random
+    // draws per phase and replays request_otp under advanced / re-frozen RNG.
+    use crate::infrastructure::apple_sap::machine::shims::HostEnvironment as HostEnv;
+
+    struct CountingHost {
+        inner: Rc<SeededHost>,
+        phase: Cell<&'static str>,
+        draws: RefCell<Vec<(&'static str, usize)>>,
+    }
+
+    impl HostEnv for CountingHost {
+        fn now(&self) -> std::time::SystemTime {
+            self.inner.now()
+        }
+        fn fill_random(&self, buffer: &mut [u8]) {
+            self.inner.fill_random(buffer);
+            self.draws
+                .borrow_mut()
+                .push((self.phase.get(), buffer.len()));
+        }
+    }
+
+    #[test]
+    #[ignore = "instrumentation: needs the cached Apple SAP assets"]
+    fn otp_entropy_and_determinism_probe() {
+        let golden = fixture("adi.json");
+        let state = hex_at(&golden, "/adi_state_hex");
+        let id = identifier(&golden);
+
+        // One FRESH ADI session per request (the OTP flow is one-shot per
+        // client session). Returns (otp, mid, bytes drawn DURING the otp call,
+        // bytes drawn during open).
+        let run = |seed: &[u8], unix: u64| -> (Vec<u8>, Vec<u8>, usize, usize) {
+            let host = Rc::new(CountingHost {
+                inner: SeededHost::new(seed),
+                phase: Cell::new("open"),
+                draws: RefCell::new(Vec::new()),
+            });
+            host.inner.freeze(seed, unix);
+            let env = GuestEnvironment {
+                host: Rc::clone(&host) as Rc<dyn HostEnv>,
+                preparation_cache:
+                    crate::infrastructure::apple_sap::macho::PreparationCache::default_location(),
+            };
+            let mut adi = ModernAdi::open(&bundle(), &env, &id, &state).unwrap();
+            host.phase.set("otp");
+            let otp = adi.request_otp(MACHINE_PROVISIONING_DSID).unwrap();
+            let _ = adi.close();
+            let d = host.draws.borrow();
+            let sum = |p: &str| {
+                d.iter()
+                    .filter(|(ph, _)| *ph == p)
+                    .map(|(_, n)| *n)
+                    .sum::<usize>()
+            };
+            (otp.otp, otp.mid, sum("otp"), sum("open"))
+        };
+
+        let t = FIXED_UNIX_TIME;
+        let a = run(PRIMARY_SEED, t); // baseline
+        let b = run(PRIMARY_SEED, t); // same seed+time  -> determinism control
+        let c = run(ALTERNATE_SEED, t); // different RNG  -> random dependence
+        let e = run(PRIMARY_SEED, t + 86_400); // +1 day   -> time dependence
+
+        eprintln!("=== OTP ENTROPY / DETERMINISM PROBE (fresh session per run) ===");
+        eprintln!(
+            "  entropy DURING otp call: a={} b={} c={} e={} bytes",
+            a.2, b.2, c.2, e.2
+        );
+        eprintln!("  entropy during open:     a={} bytes", a.3);
+        eprintln!("  otp(seed1,t)    = {}", hex::encode(&a.0));
+        eprintln!("  otp(seed1,t)    = {}  [repeat]", hex::encode(&b.0));
+        eprintln!("  otp(seed2,t)    = {}  [diff RNG]", hex::encode(&c.0));
+        eprintln!("  otp(seed1,t+1d) = {}  [diff time]", hex::encode(&e.0));
+        eprintln!("  mid(seed1,t)    = {}", hex::encode(&a.1));
+        eprintln!("  --- interpretation ---");
+        eprintln!("  deterministic (same inputs -> same otp): {}", a.0 == b.0);
+        eprintln!("  depends on RNG draw (seed changes otp):  {}", a.0 != c.0);
+        eprintln!("  depends on time     (time changes otp):  {}", a.0 != e.0);
+        eprintln!("  otp consumes host entropy per request:   {}", a.2 > 0);
+
+        assert_eq!(
+            a.0, b.0,
+            "OTP must be deterministic for identical (state, seed, time)"
+        );
+    }
+
+    #[test]
+    #[ignore = "instrumentation: needs the cached Apple SAP assets"]
+    fn otp_time_window_probe() {
+        let golden = fixture("adi.json");
+        let state = hex_at(&golden, "/adi_state_hex");
+        let id = identifier(&golden);
+        let otp_at = |unix: u64| -> Vec<u8> {
+            let host = SeededHost::new(PRIMARY_SEED);
+            host.freeze(PRIMARY_SEED, unix);
+            let env = GuestEnvironment {
+                host: Rc::clone(&host) as Rc<dyn HostEnv>,
+                preparation_cache:
+                    crate::infrastructure::apple_sap::macho::PreparationCache::default_location(),
+            };
+            let mut adi = ModernAdi::open(&bundle(), &env, &id, &state).unwrap();
+            let otp = adi.request_otp(MACHINE_PROVISIONING_DSID).unwrap();
+            let _ = adi.close();
+            otp.otp[8..24].to_vec() // the 16 raw OTP bytes
+        };
+        let base = FIXED_UNIX_TIME;
+        eprintln!("=== OTP TIME-WINDOW PROBE (base={base}) ===");
+        let mut prev: Option<(u64, Vec<u8>)> = None;
+        for off in [0u64, 10, 15, 20, 25, 29, 30, 45, 59, 60] {
+            let t = base + off;
+            let otp = otp_at(t);
+            let same_as_base = off != 0 && otp == otp_at(base);
+            eprintln!(
+                "  t=base+{off:<5} (floor/300={:>8}, floor/60={:>9}) otp16={} same_as_base={same_as_base}",
+                t / 300,
+                t / 60,
+                hex::encode(&otp)
+            );
+            if let Some((po, ref pv)) = prev {
+                if *pv != otp {
+                    eprintln!("    ^ CHANGED vs t=base+{po}");
+                }
+            }
+            prev = Some((off, otp));
+        }
+    }
+
+    #[test]
+    #[ignore = "instrumentation: needs the cached Apple SAP assets"]
+    fn otp_leaf_size_probe() {
+        let golden = fixture("adi.json");
+        let state = hex_at(&golden, "/adi_state_hex");
+        let id = identifier(&golden);
+        let host = SeededHost::new(PRIMARY_SEED);
+        let env = GuestEnvironment {
+            host: Rc::clone(&host) as Rc<dyn HostEnv>,
+            preparation_cache:
+                crate::infrastructure::apple_sap::macho::PreparationCache::default_location(),
+        };
+        let mut adi = ModernAdi::open(&bundle(), &env, &id, &state).unwrap();
+
+        let commerce = Rc::new(Cell::new(0u64));
+        let daemon = Rc::new(Cell::new(0u64));
+        let fairplay = Rc::new(Cell::new(0u64));
+        let kernel = Rc::new(Cell::new(0u64));
+        let span = Rc::new(Cell::new((u64::MAX, 0u64))); // commerce code extent
+
+        let reg = |rt: &SharedRuntime, c: Rc<Cell<u64>>, sp: Option<Rc<Cell<(u64, u64)>>>| {
+            rt.borrow_mut()
+                .engine()
+                .add_code_hook(0, u64::MAX, move |_e, addr, _s| {
+                    c.set(c.get() + 1);
+                    if let Some(ref sp) = sp {
+                        let (lo, hi) = sp.get();
+                        sp.set((lo.min(addr), hi.max(addr)));
+                    }
+                    Ok(())
+                })
+                .unwrap();
+        };
+        reg(&adi.runtime, Rc::clone(&commerce), Some(Rc::clone(&span)));
+        reg(&adi.daemon, Rc::clone(&daemon), None);
+        reg(&adi.fairplay, Rc::clone(&fairplay), None);
+        if let Some(ref k) = adi.kernel {
+            reg(k, Rc::clone(&kernel), None);
+        }
+
+        let otp = adi.request_otp(MACHINE_PROVISIONING_DSID).unwrap();
+
+        let (lo, hi) = span.get();
+        let total = commerce.get() + daemon.get() + fairplay.get() + kernel.get();
+        eprintln!("=== OTP LEAF-SIZE PROBE (instructions per guest during ONE request_otp) ===");
+        eprintln!(
+            "  commerce : {:>9} insns   code span [{lo:#x}..{hi:#x}] = {} bytes",
+            commerce.get(),
+            hi.saturating_sub(lo)
+        );
+        eprintln!("  adid     : {:>9} insns", daemon.get());
+        eprintln!("  fairplayd: {:>9} insns", fairplay.get());
+        eprintln!("  kext     : {:>9} insns", kernel.get());
+        eprintln!("  TOTAL    : {total:>9} insns");
+        eprintln!("  otp16 = {}", hex::encode(&otp.otp[8..24]));
+    }
 }
