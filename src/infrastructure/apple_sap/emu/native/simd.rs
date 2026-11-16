@@ -191,6 +191,14 @@ fn simd_three_copy_table(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeE
         if low2 == 0 {
             return three_different(cpu, word);
         }
+        // bits[11:10] == 10: two-register-miscellaneous (bits[21:17] == 10000)
+        // or across-lanes (bits[21:17] == 11000); bit20 distinguishes them.
+        if low2 == 0b10 && (word >> 17).trailing_zeros() >= 3 {
+            if (word >> 20) & 1 == 0 {
+                return two_reg_misc(cpu, word);
+            }
+            return across_lanes(cpu, word);
+        }
         return Err(unsupported(cpu, word, "simd/three"));
     }
     // bit21 == 0: copy (DUP) and table (TBL) share size==00, bit15==0.
@@ -221,10 +229,16 @@ fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     match opcode {
         // Logical by (U, size) — operate on the full register width.
         0b00011 => {
+            let vd = cpu.v(rd);
             res = match (u, size) {
-                (0, 0b00) => vn & vm, // AND
-                (0, 0b10) => vn | vm, // ORR / MOV
-                (1, 0b00) => vn ^ vm, // EOR
+                (0, 0b00) => vn & vm,                // AND
+                (0, 0b01) => vn & !vm,               // BIC
+                (0, 0b10) => vn | vm,                // ORR / MOV
+                (0, 0b11) => vn | !vm,               // ORN
+                (1, 0b00) => vn ^ vm,                // EOR
+                (1, 0b01) => vm ^ ((vm ^ vn) & vd),  // BSL
+                (1, 0b10) => vd ^ ((vd ^ vn) & vm),  // BIT
+                (1, 0b11) => vd ^ ((vd ^ vn) & !vm), // BIF
                 _ => return Err(unsupported(cpu, word, "simd/three")),
             };
         }
@@ -262,18 +276,8 @@ fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
                 set_lane(&mut res, idx, esize, lane);
             }
         }
-        // USHL (U==1): per-lane logical shift by the signed low byte of Vm.
-        0b01000 if u == 1 => {
-            for idx in 0..lanes {
-                let lane = ushl_lane(
-                    get_lane(vn, idx, esize),
-                    get_lane(vm, idx, esize) as u8 as i8,
-                    esize,
-                );
-                set_lane(&mut res, idx, esize, lane);
-            }
-        }
-        _ => return Err(unsupported(cpu, word, "simd/three")),
+        // Remaining three-same opcodes (compares, min/max, abd, shifts, ADDP).
+        _ => res = three_same_ext(cpu, word, vn, vm, esize, lanes)?,
     }
 
     if q == 0 {
@@ -281,6 +285,99 @@ fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     }
     cpu.set_v(rd, res);
     Ok(Step::Next)
+}
+
+/// Loops a binary per-lane operation over `lanes` elements of `esize` bits.
+fn vec_map2<F: Fn(u64, u64) -> u64>(vn: u128, vm: u128, esize: u32, lanes: u32, f: F) -> u128 {
+    let mut res: u128 = 0;
+    for idx in 0..lanes {
+        let lane = f(get_lane(vn, idx, esize), get_lane(vm, idx, esize));
+        set_lane(&mut res, idx, esize, lane);
+    }
+    res
+}
+
+/// Loops a unary per-lane operation over `lanes` elements of `esize` bits.
+fn vec_map1<F: Fn(u64) -> u64>(vn: u128, esize: u32, lanes: u32, f: F) -> u128 {
+    let mut res: u128 = 0;
+    for idx in 0..lanes {
+        set_lane(&mut res, idx, esize, f(get_lane(vn, idx, esize)));
+    }
+    res
+}
+
+/// Sign-extends an `esize`-bit lane to a signed 64-bit value.
+fn sx(value: u64, esize: u32) -> i64 {
+    sign_extend(value, esize) as i64
+}
+
+/// Maps a boolean comparison result to an all-ones / all-zeros lane mask.
+fn mask_bool(cond: bool) -> u64 {
+    if cond { u64::MAX } else { 0 }
+}
+
+/// ADDP: pairwise add across the Vn:Vm concatenation.
+fn addp_pair(vn: u128, vm: u128, esize: u32, lanes: u32) -> u128 {
+    let mut res: u128 = 0;
+    for idx in 0..lanes {
+        let base = 2 * idx;
+        let (a, b) = if base < lanes {
+            (get_lane(vn, base, esize), get_lane(vn, base + 1, esize))
+        } else {
+            let k = base - lanes;
+            (get_lane(vm, k, esize), get_lane(vm, k + 1, esize))
+        };
+        set_lane(&mut res, idx, esize, a.wrapping_add(b));
+    }
+    res
+}
+
+/// Three-same opcodes added beyond the original arithmetic/logical core:
+/// CMGT/CMHI, CMGE/CMHS, SSHL/USHL, SMAX/UMAX, SMIN/UMIN, SABD/UABD,
+/// CMTST/CMEQ and ADDP.
+fn three_same_ext(
+    cpu: &NativeCpu,
+    word: u32,
+    vn: u128,
+    vm: u128,
+    esize: u32,
+    lanes: u32,
+) -> Result<u128, NativeError> {
+    let u = (word >> 29) & 1;
+    let opcode = (word >> 11) & 0x1f;
+    let res = match (u, opcode) {
+        (0, 0b00110) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            mask_bool(sx(a, esize) > sx(b, esize))
+        }),
+        (1, 0b00110) => vec_map2(vn, vm, esize, lanes, |a, b| mask_bool(a > b)),
+        (0, 0b00111) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            mask_bool(sx(a, esize) >= sx(b, esize))
+        }),
+        (1, 0b00111) => vec_map2(vn, vm, esize, lanes, |a, b| mask_bool(a >= b)),
+        (0, 0b01000) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            sshl_lane(a, b as u8 as i8, esize)
+        }),
+        (1, 0b01000) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            ushl_lane(a, b as u8 as i8, esize)
+        }),
+        (0, 0b01100) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            sx(a, esize).max(sx(b, esize)) as u64
+        }),
+        (1, 0b01100) => vec_map2(vn, vm, esize, lanes, u64::max),
+        (0, 0b01101) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            sx(a, esize).min(sx(b, esize)) as u64
+        }),
+        (1, 0b01101) => vec_map2(vn, vm, esize, lanes, u64::min),
+        (0, 0b01110) => vec_map2(vn, vm, esize, lanes, |a, b| {
+            sx(a, esize).wrapping_sub(sx(b, esize)).unsigned_abs()
+        }),
+        (1, 0b01110) => vec_map2(vn, vm, esize, lanes, u64::abs_diff),
+        (0, 0b10001) => vec_map2(vn, vm, esize, lanes, |a, b| mask_bool(a & b != 0)),
+        (1, 0b10001) => vec_map2(vn, vm, esize, lanes, |a, b| mask_bool(a == b)),
+        (0, 0b10111) => addp_pair(vn, vm, esize, lanes),
+        _ => return Err(unsupported(cpu, word, "simd/three")),
+    };
+    Ok(res)
 }
 
 /// Unsigned register shift of one lane (USHL semantics).
@@ -301,6 +398,33 @@ fn ushl_lane(value: u64, shift: i8, esize: u32) -> u64 {
     } else {
         let amount = (-(i32::from(shift))) as u32;
         if amount >= esize { 0 } else { value >> amount }
+    }
+}
+
+/// Signed register shift of one lane (SSHL semantics).
+fn sshl_lane(value: u64, shift: i8, esize: u32) -> u64 {
+    let mask = if esize == 64 {
+        u64::MAX
+    } else {
+        (1u64 << esize) - 1
+    };
+    if shift >= 0 {
+        let amount = shift as u32;
+        if amount >= esize {
+            0
+        } else {
+            (value << amount) & mask
+        }
+    } else {
+        // Arithmetic right shift: operate on the sign-extended value.
+        let signed = sign_extend(value & mask, esize) as i64;
+        let amount = (-(i32::from(shift))) as u32;
+        let shifted = if amount >= esize {
+            signed >> (esize - 1)
+        } else {
+            signed >> amount
+        };
+        shifted as u64 & mask
     }
 }
 
@@ -329,6 +453,444 @@ fn three_different(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
         set_lane(&mut res, idx, dsize, prod);
     }
     cpu.set_v(rd, res);
+    Ok(Step::Next)
+}
+
+// ---------------------------------------------------------------------------
+// Advanced SIMD: two-register miscellaneous
+// 0_Q_U_01110_size_10000_opcode_10_Rn_Rd
+// ---------------------------------------------------------------------------
+
+/// Reverses the order of `esize`-bit elements within each `container`-bit group.
+fn reverse_elements(value: u128, q: u32, esize: u32, container: u32) -> u128 {
+    let total = if q == 1 { 128 } else { 64 };
+    let per = container / esize; // elements per container
+    let mut res: u128 = 0;
+    for c in 0..total / container {
+        for e in 0..per {
+            let src = c * per + e;
+            let dst = c * per + (per - 1 - e);
+            set_lane(&mut res, dst, esize, get_lane(value, src, esize));
+        }
+    }
+    res
+}
+
+/// Saturates a signed value to the signed range of `bits` bits.
+fn sat_s_to_s(value: i64, bits: u32) -> u64 {
+    let max = (1i64 << (bits - 1)) - 1;
+    let min = -(1i64 << (bits - 1));
+    value.clamp(min, max) as u64
+}
+
+/// Saturates an unsigned value to the unsigned range of `bits` bits.
+fn sat_u_to_u(value: u64, bits: u32) -> u64 {
+    let max = if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    };
+    value.min(max)
+}
+
+/// Saturates a signed value to the unsigned range of `bits` bits.
+fn sat_s_to_u(value: i64, bits: u32) -> u64 {
+    let max = if bits >= 64 {
+        u64::MAX as i64
+    } else {
+        (1i64 << bits) - 1
+    };
+    value.clamp(0, max) as u64
+}
+
+/// Writes a 64-bit narrowed result into the low (`q==0`) or high (`q==1`) half.
+fn write_narrow(cpu: &mut NativeCpu, rd: u32, q: u32, narrow: u128) {
+    if q == 0 {
+        cpu.set_v(rd, narrow);
+    } else {
+        let low = cpu.v(rd) & ((1u128 << 64) - 1);
+        cpu.set_v(rd, low | (narrow << 64));
+    }
+}
+
+/// Narrowing extract (`XTN`/`SQXTN`/`UQXTN`/`SQXTUN`). `mode`: 0 = truncate,
+/// 1 = signed->signed sat, 2 = unsigned->unsigned sat, 3 = signed->unsigned sat.
+fn two_reg_narrow(cpu: &mut NativeCpu, word: u32, mode: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let size = (word >> 22) & 3;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+    if size == 3 {
+        return Err(unsupported(cpu, word, "simd/2misc"));
+    }
+    let edst = 8u32 << size;
+    let esrc = edst * 2;
+    let lanes = 64 / edst;
+    let vn = cpu.v(rn);
+    let mut narrow: u128 = 0;
+    for idx in 0..lanes {
+        let src = get_lane(vn, idx, esrc);
+        let lane = match mode {
+            1 => sat_s_to_s(sign_extend(src, esrc) as i64, edst),
+            2 => sat_u_to_u(src, edst),
+            3 => sat_s_to_u(sign_extend(src, esrc) as i64, edst),
+            _ => src, // truncate (XTN)
+        };
+        set_lane(&mut narrow, idx, edst, lane);
+    }
+    write_narrow(cpu, rd, q, narrow);
+    Ok(Step::Next)
+}
+
+fn two_reg_misc(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let u = (word >> 29) & 1;
+    let size = (word >> 22) & 3;
+    let opcode = (word >> 12) & 0x1f;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+
+    // Narrowing extracts write their own destination half and return early.
+    match (u, opcode) {
+        (0, 0b10010) => return two_reg_narrow(cpu, word, 0), // XTN / XTN2
+        (0, 0b10100) => return two_reg_narrow(cpu, word, 1), // SQXTN / SQXTN2
+        (1, 0b10100) => return two_reg_narrow(cpu, word, 2), // UQXTN / UQXTN2
+        (1, 0b10010) => return two_reg_narrow(cpu, word, 3), // SQXTUN / SQXTUN2
+        _ => {}
+    }
+
+    if u == 1 && opcode == 0b10011 {
+        return simd_shll(cpu, word); // SHLL / SHLL2
+    }
+    if opcode == 0b00010 {
+        return simd_addlp(cpu, word); // SADDLP / UADDLP
+    }
+    // Floating-point forms share the two-register-miscellaneous layout.
+    if matches!(
+        opcode,
+        0b01100 | 0b01101 | 0b01110 | 0b01111 | 0b10110 | 0b10111 | 0b11101
+    ) {
+        return two_reg_misc_fp(cpu, word);
+    }
+
+    let vn = cpu.v(rn);
+    let esize = 8u32 << size;
+    let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+    let bytes = if q == 1 { 16 } else { 8 };
+
+    let res = match (u, opcode) {
+        (0, 0b00000) => reverse_elements(vn, q, esize, 64), // REV64
+        (1, 0b00000) => reverse_elements(vn, q, esize, 32), // REV32
+        (0, 0b00001) => reverse_elements(vn, q, esize, 16), // REV16
+        (0, 0b00100) => vec_map1(vn, esize, lanes, |v| {
+            u64::from(count_leading_sign(v, esize))
+        }),
+        (1, 0b00100) => vec_map1(vn, esize, lanes, |v| {
+            u64::from(count_leading_zeros(v, esize))
+        }),
+        (0, 0b00101) => vec_map1(vn, 8, bytes, |b| u64::from((b as u8).count_ones())), // CNT
+        (1, 0b00101) => match size {
+            0b00 => !vn,                                                             // NOT / MVN
+            0b01 => vec_map1(vn, 8, bytes, |b| u64::from((b as u8).reverse_bits())), // RBIT
+            _ => return Err(unsupported(cpu, word, "simd/2misc")),
+        },
+        // CMGT/CMEQ/CMLT (U==0), CMGE/CMLE (U==1) against #0.
+        (_, 0b01000) | (_, 0b01001) | (0, 0b01010) => vec_map1(vn, esize, lanes, |v| {
+            let s = sx(v, esize);
+            mask_bool(match (u, opcode) {
+                (0, 0b01000) => s > 0,
+                (1, 0b01000) => s >= 0,
+                (0, 0b01001) => v == 0,
+                (1, 0b01001) => s <= 0,
+                _ => s < 0,
+            })
+        }),
+        // ABS (U==0) / NEG (U==1).
+        (_, 0b01011) => vec_map1(vn, esize, lanes, |v| {
+            if u == 0 {
+                sx(v, esize).wrapping_abs() as u64
+            } else {
+                v.wrapping_neg()
+            }
+        }),
+        _ => return Err(unsupported(cpu, word, "simd/2misc")),
+    };
+
+    let res = if q == 0 {
+        res & ((1u128 << 64) - 1)
+    } else {
+        res
+    };
+    cpu.set_v(rd, res);
+    Ok(Step::Next)
+}
+
+/// SHLL / SHLL2: widen by shifting each source element left by its own width.
+fn simd_shll(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let size = (word >> 22) & 3;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+    if size == 3 {
+        return Err(unsupported(cpu, word, "simd/2misc"));
+    }
+    let esrc = 8u32 << size;
+    let dsize = esrc * 2;
+    let lanes = 64 / esrc;
+    let base = if q == 1 { lanes } else { 0 };
+    let vn = cpu.v(rn);
+    let mut res: u128 = 0;
+    for idx in 0..lanes {
+        set_lane(&mut res, idx, dsize, get_lane(vn, base + idx, esrc) << esrc);
+    }
+    cpu.set_v(rd, res);
+    Ok(Step::Next)
+}
+
+/// SADDLP / UADDLP: pairwise add long (destination is twice the source width).
+fn simd_addlp(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let u = (word >> 29) & 1;
+    let size = (word >> 22) & 3;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+    if size == 3 {
+        return Err(unsupported(cpu, word, "simd/2misc"));
+    }
+    let esrc = 8u32 << size;
+    let dsize = esrc * 2;
+    let dlanes = if q == 1 { 128 / dsize } else { 64 / dsize };
+    let vn = cpu.v(rn);
+    let mut res: u128 = 0;
+    for idx in 0..dlanes {
+        let a = get_lane(vn, 2 * idx, esrc);
+        let b = get_lane(vn, 2 * idx + 1, esrc);
+        let sum = if u == 1 {
+            a.wrapping_add(b)
+        } else {
+            sx(a, esrc).wrapping_add(sx(b, esrc)) as u64
+        };
+        set_lane(&mut res, idx, dsize, sum);
+    }
+    cpu.set_v(rd, res);
+    Ok(Step::Next)
+}
+
+/// Floating-point two-register-miscellaneous forms: FABS/FNEG, FP compare
+/// against #0.0, SCVTF/UCVTF, and FCVTL/FCVTN (single<->double only).
+fn two_reg_misc_fp(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let u = (word >> 29) & 1;
+    let size = (word >> 22) & 3;
+    let opcode = (word >> 12) & 0x1f;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+    let vn = cpu.v(rn);
+
+    // FCVTL / FCVTL2: widen single -> double (sz == 1 only).
+    if opcode == 0b10111 && u == 0 && size & 1 == 1 {
+        let base = if q == 1 { 2 } else { 0 };
+        let mut res: u128 = 0;
+        for idx in 0..2 {
+            let s = f32::from_bits(get_lane(vn, base + idx, 32) as u32);
+            set_lane(&mut res, idx, 64, f64::from(s).to_bits());
+        }
+        cpu.set_v(rd, res);
+        return Ok(Step::Next);
+    }
+    // FCVTN / FCVTN2: narrow double -> single (sz == 1 only).
+    if opcode == 0b10110 && u == 0 && size & 1 == 1 {
+        let mut narrow: u128 = 0;
+        for idx in 0..2 {
+            let d = f64::from_bits(get_lane(vn, idx, 64));
+            set_lane(&mut narrow, idx, 32, u64::from((d as f32).to_bits()));
+        }
+        write_narrow(cpu, rd, q, narrow);
+        return Ok(Step::Next);
+    }
+
+    let (fsize, flanes) = fp_arrangement(q, size);
+    let signbit = 1u64 << (fsize - 1);
+    let res = match opcode {
+        // FABS (U==0) / FNEG (U==1).
+        0b01111 => vec_map1(vn, fsize, flanes, |v| {
+            if u == 0 { v & !signbit } else { v ^ signbit }
+        }),
+        // FCMGT/FCMEQ/FCMLT (U==0), FCMGE/FCMLE (U==1) against #0.0.
+        0b01100..=0b01110 => vec_map1(vn, fsize, flanes, |v| {
+            mask_bool(fp_compare_zero(v, fsize, u, opcode))
+        }),
+        // SCVTF (U==0) / UCVTF (U==1).
+        0b11101 => vec_map1(vn, fsize, flanes, |v| int_to_fp(v, fsize, u == 0)),
+        _ => return Err(unsupported(cpu, word, "simd/2misc-fp")),
+    };
+    let res = if q == 0 {
+        res & ((1u128 << 64) - 1)
+    } else {
+        res
+    };
+    cpu.set_v(rd, res);
+    Ok(Step::Next)
+}
+
+/// Element width and lane count for an FP two-register arrangement
+/// (`size[0]` selects single vs. double).
+fn fp_arrangement(q: u32, size: u32) -> (u32, u32) {
+    if size & 1 == 0 {
+        (32, if q == 1 { 4 } else { 2 })
+    } else {
+        (64, 2)
+    }
+}
+
+/// Evaluates an FP compare-against-zero for one lane.
+fn fp_compare_zero(bits: u64, fsize: u32, u: u32, opcode: u32) -> bool {
+    if fsize == 32 {
+        let v = f32::from_bits(bits as u32);
+        match (u, opcode) {
+            (0, 0b01100) => v > 0.0,  // FCMGT
+            (1, 0b01100) => v >= 0.0, // FCMGE
+            (0, 0b01101) => v == 0.0, // FCMEQ
+            (1, 0b01101) => v <= 0.0, // FCMLE
+            _ => v < 0.0,             // FCMLT
+        }
+    } else {
+        let v = f64::from_bits(bits);
+        match (u, opcode) {
+            (0, 0b01100) => v > 0.0,
+            (1, 0b01100) => v >= 0.0,
+            (0, 0b01101) => v == 0.0,
+            (1, 0b01101) => v <= 0.0,
+            _ => v < 0.0,
+        }
+    }
+}
+
+/// Splits a lane into (negative?, magnitude), sign-extending when `signed`.
+fn split_sign(bits: u64, width: u32, signed: bool) -> (bool, u64) {
+    if signed {
+        let s = sign_extend(bits, width) as i64;
+        if s < 0 {
+            (true, s.unsigned_abs())
+        } else {
+            (false, s as u64)
+        }
+    } else {
+        let mask = if width >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << width) - 1
+        };
+        (false, bits & mask)
+    }
+}
+
+/// Converts one integer lane to floating-point bits (`signed` picks SCVTF).
+/// Uses integer arithmetic (via `u_to_f32_bits`/`u_to_f64_bits`) so no
+/// precision-losing float cast is needed, matching the scalar UCVTF path.
+fn int_to_fp(bits: u64, fsize: u32, signed: bool) -> u64 {
+    let (neg, mag) = split_sign(bits, fsize, signed);
+    if fsize == 32 {
+        let out = u_to_f32_bits(mag) | if neg { 0x8000_0000 } else { 0 };
+        u64::from(out)
+    } else {
+        u_to_f64_bits(mag) | if neg { 1u64 << 63 } else { 0 }
+    }
+}
+
+/// Counts leading zero bits within an `esize`-bit lane (CLZ).
+fn count_leading_zeros(value: u64, esize: u32) -> u32 {
+    let mask = if esize == 64 {
+        u64::MAX
+    } else {
+        (1u64 << esize) - 1
+    };
+    let v = value & mask;
+    if v == 0 { esize } else { esize - 1 - v.ilog2() }
+}
+
+/// Counts leading sign-copy bits below the sign bit within a lane (CLS).
+fn count_leading_sign(value: u64, esize: u32) -> u32 {
+    let sign = (value >> (esize - 1)) & 1;
+    let mut count = 0;
+    for i in (0..esize - 1).rev() {
+        if (value >> i) & 1 == sign {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
+// ---------------------------------------------------------------------------
+// Advanced SIMD: across lanes
+// 0_Q_U_01110_size_11000_opcode_10_Rn_Rd
+// ---------------------------------------------------------------------------
+
+fn across_lanes(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let u = (word >> 29) & 1;
+    let size = (word >> 22) & 3;
+    let opcode = (word >> 12) & 0x1f;
+    let rn = (word >> 5) & 0x1f;
+    let rd = word & 0x1f;
+
+    let esize = 8u32 << size;
+    let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+    let vn = cpu.v(rn);
+
+    // SADDLV / UADDLV: accumulate into a doubled-width scalar.
+    if opcode == 0b00011 {
+        let mut acc: u64 = 0;
+        for idx in 0..lanes {
+            let lane = get_lane(vn, idx, esize);
+            if u == 1 {
+                acc = acc.wrapping_add(lane);
+            } else {
+                acc = (acc as i64).wrapping_add(sign_extend(lane, esize) as i64) as u64;
+            }
+        }
+        let dsize = esize * 2;
+        let mask = if dsize >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << dsize) - 1
+        };
+        cpu.set_v(rd, u128::from(acc & mask));
+        return Ok(Step::Next);
+    }
+
+    let mut acc = get_lane(vn, 0, esize);
+    for idx in 1..lanes {
+        let lane = get_lane(vn, idx, esize);
+        acc = match (u, opcode) {
+            (_, 0b11011) => acc.wrapping_add(lane), // ADDV
+            (0, 0b01010) => {
+                let (sacc, slane) = (
+                    sign_extend(acc, esize) as i64,
+                    sign_extend(lane, esize) as i64,
+                );
+                sacc.max(slane) as u64
+            } // SMAXV
+            (1, 0b01010) => acc.max(lane),          // UMAXV
+            (0, 0b11010) => {
+                let (sacc, slane) = (
+                    sign_extend(acc, esize) as i64,
+                    sign_extend(lane, esize) as i64,
+                );
+                sacc.min(slane) as u64
+            } // SMINV
+            (1, 0b11010) => acc.min(lane),          // UMINV
+            _ => return Err(unsupported(cpu, word, "simd/across")),
+        };
+    }
+    let mask = if esize >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << esize) - 1
+    };
+    cpu.set_v(rd, u128::from(acc & mask));
     Ok(Step::Next)
 }
 
@@ -556,6 +1118,19 @@ fn esize_from_immh(immh: u32) -> Option<u32> {
     }
 }
 
+/// Right shift of one lane by a positive immediate (`arith` selects SSHR).
+fn shr_lane(value: u64, shift: u32, esize: u32, arith: bool) -> u64 {
+    if arith {
+        let signed = sign_extend(value, esize) as i64;
+        let amount = shift.min(esize - 1);
+        (signed >> amount) as u64
+    } else if shift >= esize {
+        0
+    } else {
+        value >> shift
+    }
+}
+
 fn shift_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     let q = (word >> 30) & 1;
     let u = (word >> 29) & 1;
@@ -571,18 +1146,87 @@ fn shift_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
     let vn = cpu.v(rn);
 
     match (u, opcode) {
-        // USHR (U==1): per-lane logical right shift.
-        (1, 0b00000) => {
+        // SSHR (U==0) / USHR (U==1): per-lane right shift.
+        (_, 0b00000) => {
             let shift = 2 * esize - immhb;
             let lanes = if q == 1 { 128 / esize } else { 64 / esize };
             let mut res: u128 = 0;
             for idx in 0..lanes {
-                let lane = if shift >= esize {
+                let lane = shr_lane(get_lane(vn, idx, esize), shift, esize, u == 0);
+                set_lane(&mut res, idx, esize, lane);
+            }
+            cpu.set_v(rd, res);
+        }
+        // SSRA (U==0) / USRA (U==1): right shift and accumulate into Vd.
+        (_, 0b00010) => {
+            let shift = 2 * esize - immhb;
+            let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+            let vd = cpu.v(rd);
+            let mut res: u128 = 0;
+            for idx in 0..lanes {
+                let shifted = shr_lane(get_lane(vn, idx, esize), shift, esize, u == 0);
+                let lane = get_lane(vd, idx, esize).wrapping_add(shifted);
+                set_lane(&mut res, idx, esize, lane);
+            }
+            cpu.set_v(rd, res);
+        }
+        // SHL (U==0) / SLI (U==1): left shift (by-insert when U==1).
+        (_, 0b01010) => {
+            let shift = immhb - esize;
+            let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+            let vd = cpu.v(rd);
+            let mut res: u128 = 0;
+            for idx in 0..lanes {
+                let shifted = get_lane(vn, idx, esize) << shift;
+                let lane = if u == 1 && shift > 0 {
+                    let keep = get_lane(vd, idx, esize) & ((1u64 << shift) - 1);
+                    shifted | keep
+                } else {
+                    shifted
+                };
+                set_lane(&mut res, idx, esize, lane);
+            }
+            cpu.set_v(rd, res);
+        }
+        // SRI, SHRN/SHRN2, SSHLL/USHLL: insert / narrowing / widening forms.
+        _ => return shift_immediate_wide(cpu, word, q, esize, immhb, vn),
+    }
+    Ok(Step::Next)
+}
+
+/// Shift-by-immediate forms that insert, narrow, or widen: SRI, SHRN/SHRN2,
+/// SSHLL/USHLL.
+fn shift_immediate_wide(
+    cpu: &mut NativeCpu,
+    word: u32,
+    q: u32,
+    esize: u32,
+    immhb: u32,
+    vn: u128,
+) -> Result<Step, NativeError> {
+    let u = (word >> 29) & 1;
+    let opcode = (word >> 11) & 0x1f;
+    let rd = word & 0x1f;
+    match (u, opcode) {
+        // SRI (U==1): right shift and insert, keeping the top `shift` bits of Vd.
+        (1, 0b01000) => {
+            let shift = 2 * esize - immhb;
+            let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+            let vd = cpu.v(rd);
+            let mut res: u128 = 0;
+            for idx in 0..lanes {
+                let shifted = if shift >= esize {
                     0
                 } else {
                     get_lane(vn, idx, esize) >> shift
                 };
-                set_lane(&mut res, idx, esize, lane);
+                let keep_bits = esize - shift;
+                let top = if keep_bits == 0 {
+                    get_lane(vd, idx, esize)
+                } else {
+                    get_lane(vd, idx, esize) & !((1u64 << keep_bits) - 1)
+                };
+                set_lane(&mut res, idx, esize, shifted | top);
             }
             cpu.set_v(rd, res);
         }
@@ -595,23 +1239,19 @@ fn shift_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
                 let lane = get_lane(vn, idx, 2 * esize) >> shift;
                 set_lane(&mut narrow, idx, esize, lane);
             }
-            if q == 0 {
-                cpu.set_v(rd, narrow);
-            } else {
-                let low = cpu.v(rd) & ((1u128 << 64) - 1);
-                cpu.set_v(rd, low | (narrow << 64));
-            }
+            write_narrow(cpu, rd, q, narrow);
         }
-        // USHLL / USHLL2 (U==1): widen (esize -> 2*esize) with left shift.
-        (1, 0b10100) => {
+        // SSHLL (U==0) / USHLL (U==1): widen (esize -> 2*esize) with left shift.
+        (_, 0b10100) => {
             let shift = immhb - esize;
             let dsize = esize * 2;
             let lanes = 64 / esize;
             let base = if q == 1 { lanes } else { 0 };
             let mut res: u128 = 0;
             for idx in 0..lanes {
-                let lane = get_lane(vn, base + idx, esize) << shift;
-                set_lane(&mut res, idx, dsize, lane);
+                let src = get_lane(vn, base + idx, esize);
+                let widened = if u == 0 { sign_extend(src, esize) } else { src };
+                set_lane(&mut res, idx, dsize, widened << shift);
             }
             cpu.set_v(rd, res);
         }
@@ -1459,5 +2099,331 @@ mod tests {
             Init::default(),
         );
         assert_eq!(d.v[0] as u32, 0x9100_039c);
+    }
+
+    // --- two-register miscellaneous: narrowing -----------------------------
+
+    #[test]
+    fn xtn_and_xtn2() {
+        // xtn v0.8b,v1.8h ; xtn2 v0.16b,v1.8h ; xtn v2.4h,v3.4s
+        let d = check(
+            &[0x0e21_2820, 0x4e21_2820, 0x0e61_2862],
+            init_v(&[
+                (1, 0x1234_5678_9abc_def0_0011_2233_4455_6677),
+                (3, 0xdead_beef_cafe_f00d_1111_2222_3333_4444),
+            ]),
+        );
+        // low 16 bits of each source word survive XTN (lane0=0x4444, lane1=0x2222).
+        assert_eq!(d.v[2] & 0xffff_ffff, 0x2222_4444);
+    }
+
+    #[test]
+    fn saturating_narrow_variants() {
+        // sqxtn v0.8b,v1.8h ; uqxtn v2.4h,v3.4s ; sqxtun v4.8b,v1.8h ; sqxtn2 v5.16b,v1.8h
+        check(
+            &[0x0e21_4820, 0x2e61_4822, 0x2e21_2824, 0x4e21_4825],
+            init_v(&[
+                // halfwords mixing positive overflow, negative, small, max.
+                (1, 0x0080_ff80_7fff_8000_0001_fffe_1234_00aa),
+                (3, 0x0001_0000_8000_0000_7fff_ffff_ffff_0001),
+                (5, 0x1111_2222_3333_4444_5555_6666_7777_8888),
+            ]),
+        );
+    }
+
+    #[test]
+    fn shll_and_shll2() {
+        // shll v0.8h,v1.8b,#8 ; shll2 v2.4s,v1.8h,#16
+        check(
+            &[0x2e21_3820, 0x6e61_3820],
+            init_v(&[(1, 0x8090_a0b0_c0d0_e0f0_0102_0304_0506_0708)]),
+        );
+    }
+
+    // --- two-register miscellaneous: reverse / bit ops ---------------------
+
+    #[test]
+    fn rev_vectors() {
+        // rev64 v0.4s,v1.4s ; rev32 v2.8b,v1.8b ; rev16 v3.16b,v1.16b ; rev64 v4.8b,v1.8b
+        check(
+            &[0x4ea0_0820, 0x2e20_0822, 0x4e20_1823, 0x0e20_0824],
+            init_v(&[(1, 0x0011_2233_4455_6677_8899_aabb_ccdd_eeff)]),
+        );
+    }
+
+    #[test]
+    fn cnt_not_rbit() {
+        // cnt v0.16b,v1.16b ; not v2.16b,v1.16b ; rbit v3.16b,v1.16b
+        let d = check(
+            &[0x4e20_5820, 0x6e20_5822, 0x6e60_5820],
+            init_v(&[(1, 0x0102_0408_1020_4080_ff00_f00f_a5c3_1248)]),
+        );
+        assert_eq!(d.v[2], !0x0102_0408_1020_4080_ff00_f00f_a5c3_1248u128);
+    }
+
+    #[test]
+    fn cls_clz() {
+        // cls v0.4s,v1.4s ; clz v2.4s,v1.4s
+        check(
+            &[0x4ea0_4820, 0x6ea0_4822],
+            init_v(&[(1, 0xffff_fff0_0000_00ff_8000_0000_0000_0001)]),
+        );
+    }
+
+    // --- two-register miscellaneous: negate / abs / compare-zero -----------
+
+    #[test]
+    fn neg_abs() {
+        // neg v0.4s,v1.4s ; abs v2.8h,v1.8h
+        check(
+            &[0x6ea0_b820, 0x4e60_b822],
+            init_v(&[(1, 0x8000_0000_ffff_ffff_8000_7fff_0001_fffe)]),
+        );
+    }
+
+    #[test]
+    fn compare_zero_forms() {
+        // cmeq ; cmge ; cmgt ; cmle ; cmlt  (all v*.4s, v1.4s, #0)
+        check(
+            &[
+                0x4ea0_9820,
+                0x6ea0_8822,
+                0x4ea0_8823,
+                0x6ea0_9824,
+                0x4ea0_a825,
+            ],
+            init_v(&[(1, 0x0000_0000_7fff_ffff_8000_0000_ffff_ffff)]),
+        );
+    }
+
+    #[test]
+    fn saddlp_uaddlp() {
+        // saddlp v0.4h,v1.8b ; uaddlp v2.2s,v1.4h
+        check(
+            &[0x0e20_2820, 0x2e60_2822],
+            init_v(&[(1, 0x1111_2222_3333_4444_80ff_017f_fe02_7f80)]),
+        );
+    }
+
+    // --- across lanes ------------------------------------------------------
+
+    #[test]
+    fn across_lanes_add_maxmin() {
+        // addv s0,v1.4s ; addv b2,v1.16b ; smaxv s3,v1.4s ; umaxv b4,v1.16b
+        // sminv h5,v1.8h ; uminv s6,v1.4s
+        check(
+            &[
+                0x4eb1_b820,
+                0x4e31_b822,
+                0x4eb0_a823,
+                0x6e30_a824,
+                0x4e71_a825,
+                0x6eb1_a826,
+            ],
+            init_v(&[(1, 0x8000_0001_7fff_fffe_0000_0003_ffff_fffc)]),
+        );
+    }
+
+    #[test]
+    fn across_lanes_addlv() {
+        // saddlv h0,v1.16b ; uaddlv s2,v1.4h
+        check(
+            &[0x4e30_3820, 0x2e70_3822],
+            init_v(&[(1, 0x8080_8080_7f7f_7f7f_0102_0304_fffe_fdfc)]),
+        );
+    }
+
+    // --- three-same additions ---------------------------------------------
+
+    #[test]
+    fn cmp_three_same() {
+        // cmgt v10 ; cmhi v11 ; cmge v12 ; cmhs v13 ; cmeq v14 ; cmtst v15 (all .4s, v1,v2)
+        check(
+            &[
+                0x4ea2_342a,
+                0x6ea2_342b,
+                0x4ea2_3c2c,
+                0x6ea2_3c2d,
+                0x6ea2_8c2e,
+                0x4ea2_8c2f,
+            ],
+            init_v(&[
+                (1, 0x8000_0000_0000_0005_ffff_ffff_0000_000f),
+                (2, 0x0000_0001_0000_0005_7fff_ffff_0000_00f0),
+            ]),
+        );
+    }
+
+    #[test]
+    fn maxmin_abd_three_same() {
+        // smax v10.4s ; umax v11.16b ; smin v12.8h ; umin v13.4s ; sabd v14.4s ; uabd v15.16b
+        check(
+            &[
+                0x4ea2_642a,
+                0x6e22_642b,
+                0x4e62_6c2c,
+                0x6ea2_6c2d,
+                0x4ea2_742e,
+                0x6e22_742f,
+            ],
+            init_v(&[
+                (1, 0x8000_0000_ffff_fff0_0000_0010_7fff_ffff),
+                // chosen so per-lane signed differences stay within range (SABD).
+                (2, 0x8000_0005_0000_0020_ffff_ffff_7fff_fff0),
+            ]),
+        );
+    }
+
+    #[test]
+    fn sshl_addp_three_same() {
+        // sshl v0.4s,v1.4s,v2.4s ; addp v3.4s,v1.4s,v2.4s
+        check(
+            &[0x4ea2_4420, 0x4ea2_bc23],
+            init_v(&[
+                (1, 0x8000_0001_0000_00ff_ffff_ffff_0000_0010),
+                // per-lane shift amounts: +4, -4, +31, -40
+                (2, 0x0000_0004_ffff_fffc_0000_001f_ffff_ffd8),
+            ]),
+        );
+    }
+
+    #[test]
+    fn logical_bic_orn_bsl_bit_bif() {
+        // bic v0 ; orn v3 ; bsl v4 ; bit v5 ; bif v6  (all .16b, v1, v2)
+        check(
+            &[
+                0x4e62_1c20,
+                0x4ee2_1c23,
+                0x6e62_1c24,
+                0x6ea2_1c25,
+                0x6ee2_1c26,
+            ],
+            init_v(&[
+                (0, 0x0f0f_0f0f_f0f0_f0f0_aaaa_5555_1234_5678),
+                (1, 0xffff_0000_ffff_0000_f0f0_f0f0_0f0f_0f0f),
+                (2, 0x0ff0_0ff0_1234_5678_5555_aaaa_8765_4321),
+                (3, 0x1111_2222_3333_4444_5555_6666_7777_8888),
+                (4, 0x9999_aaaa_bbbb_cccc_dddd_eeee_ffff_0000),
+                (5, 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210),
+                (6, 0xcafe_babe_dead_beef_0bad_f00d_8bad_f00d),
+            ]),
+        );
+    }
+
+    // --- shift by immediate additions -------------------------------------
+
+    #[test]
+    fn sshr_variants() {
+        // sshr v0.4s,#5 ; sshr v2.2d,#40
+        check(
+            &[0x4f3b_0420, 0x4f58_0422],
+            init_v(&[(1, 0x8000_0000_7fff_ffff_ffff_fff0_0000_0100)]),
+        );
+    }
+
+    #[test]
+    fn ssra_usra() {
+        // ssra v0.4s,v1.4s,#3 ; usra v2.4s,v1.4s,#3
+        check(
+            &[0x4f3d_1420, 0x6f3d_1422],
+            init_v(&[
+                (0, 0x0000_1000_0000_1000_0000_1000_0000_1000),
+                (1, 0x8000_0000_ffff_ffff_0000_0040_1234_5678),
+                (2, 0x0000_2000_0000_2000_0000_2000_0000_2000),
+            ]),
+        );
+    }
+
+    #[test]
+    fn shl_sli_sri() {
+        // shl v0.4s,#5 ; shl v2.16b,#3 ; sli v3.4s,#5 ; sri v4.4s,#5
+        check(
+            &[0x4f25_5420, 0x4f0b_5422, 0x6f25_5423, 0x6f3b_4424],
+            init_v(&[
+                (1, 0x8000_0001_1234_5678_ffff_ffff_0f0f_0f0f),
+                (3, 0xaaaa_aaaa_bbbb_bbbb_cccc_cccc_dddd_dddd),
+                (4, 0x1111_1111_2222_2222_3333_3333_4444_4444),
+            ]),
+        );
+    }
+
+    #[test]
+    fn sshll_signed_widen() {
+        // sshll v0.8h,v1.8b,#3 ; sshll2 v2.4s,v1.8h,#3
+        check(
+            &[0x0f0b_a420, 0x4f13_a422],
+            init_v(&[(1, 0x8001_7fff_f0f0_1234_80ff_017f_fe02_8090)]),
+        );
+    }
+
+    // --- two-register miscellaneous: floating-point ------------------------
+
+    #[test]
+    fn fneg_fabs_vector() {
+        // fneg v0.4s,v1.4s ; fabs v2.2d,v3.2d
+        let d = check(
+            &[0x6ea0_f820, 0x4ee0_f822],
+            init_v(&[
+                (
+                    1,
+                    u128::from(3.5f32.to_bits())
+                        | (u128::from((-1.5f32).to_bits()) << 32)
+                        | (u128::from(2.0f32.to_bits()) << 64)
+                        | (u128::from((-0.0f32).to_bits()) << 96),
+                ),
+                (
+                    3,
+                    u128::from((-6.25f64).to_bits()) | (u128::from(8.0f64.to_bits()) << 64),
+                ),
+            ]),
+        );
+        assert_eq!(d.v[0] as u32, (-3.5f32).to_bits());
+    }
+
+    #[test]
+    fn scvtf_ucvtf_vector() {
+        // scvtf v0.4s,v1.4s ; ucvtf v2.2d,v3.2d
+        let d = check(
+            &[0x4e21_d820, 0x6e61_d822],
+            init_v(&[
+                (1, 0x7fff_ffff_0000_0002_ffff_ff9c_0000_0064),
+                (3, 0x0000_0000_1000_0000_0000_0000_0000_007b),
+            ]),
+        );
+        assert_eq!(d.v[0] as u32, 100.0f32.to_bits());
+    }
+
+    #[test]
+    fn fcvtl_fcvtn_vector() {
+        // fcvtl v0.2d,v1.2s ; fcvtn v2.2s,v3.2d
+        let d = check(
+            &[0x0e61_7820, 0x0e61_6822],
+            init_v(&[
+                (
+                    1,
+                    u128::from(1.5f32.to_bits()) | (u128::from(2.5f32.to_bits()) << 32),
+                ),
+                (
+                    3,
+                    u128::from(3.25f64.to_bits()) | (u128::from(4.75f64.to_bits()) << 64),
+                ),
+            ]),
+        );
+        assert_eq!(d.v[0] as u64, f64::from(1.5f32).to_bits());
+    }
+
+    #[test]
+    fn fcmp_zero_vector() {
+        // fcmeq v0.4s,#0 ; fcmgt v2.4s,#0 ; fcmlt v3.4s,#0  (source v1)
+        check(
+            &[0x4ea0_d820, 0x4ea0_c822, 0x4ea0_e823],
+            init_v(&[(
+                1,
+                u128::from(0.0f32.to_bits())
+                    | (u128::from(2.5f32.to_bits()) << 32)
+                    | (u128::from((-1.0f32).to_bits()) << 64)
+                    | (u128::from(7.0f32.to_bits()) << 96),
+            )]),
+        );
     }
 }
