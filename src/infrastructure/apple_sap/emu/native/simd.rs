@@ -201,14 +201,74 @@ fn simd_three_copy_table(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeE
         }
         return Err(unsupported(cpu, word, "simd/three"));
     }
-    // bit21 == 0: copy (DUP) and table (TBL) share size==00, bit15==0.
-    if size == 0 && (word >> 15) & 1 == 0 {
-        if (word >> 10) & 1 == 1 {
-            return copy_dup(cpu, word);
+    // bit21 == 0, bit15 == 0: copy (DUP/INS/UMOV/SMOV, size==00, bit10==1),
+    // table (TBL/TBX, size==00, bits[11:10]==00) and permute (UZP/TRN/ZIP,
+    // bits[11:10]==10), all with bit29 == 0. bit29 == 1 is EXT or
+    // INS (element), neither of which is modelled.
+    let op = (word >> 29) & 1;
+    if op == 0 && (word >> 15) & 1 == 0 {
+        match low2 {
+            0b01 | 0b11 if size == 0 => return copy_dup(cpu, word),
+            0b00 if size == 0 => return table_tbl(cpu, word),
+            0b10 => return permute(cpu, word),
+            _ => {}
         }
-        return table_tbl(cpu, word);
     }
     Err(unsupported(cpu, word, "simd/three"))
+}
+
+/// `UZP1/2`, `TRN1/2`, `ZIP1/2` — the Advanced SIMD permute group.
+fn permute(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let q = (word >> 30) & 1;
+    let size = (word >> 22) & 3;
+    let opcode = (word >> 12) & 7;
+    if size == 3 && q == 0 {
+        return Err(unsupported(cpu, word, "simd/permute"));
+    }
+    let esize = 8u32 << size;
+    let lanes = if q == 1 { 128 / esize } else { 64 / esize };
+    let pairs = lanes / 2;
+    let part = (opcode >> 2) & 1;
+    let vn = cpu.v((word >> 5) & 0x1f);
+    let vm = cpu.v((word >> 16) & 0x1f);
+    let mut res: u128 = 0;
+    match opcode & 3 {
+        // UZP: even (part 0) or odd (part 1) elements of the Vm:Vn concatenation.
+        0b01 => {
+            for e in 0..lanes {
+                let src = 2 * e + part;
+                let lane = if src < lanes {
+                    get_lane(vn, src, esize)
+                } else {
+                    get_lane(vm, src - lanes, esize)
+                };
+                set_lane(&mut res, e, esize, lane);
+            }
+        }
+        // TRN: interleave the even (part 0) or odd (part 1) elements.
+        0b10 => {
+            for p in 0..pairs {
+                set_lane(&mut res, 2 * p, esize, get_lane(vn, 2 * p + part, esize));
+                set_lane(
+                    &mut res,
+                    2 * p + 1,
+                    esize,
+                    get_lane(vm, 2 * p + part, esize),
+                );
+            }
+        }
+        // ZIP: interleave the low (part 0) or high (part 1) halves.
+        0b11 => {
+            let base = part * pairs;
+            for p in 0..pairs {
+                set_lane(&mut res, 2 * p, esize, get_lane(vn, base + p, esize));
+                set_lane(&mut res, 2 * p + 1, esize, get_lane(vm, base + p, esize));
+            }
+        }
+        _ => return Err(unsupported(cpu, word, "simd/permute")),
+    }
+    cpu.set_v(word & 0x1f, res);
+    Ok(Step::Next)
 }
 
 fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
@@ -1623,6 +1683,31 @@ fn ldst_literal(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     Ok(Step::Next)
 }
 
+/// Encodings adjacent to the copy/table/permute group that are not modelled
+/// must be rejected, not silently executed as a neighbouring instruction.
+#[cfg(test)]
+mod reject_tests {
+    use super::super::{NativeCpu, NativeError};
+
+    #[test]
+    fn ext_and_ins_element_are_rejected() {
+        for word in [
+            0x6e02_1820_u32, // ext v0.16b, v1.16b, v2.16b, #3 (was run as TBL)
+            0x6e0c_0420,     // mov v0.s[1], v1.s[0] (INS element; was DUP element)
+            0x6e03_1c20,     // mov v0.b[1], v1.b[3] (INS element; was INS general)
+        ] {
+            let mut cpu = NativeCpu::new();
+            cpu.mem.map(0x1_0000, 0x1000);
+            cpu.mem.write(0x1_0000, &word.to_le_bytes()).unwrap();
+            cpu.set_pc(0x1_0000);
+            assert!(
+                matches!(cpu.step(), Err(NativeError::Unsupported { .. })),
+                "{word:#010x} must be rejected"
+            );
+        }
+    }
+}
+
 #[cfg(all(test, feature = "unicorn"))]
 mod tests {
     use super::super::diff::{Init, check, init_x};
@@ -1782,6 +1867,32 @@ mod tests {
     }
 
     // --- DUP --------------------------------------------------------------
+
+    #[test]
+    fn permute_uzp_trn_zip_all_sizes() {
+        // Regression: the permute group (bits[11:10] == 10) was routed to TBL.
+        // uzp1 v3.8b,v3.8b,v0.8b ; uzp2 v4.16b,v1.16b,v2.16b ;
+        // trn1 v5.8h,v1.8h,v2.8h ; trn2 v6.4s,v1.4s,v2.4s ;
+        // zip1 v7.2d,v1.2d,v2.2d ; zip2 v8.4h,v1.4h,v2.4h ; uzp1 v9.2s,v1.2s,v2.2s
+        let d = check(
+            &[
+                0x0e00_1863,
+                0x4e02_5824,
+                0x4e42_2825,
+                0x4e82_6826,
+                0x4ec2_3827,
+                0x0e42_7828,
+                0x0e82_1829,
+            ],
+            init_v(&[
+                (0, 0xb6c7_f440_3f0b_9078),
+                (1, 0x0f0e_0d0c_0b0a_0908_0706_0504_0302_0100),
+                (2, 0x1f1e_1d1c_1b1a_1918_1716_1514_1312_1110),
+                (3, 0x067d_c02a_7e6f_20e8),
+            ]),
+        );
+        assert_eq!(d.v[3], 0xc740_0b78_7d2a_6fe8);
+    }
 
     #[test]
     fn dup_element_4s_and_16b() {
