@@ -310,8 +310,10 @@ fn exclusive(cpu: &mut NativeCpu, word: u32, size: u32) -> Result<Step, NativeEr
             }
             Ok(Step::Next)
         }
-        // Compare-and-swap (CAS*) is not modelled.
-        _ => Err(unsupported(cpu, word, "ldst/exclusive")),
+        // Every (o2, o1) is matched above. NOTE: compare-and-swap (CAS*,
+        // o2 == 1 && o1 == 1) is not modelled, yet it currently lands in the
+        // exclusive-pair arm (see `coverage_tests::diff_bugs`).
+        _ => unreachable!(),
     }
 }
 

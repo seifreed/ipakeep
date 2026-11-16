@@ -153,13 +153,7 @@ fn r_diff(s: u32, r: u32, levels: u32) -> u32 {
 }
 
 fn ones(n: u32) -> u64 {
-    if n >= 64 {
-        u64::MAX
-    } else if n == 0 {
-        0
-    } else {
-        (1u64 << n) - 1
-    }
+    if n >= 64 { u64::MAX } else { (1u64 << n) - 1 }
 }
 
 fn ror_in(value: u64, amount: u32, width: u32) -> u64 {

@@ -40,13 +40,7 @@ fn unsupported(cpu: &NativeCpu, word: u32, what: &'static str) -> NativeError {
 // --- width helpers ---
 
 fn ones(n: u32) -> u64 {
-    if n >= 64 {
-        u64::MAX
-    } else if n == 0 {
-        0
-    } else {
-        (1u64 << n) - 1
-    }
+    if n >= 64 { u64::MAX } else { (1u64 << n) - 1 }
 }
 
 fn mask_width(value: u64, sf: u32) -> u64 {

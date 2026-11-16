@@ -231,15 +231,14 @@ fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
         0b00011 => {
             let vd = cpu.v(rd);
             res = match (u, size) {
-                (0, 0b00) => vn & vm,                // AND
-                (0, 0b01) => vn & !vm,               // BIC
-                (0, 0b10) => vn | vm,                // ORR / MOV
-                (0, 0b11) => vn | !vm,               // ORN
-                (1, 0b00) => vn ^ vm,                // EOR
-                (1, 0b01) => vm ^ ((vm ^ vn) & vd),  // BSL
-                (1, 0b10) => vd ^ ((vd ^ vn) & vm),  // BIT
-                (1, 0b11) => vd ^ ((vd ^ vn) & !vm), // BIF
-                _ => return Err(unsupported(cpu, word, "simd/three")),
+                (0, 0b00) => vn & vm,               // AND
+                (0, 0b01) => vn & !vm,              // BIC
+                (0, 0b10) => vn | vm,               // ORR / MOV
+                (0, 0b11) => vn | !vm,              // ORN
+                (1, 0b00) => vn ^ vm,               // EOR
+                (1, 0b01) => vm ^ ((vm ^ vn) & vd), // BSL
+                (1, 0b10) => vd ^ ((vd ^ vn) & vm), // BIT
+                _ => vd ^ ((vd ^ vn) & !vm),        // BIF (1, 0b11)
             };
         }
         // ADD (U==0) / SUB (U==1).
@@ -483,24 +482,16 @@ fn sat_s_to_s(value: i64, bits: u32) -> u64 {
     value.clamp(min, max) as u64
 }
 
-/// Saturates an unsigned value to the unsigned range of `bits` bits.
+/// Saturates an unsigned value to the unsigned range of `bits` bits
+/// (`1 <= bits <= 64`).
 fn sat_u_to_u(value: u64, bits: u32) -> u64 {
-    let max = if bits >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
-    };
-    value.min(max)
+    value.min(u64::MAX >> (64 - bits))
 }
 
-/// Saturates a signed value to the unsigned range of `bits` bits.
+/// Saturates a signed value to the unsigned range of `bits` bits
+/// (`1 <= bits <= 64`).
 fn sat_s_to_u(value: i64, bits: u32) -> u64 {
-    let max = if bits >= 64 {
-        u64::MAX as i64
-    } else {
-        (1i64 << bits) - 1
-    };
-    value.clamp(0, max) as u64
+    value.clamp(0, (u64::MAX >> (64 - bits)) as i64) as u64
 }
 
 /// Writes a 64-bit narrowed result into the low (`q==0`) or high (`q==1`) half.
@@ -800,12 +791,7 @@ fn int_to_fp(bits: u64, fsize: u32, signed: bool) -> u64 {
 
 /// Counts leading zero bits within an `esize`-bit lane (CLZ).
 fn count_leading_zeros(value: u64, esize: u32) -> u32 {
-    let mask = if esize == 64 {
-        u64::MAX
-    } else {
-        (1u64 << esize) - 1
-    };
-    let v = value & mask;
+    let v = value & (u64::MAX >> (64 - esize));
     if v == 0 { esize } else { esize - 1 - v.ilog2() }
 }
 
@@ -885,12 +871,7 @@ fn across_lanes(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
             _ => return Err(unsupported(cpu, word, "simd/across")),
         };
     }
-    let mask = if esize >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << esize) - 1
-    };
-    cpu.set_v(rd, u128::from(acc & mask));
+    cpu.set_v(rd, u128::from(acc & (u64::MAX >> (64 - esize))));
     Ok(Step::Next)
 }
 
@@ -1103,18 +1084,17 @@ fn modified_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeErro
     Ok(Step::Next)
 }
 
-/// Element width (bits) selected by `immh`, or `None` when `immh == 0`.
-fn esize_from_immh(immh: u32) -> Option<u32> {
+/// Element width (bits) selected by a non-zero `immh` (its highest set bit).
+/// `immh == 0` is the modified-immediate group, dispatched before this.
+fn esize_from_immh(immh: u32) -> u32 {
     if immh & 0b1000 != 0 {
-        Some(64)
+        64
     } else if immh & 0b0100 != 0 {
-        Some(32)
+        32
     } else if immh & 0b0010 != 0 {
-        Some(16)
-    } else if immh & 0b0001 != 0 {
-        Some(8)
+        16
     } else {
-        None
+        8
     }
 }
 
@@ -1140,9 +1120,7 @@ fn shift_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
     let rn = (word >> 5) & 0x1f;
     let rd = word & 0x1f;
     let immhb = (immh << 3) | immb;
-    let Some(esize) = esize_from_immh(immh) else {
-        return Err(unsupported(cpu, word, "simd/shift"));
-    };
+    let esize = esize_from_immh(immh);
     let vn = cpu.v(rn);
 
     match (u, opcode) {
@@ -1493,7 +1471,8 @@ pub(super) fn load_store(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeE
         0b111 => ldst_register(cpu, word),
         0b101 => ldst_pair(cpu, word),
         0b011 if op24 == 0 => ldst_literal(cpu, word),
-        _ => Err(unsupported(cpu, word, "simd/ldst")),
+        // `ldst::run` only delegates the three groups above.
+        _ => unreachable!(),
     }
 }
 
