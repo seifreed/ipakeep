@@ -203,18 +203,64 @@ fn simd_three_copy_table(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeE
     }
     // bit21 == 0, bit15 == 0: copy (DUP/INS/UMOV/SMOV, size==00, bit10==1),
     // table (TBL/TBX, size==00, bits[11:10]==00) and permute (UZP/TRN/ZIP,
-    // bits[11:10]==10), all with bit29 == 0. bit29 == 1 is EXT or
-    // INS (element), neither of which is modelled.
+    // bits[11:10]==10), all with bit29 == 0. With bit29 == 1 and size == 00
+    // it is EXT (bit10 == 0) or INS (element) (bit10 == 1).
     let op = (word >> 29) & 1;
-    if op == 0 && (word >> 15) & 1 == 0 {
-        match low2 {
-            0b01 | 0b11 if size == 0 => return copy_dup(cpu, word),
-            0b00 if size == 0 => return table_tbl(cpu, word),
-            0b10 => return permute(cpu, word),
+    if (word >> 15) & 1 == 0 {
+        match (op, low2) {
+            (0, 0b01 | 0b11) if size == 0 => return copy_dup(cpu, word),
+            (0, 0b00) if size == 0 => return table_tbl(cpu, word),
+            (0, 0b10) => return permute(cpu, word),
+            (1, 0b00 | 0b10) if size == 0 => return ext(cpu, word),
+            (1, 0b01 | 0b11) if size == 0 => return ins_element(cpu, word),
             _ => {}
         }
     }
     Err(unsupported(cpu, word, "simd/three"))
+}
+
+/// `EXT` — the bytes of the `Vm:Vn` concatenation starting at byte `imm4`.
+fn ext(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let bytes = if (word >> 30) & 1 == 1 { 16 } else { 8 };
+    let imm4 = (word >> 11) & 0xf;
+    if imm4 >= bytes {
+        return Err(unsupported(cpu, word, "simd/ext"));
+    }
+    let vn = cpu.v((word >> 5) & 0x1f);
+    let vm = cpu.v((word >> 16) & 0x1f);
+    let mut res: u128 = 0;
+    for i in 0..bytes {
+        let src = imm4 + i;
+        let byte = if src < bytes {
+            get_lane(vn, src, 8)
+        } else {
+            get_lane(vm, src - bytes, 8)
+        };
+        set_lane(&mut res, i, 8, byte);
+    }
+    cpu.set_v(word & 0x1f, res);
+    Ok(Step::Next)
+}
+
+/// `INS (element)` / `MOV Vd.T[i], Vn.T[j]` — copies one element and keeps
+/// the rest of `Vd`. The element size is the lowest set bit of `imm5`.
+fn ins_element(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
+    let imm5 = (word >> 16) & 0x1f;
+    let size = imm5.trailing_zeros();
+    if (word >> 30) & 1 == 0 || size > 3 {
+        return Err(unsupported(cpu, word, "simd/ins"));
+    }
+    let esize = 8u32 << size;
+    let src = get_lane(
+        cpu.v((word >> 5) & 0x1f),
+        ((word >> 11) & 0xf) >> size,
+        esize,
+    );
+    let rd = word & 0x1f;
+    let mut res = cpu.v(rd);
+    set_lane(&mut res, imm5 >> (size + 1), esize, src);
+    cpu.set_v(rd, res);
+    Ok(Step::Next)
 }
 
 /// `UZP1/2`, `TRN1/2`, `ZIP1/2` — the Advanced SIMD permute group.
@@ -291,15 +337,14 @@ fn three_same(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
         0b00011 => {
             let vd = cpu.v(rd);
             res = match (u, size) {
-                (0, 0b00) => vn & vm,                // AND
-                (0, 0b01) => vn & !vm,               // BIC
-                (0, 0b10) => vn | vm,                // ORR / MOV
-                (0, 0b11) => vn | !vm,               // ORN
-                (1, 0b00) => vn ^ vm,                // EOR
-                (1, 0b01) => vm ^ ((vm ^ vn) & vd),  // BSL
-                (1, 0b10) => vd ^ ((vd ^ vn) & vm),  // BIT
-                (1, 0b11) => vd ^ ((vd ^ vn) & !vm), // BIF
-                _ => return Err(unsupported(cpu, word, "simd/three")),
+                (0, 0b00) => vn & vm,               // AND
+                (0, 0b01) => vn & !vm,              // BIC
+                (0, 0b10) => vn | vm,               // ORR / MOV
+                (0, 0b11) => vn | !vm,              // ORN
+                (1, 0b00) => vn ^ vm,               // EOR
+                (1, 0b01) => vm ^ ((vm ^ vn) & vd), // BSL
+                (1, 0b10) => vd ^ ((vd ^ vn) & vm), // BIT
+                _ => vd ^ ((vd ^ vn) & !vm),        // BIF (1, 0b11)
             };
         }
         // ADD (U==0) / SUB (U==1).
@@ -543,24 +588,16 @@ fn sat_s_to_s(value: i64, bits: u32) -> u64 {
     value.clamp(min, max) as u64
 }
 
-/// Saturates an unsigned value to the unsigned range of `bits` bits.
+/// Saturates an unsigned value to the unsigned range of `bits` bits
+/// (`1 <= bits <= 64`).
 fn sat_u_to_u(value: u64, bits: u32) -> u64 {
-    let max = if bits >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
-    };
-    value.min(max)
+    value.min(u64::MAX >> (64 - bits))
 }
 
-/// Saturates a signed value to the unsigned range of `bits` bits.
+/// Saturates a signed value to the unsigned range of `bits` bits
+/// (`1 <= bits <= 64`).
 fn sat_s_to_u(value: i64, bits: u32) -> u64 {
-    let max = if bits >= 64 {
-        u64::MAX as i64
-    } else {
-        (1i64 << bits) - 1
-    };
-    value.clamp(0, max) as u64
+    value.clamp(0, (u64::MAX >> (64 - bits)) as i64) as u64
 }
 
 /// Writes a 64-bit narrowed result into the low (`q==0`) or high (`q==1`) half.
@@ -631,6 +668,17 @@ fn two_reg_misc(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
         0b01100 | 0b01101 | 0b01110 | 0b01111 | 0b10110 | 0b10111 | 0b11101
     ) {
         return two_reg_misc_fp(cpu, word);
+    }
+    // Reserved element sizes (checked against llvm-mc, see
+    // `coverage_tests::decode_oracle`): they must not run as a wider form.
+    let reserved = match (u, opcode) {
+        (0, 0b00000) | (_, 0b00100) => size == 3, // REV64, CLS/CLZ
+        (1, 0b00000) => size >= 2,                // REV32
+        (0, 0b00001) | (0, 0b00101) => size != 0, // REV16, CNT
+        _ => size == 3 && q == 0,                 // .1d forms
+    };
+    if reserved {
+        return Err(unsupported(cpu, word, "simd/2misc"));
     }
 
     let vn = cpu.v(rn);
@@ -747,8 +795,22 @@ fn two_reg_misc_fp(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
     let rd = word & 0x1f;
     let vn = cpu.v(rn);
 
-    // FCVTL / FCVTL2: widen single -> double (sz == 1 only).
-    if opcode == 0b10111 && u == 0 && size & 1 == 1 {
+    // Only the allocated, modelled forms run (checked against llvm-mc, see
+    // `coverage_tests::decode_oracle`). size<1> selects SCVTF/UCVTF (0) versus
+    // FRECPE/FRSQRTE (1); FCVTL/FCVTN with sz == 0 are the half-precision forms.
+    let modelled = match (u, opcode) {
+        (0, 0b10110 | 0b10111) => size == 1, // FCVTN / FCVTL, single <-> double
+        (_, 0b11101) => size == 0 || (size == 1 && q == 1), // SCVTF / UCVTF
+        (1, 0b01110) => false,
+        (_, 0b01100..=0b01111) => size == 2 || (size == 3 && q == 1), // FCMxx #0, FABS/FNEG
+        _ => false,
+    };
+    if !modelled {
+        return Err(unsupported(cpu, word, "simd/2misc-fp"));
+    }
+
+    // FCVTL / FCVTL2: widen single -> double.
+    if opcode == 0b10111 {
         let base = if q == 1 { 2 } else { 0 };
         let mut res: u128 = 0;
         for idx in 0..2 {
@@ -758,8 +820,8 @@ fn two_reg_misc_fp(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
         cpu.set_v(rd, res);
         return Ok(Step::Next);
     }
-    // FCVTN / FCVTN2: narrow double -> single (sz == 1 only).
-    if opcode == 0b10110 && u == 0 && size & 1 == 1 {
+    // FCVTN / FCVTN2: narrow double -> single.
+    if opcode == 0b10110 {
         let mut narrow: u128 = 0;
         for idx in 0..2 {
             let d = f64::from_bits(get_lane(vn, idx, 64));
@@ -780,9 +842,8 @@ fn two_reg_misc_fp(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
         0b01100..=0b01110 => vec_map1(vn, fsize, flanes, |v| {
             mask_bool(fp_compare_zero(v, fsize, u, opcode))
         }),
-        // SCVTF (U==0) / UCVTF (U==1).
-        0b11101 => vec_map1(vn, fsize, flanes, |v| int_to_fp(v, fsize, u == 0)),
-        _ => return Err(unsupported(cpu, word, "simd/2misc-fp")),
+        // SCVTF (U==0) / UCVTF (U==1): the only other modelled opcode, 0b11101.
+        _ => vec_map1(vn, fsize, flanes, |v| int_to_fp(v, fsize, u == 0)),
     };
     let res = if q == 0 {
         res & ((1u128 << 64) - 1)
@@ -860,12 +921,7 @@ fn int_to_fp(bits: u64, fsize: u32, signed: bool) -> u64 {
 
 /// Counts leading zero bits within an `esize`-bit lane (CLZ).
 fn count_leading_zeros(value: u64, esize: u32) -> u32 {
-    let mask = if esize == 64 {
-        u64::MAX
-    } else {
-        (1u64 << esize) - 1
-    };
-    let v = value & mask;
+    let v = value & (u64::MAX >> (64 - esize));
     if v == 0 { esize } else { esize - 1 - v.ilog2() }
 }
 
@@ -896,6 +952,11 @@ fn across_lanes(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     let rn = (word >> 5) & 0x1f;
     let rd = word & 0x1f;
 
+    // 64-bit lanes and the two-lane `.2s` form are reserved for every
+    // across-lanes reduction (checked against llvm-mc).
+    if size == 3 || (size == 2 && q == 0) {
+        return Err(unsupported(cpu, word, "simd/across"));
+    }
     let esize = 8u32 << size;
     let lanes = if q == 1 { 128 / esize } else { 64 / esize };
     let vn = cpu.v(rn);
@@ -925,7 +986,7 @@ fn across_lanes(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     for idx in 1..lanes {
         let lane = get_lane(vn, idx, esize);
         acc = match (u, opcode) {
-            (_, 0b11011) => acc.wrapping_add(lane), // ADDV
+            (0, 0b11011) => acc.wrapping_add(lane), // ADDV (U == 1 is unallocated)
             (0, 0b01010) => {
                 let (sacc, slane) = (
                     sign_extend(acc, esize) as i64,
@@ -945,12 +1006,7 @@ fn across_lanes(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
             _ => return Err(unsupported(cpu, word, "simd/across")),
         };
     }
-    let mask = if esize >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << esize) - 1
-    };
-    cpu.set_v(rd, u128::from(acc & mask));
+    cpu.set_v(rd, u128::from(acc & (u64::MAX >> (64 - esize))));
     Ok(Step::Next)
 }
 
@@ -1163,18 +1219,17 @@ fn modified_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeErro
     Ok(Step::Next)
 }
 
-/// Element width (bits) selected by `immh`, or `None` when `immh == 0`.
-fn esize_from_immh(immh: u32) -> Option<u32> {
+/// Element width (bits) selected by a non-zero `immh` (its highest set bit).
+/// `immh == 0` is the modified-immediate group, dispatched before this.
+fn esize_from_immh(immh: u32) -> u32 {
     if immh & 0b1000 != 0 {
-        Some(64)
+        64
     } else if immh & 0b0100 != 0 {
-        Some(32)
+        32
     } else if immh & 0b0010 != 0 {
-        Some(16)
-    } else if immh & 0b0001 != 0 {
-        Some(8)
+        16
     } else {
-        None
+        8
     }
 }
 
@@ -1200,9 +1255,7 @@ fn shift_immediate(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> 
     let rn = (word >> 5) & 0x1f;
     let rd = word & 0x1f;
     let immhb = (immh << 3) | immb;
-    let Some(esize) = esize_from_immh(immh) else {
-        return Err(unsupported(cpu, word, "simd/shift"));
-    };
+    let esize = esize_from_immh(immh);
     let vn = cpu.v(rn);
 
     match (u, opcode) {
@@ -1553,7 +1606,8 @@ pub(super) fn load_store(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeE
         0b111 => ldst_register(cpu, word),
         0b101 => ldst_pair(cpu, word),
         0b011 if op24 == 0 => ldst_literal(cpu, word),
-        _ => Err(unsupported(cpu, word, "simd/ldst")),
+        // `ldst::run` only delegates the three groups above.
+        _ => unreachable!(),
     }
 }
 
@@ -1681,31 +1735,6 @@ fn ldst_literal(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     let value = load_vec(cpu, addr, bytes)?;
     cpu.set_v(rt, value);
     Ok(Step::Next)
-}
-
-/// Encodings adjacent to the copy/table/permute group that are not modelled
-/// must be rejected, not silently executed as a neighbouring instruction.
-#[cfg(test)]
-mod reject_tests {
-    use super::super::{NativeCpu, NativeError};
-
-    #[test]
-    fn ext_and_ins_element_are_rejected() {
-        for word in [
-            0x6e02_1820_u32, // ext v0.16b, v1.16b, v2.16b, #3 (was run as TBL)
-            0x6e0c_0420,     // mov v0.s[1], v1.s[0] (INS element; was DUP element)
-            0x6e03_1c20,     // mov v0.b[1], v1.b[3] (INS element; was INS general)
-        ] {
-            let mut cpu = NativeCpu::new();
-            cpu.mem.map(0x1_0000, 0x1000);
-            cpu.mem.write(0x1_0000, &word.to_le_bytes()).unwrap();
-            cpu.set_pc(0x1_0000);
-            assert!(
-                matches!(cpu.step(), Err(NativeError::Unsupported { .. })),
-                "{word:#010x} must be rejected"
-            );
-        }
-    }
 }
 
 #[cfg(all(test, feature = "unicorn"))]

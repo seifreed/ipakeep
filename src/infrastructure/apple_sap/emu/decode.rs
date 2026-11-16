@@ -118,7 +118,7 @@ fn dp_imm(word: u32) -> &'static str {
             0b01 => "ADDS",
             0b10 => "SUB",
             0b11 => "SUBS",
-            _ => "addsub (imm)",
+            _ => unreachable!(),
         },
         // Add/subtract (immediate, with tags).
         0b011 => "ADDG/SUBG",
@@ -128,7 +128,7 @@ fn dp_imm(word: u32) -> &'static str {
             0b01 => "ORR",
             0b10 => "EOR",
             0b11 => "ANDS",
-            _ => "logical (imm)",
+            _ => unreachable!(),
         },
         // Move wide (immediate): word[30:29]=opc (01 is unallocated).
         0b101 => match (word >> 29) & 0x3 {
@@ -146,7 +146,7 @@ fn dp_imm(word: u32) -> &'static str {
         },
         // Extract.
         0b111 => "EXTR",
-        _ => "unknown (DataProcImm)",
+        _ => unreachable!(),
     }
 }
 
@@ -310,7 +310,7 @@ fn ldst_exclusive(word: u32) -> &'static str {
             (0, 1) => "STLXR",
             (1, 0) => "LDXR",
             (1, 1) => "LDAXR",
-            _ => "exclusive",
+            _ => unreachable!(),
         },
         // Exclusive pair.
         (0, 1) => {
@@ -326,7 +326,7 @@ fn ldst_exclusive(word: u32) -> &'static str {
             (0, 1) => "STLR",
             (1, 0) => "LDLAR",
             (1, 1) => "LDAR",
-            _ => "ordered",
+            _ => unreachable!(),
         },
         // Compare and swap: L is the acquire bit, o0 the release bit.
         (1, 1) => match (l, o0) {
@@ -334,9 +334,9 @@ fn ldst_exclusive(word: u32) -> &'static str {
             (1, 0) => "CASA",
             (0, 1) => "CASL",
             (1, 1) => "CASAL",
-            _ => "cas",
+            _ => unreachable!(),
         },
-        _ => "unknown (LoadStore)",
+        _ => unreachable!(),
     }
 }
 
@@ -347,28 +347,16 @@ fn ldst_atomic(word: u32) -> &'static str {
 
     if o3 == 1 && opc == 0b000 {
         // SWP: word[23]=A (acquire), word[22]=R (release).
-        return match ((word >> 23) & 1, (word >> 22) & 1) {
-            (0, 0) => "SWP",
-            (1, 0) => "SWPA",
-            (0, 1) => "SWPL",
-            (1, 1) => "SWPAL",
-            _ => "SWP",
-        };
+        let (a, r) = ((word >> 23) & 1, (word >> 22) & 1);
+        return [["SWP", "SWPL"], ["SWPA", "SWPAL"]][a as usize][r as usize];
     }
 
     if o3 == 0 {
         // LD<op>/ST<op> read-modify-write family.
-        return match opc {
-            0b000 => "LDADD",
-            0b001 => "LDCLR",
-            0b010 => "LDEOR",
-            0b011 => "LDSET",
-            0b100 => "LDSMAX",
-            0b101 => "LDSMIN",
-            0b110 => "LDUMAX",
-            0b111 => "LDUMIN",
-            _ => "atomic (LSE)",
-        };
+        // Indexed by opc (3 bits, so every index is in range).
+        return [
+            "LDADD", "LDCLR", "LDEOR", "LDSET", "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN",
+        ][opc as usize];
     }
 
     "atomic (LSE)"
@@ -381,7 +369,7 @@ fn ldst_literal(word: u32) -> &'static str {
         0b00 | 0b01 => "LDR",
         0b10 => "LDRSW",
         0b11 => "PRFM",
-        _ => "ldr (literal)",
+        _ => unreachable!(),
     }
 }
 
@@ -460,28 +448,19 @@ fn dp_reg(word: u32) -> &'static str {
 
     // Logical (shifted register): word[30:29]=opc, word[21]=N.
     if op == 0b01010 {
-        return match ((word >> 29) & 0x3, (word >> 21) & 1) {
-            (0b00, 0) => "AND",
-            (0b00, 1) => "BIC",
-            (0b01, 0) => "ORR",
-            (0b01, 1) => "ORN",
-            (0b10, 0) => "EOR",
-            (0b10, 1) => "EON",
-            (0b11, 0) => "ANDS",
-            (0b11, 1) => "BICS",
-            _ => "logical (reg)",
-        };
+        // Indexed by [opc][N].
+        return [
+            ["AND", "BIC"],
+            ["ORR", "ORN"],
+            ["EOR", "EON"],
+            ["ANDS", "BICS"],
+        ][((word >> 29) & 0x3) as usize][((word >> 21) & 1) as usize];
     }
 
     // Add/subtract (shifted or extended register): word[30]=op, word[29]=S.
     if op == 0b01011 {
-        return match (word >> 29) & 0x3 {
-            0b00 => "ADD",
-            0b01 => "ADDS",
-            0b10 => "SUB",
-            0b11 => "SUBS",
-            _ => "addsub (reg)",
-        };
+        // Indexed by op:S.
+        return ["ADD", "ADDS", "SUB", "SUBS"][((word >> 29) & 0x3) as usize];
     }
 
     // Data-processing (3 source): word[30:29]=op54, word[23:21]=op31, word[15]=o0.
@@ -507,7 +486,7 @@ fn dp_reg(word: u32) -> &'static str {
             0b01 => "ADCS",
             0b10 => "SBC",
             0b11 => "SBCS",
-            _ => "adc",
+            _ => unreachable!(),
         },
         // Conditional compare (register or immediate): word[30] selects.
         0b11010010 => {
@@ -695,3 +674,7 @@ mod tests {
         assert_eq!(classify(0x0400_0000), A64Class::Unallocated);
     }
 }
+
+#[cfg(test)]
+#[path = "decode_mnemonic_tests.rs"]
+mod mnemonic_tests;

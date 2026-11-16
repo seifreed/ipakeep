@@ -347,3 +347,7 @@ fn timeout_microseconds(timeout: Duration) -> u64 {
         .unwrap_or(u64::MAX)
         .max(MICROSECONDS_MINIMUM)
 }
+
+#[cfg(test)]
+#[path = "engine_tests.rs"]
+mod code_tests;
