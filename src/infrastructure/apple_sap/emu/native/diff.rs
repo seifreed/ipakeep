@@ -21,6 +21,7 @@ pub(super) struct Init {
     pub x: [u64; 31],
     pub sp: u64,
     pub nzcv: u32,
+    pub v: [u128; 32],
 }
 
 impl Default for Init {
@@ -29,6 +30,7 @@ impl Default for Init {
             x: [0; 31],
             sp: STACK,
             nzcv: 0,
+            v: [0; 32],
         }
     }
 }
@@ -40,6 +42,7 @@ pub(super) struct Dump {
     pub sp: u64,
     pub pc: u64,
     pub nzcv: u32,
+    pub v: [u128; 32],
 }
 
 fn run_unicorn(code: &[u32], init: &Init, steps: usize) -> Dump {
@@ -55,17 +58,25 @@ fn run_unicorn(code: &[u32], init: &Init, steps: usize) -> Dump {
     }
     e.reg_write(Register::Sp, init.sp).unwrap();
     e.reg_write(Register::Nzcv, u64::from(init.nzcv)).unwrap();
+    for (n, value) in init.v.iter().enumerate() {
+        e.vreg_write(n as u8, value.to_le_bytes()).unwrap();
+    }
     e.start_bounded(CODE, SENTINEL, Duration::from_secs(10), steps)
         .expect("unicorn run");
     let mut x = [0u64; 31];
     for (n, slot) in x.iter_mut().enumerate() {
         *slot = e.reg_read(Register::X(n as u8)).unwrap();
     }
+    let mut v = [0u128; 32];
+    for (n, slot) in v.iter_mut().enumerate() {
+        *slot = u128::from_le_bytes(e.vreg_read(n as u8).unwrap());
+    }
     Dump {
         x,
         sp: e.reg_read(Register::Sp).unwrap(),
         pc: e.reg_read(Register::Pc).unwrap(),
         nzcv: (e.reg_read(Register::Nzcv).unwrap() as u32) & 0xf000_0000,
+        v,
     }
 }
 
@@ -84,17 +95,25 @@ fn run_native(code: &[u32], init: &Init, steps: usize) -> Dump {
     }
     cpu.set_sp(init.sp);
     cpu.set_nzcv(init.nzcv);
+    for (n, value) in init.v.iter().enumerate() {
+        cpu.set_v(n as u32, *value);
+    }
     cpu.set_pc(CODE);
     cpu.run(SENTINEL, steps).expect("native run");
     let mut x = [0u64; 31];
     for (n, slot) in x.iter_mut().enumerate() {
         *slot = cpu.x(n as u32);
     }
+    let mut v = [0u128; 32];
+    for (n, slot) in v.iter_mut().enumerate() {
+        *slot = cpu.v(n as u32);
+    }
     Dump {
         x,
         sp: cpu.sp(),
         pc: cpu.pc(),
         nzcv: cpu.nzcv() & 0xf000_0000,
+        v,
     }
 }
 

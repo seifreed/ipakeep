@@ -127,7 +127,7 @@ pub(super) fn run(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
 /// register-offset forms.
 fn register(cpu: &mut NativeCpu, word: u32, size: u32, v: u32) -> Result<Step, NativeError> {
     if v == 1 {
-        return Err(unsupported(cpu, word, "ldst/simd-reg"));
+        return super::simd::load_store(cpu, word);
     }
     let opc = (word >> 22) & 0x3;
     let rt = word & 0x1f;
@@ -177,7 +177,7 @@ fn register(cpu: &mut NativeCpu, word: u32, size: u32, v: u32) -> Result<Step, N
 /// Load/store register pair (STP/LDP/STNP/LDNP, incl. LDPSW).
 fn pair(cpu: &mut NativeCpu, word: u32, _size: u32, v: u32) -> Result<Step, NativeError> {
     if v == 1 {
-        return Err(unsupported(cpu, word, "ldst/simd-pair"));
+        return super::simd::load_store(cpu, word);
     }
     let opc = (word >> 30) & 0x3;
     let l = (word >> 22) & 1;
@@ -232,7 +232,7 @@ fn pair(cpu: &mut NativeCpu, word: u32, _size: u32, v: u32) -> Result<Step, Nati
 /// Load register (literal): PC-relative LDR/LDRSW, with PRFM as a no-op.
 fn literal(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     if (word >> 26) & 1 == 1 {
-        return Err(unsupported(cpu, word, "ldst/simd-literal"));
+        return super::simd::load_store(cpu, word);
     }
     let opc = (word >> 30) & 0x3;
     let rt = word & 0x1f;

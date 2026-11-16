@@ -34,6 +34,7 @@ mod branch;
 mod dpimm;
 mod dpreg;
 mod ldst;
+mod simd;
 
 use std::collections::HashMap;
 
@@ -251,6 +252,15 @@ impl NativeCpu {
         self.sp = sp;
     }
 
+    /// Reads SIMD/FP register `n` (V0..V31) as a 128-bit little-endian value.
+    pub(crate) fn v(&self, n: u32) -> u128 {
+        self.v[n as usize]
+    }
+    /// Writes SIMD/FP register `n` (V0..V31) as a 128-bit little-endian value.
+    pub(crate) fn set_v(&mut self, n: u32, value: u128) {
+        self.v[n as usize] = value;
+    }
+
     /// Runs the instruction at `pc` and returns the control-flow outcome.
     pub(crate) fn step(&mut self) -> Result<Step, NativeError> {
         let pc = self.pc;
@@ -260,6 +270,7 @@ impl NativeCpu {
             A64Class::DataProcReg => dpreg::run(self, word),
             A64Class::BranchSystem => branch::run(self, word),
             A64Class::LoadStore => ldst::run(self, word),
+            A64Class::DataProcSimdFp => simd::run(self, word),
             other => Err(NativeError::Unsupported {
                 pc,
                 word,
