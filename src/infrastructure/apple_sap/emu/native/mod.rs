@@ -437,6 +437,12 @@ fn class_name(class: A64Class) -> &'static str {
 #[cfg(all(test, feature = "unicorn"))]
 mod diff;
 
+/// Coverage-closing tests (differential where an encoding executes, exact
+/// `Unsupported` where it is out of scope), kept apart from the per-group
+/// test modules.
+#[cfg(test)]
+mod coverage_tests;
+
 #[cfg(test)]
 mod memory_tests {
     use super::{Memory, NativeError, PAGE_SIZE};
