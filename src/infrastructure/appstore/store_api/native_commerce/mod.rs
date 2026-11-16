@@ -9,3 +9,4 @@ pub mod login;
 pub mod owned_apps;
 pub mod purchase;
 pub mod storefront;
+pub(crate) mod telemetry;

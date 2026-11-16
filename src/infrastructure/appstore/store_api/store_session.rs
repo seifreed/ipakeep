@@ -14,6 +14,7 @@ use super::native_commerce::purchase::{PurchaseContext, purchase, purchase_url};
 use super::native_commerce::storefront::{
     AVAILABLE_STOREFRONTS_URL, STOREFRONT_GENRE_URL, StorefrontResolver,
 };
+use super::native_commerce::telemetry::error_type;
 use super::store_cookies::{PersistentCookies, STORE_COOKIES_FILE};
 use super::store_machine::{StoreAmd, StoreMachine, amd_headers};
 use crate::domain::entity::{Account, AppVersion, DownloadItem, OwnedApp};
@@ -23,12 +24,16 @@ use crate::infrastructure::apple_sap::storeauth::StoreProvisioningRequest;
 use crate::infrastructure::apple_sap::storeauth::store_provisioning::{
     STORE_AUTHENTICATION_USER_AGENT, STORE_PROVISIONING_URL,
 };
+use crate::infrastructure::observability::elapsed_ms;
 use base64::Engine;
 use reqwest::Url;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::OnceCell;
+use tracing::Instrument;
 
 /// Account the Store "SP" provisioning kbsync is generated for (upstream
 /// `^uint64(1)`, i.e. DSID -2).
@@ -131,6 +136,14 @@ impl StoreSession {
         credentials: Credentials<'_>,
         guid: &str,
     ) -> Result<Account, AppStoreError> {
+        observed("login", None, self.sign_in(credentials, guid)).await
+    }
+
+    async fn sign_in(
+        &self,
+        credentials: Credentials<'_>,
+        guid: &str,
+    ) -> Result<Account, AppStoreError> {
         let bag = self.fresh_bag(guid).await?;
         self.connect_sap(&bag, guid).await?;
         let machine_headers = self.login_headers().await?;
@@ -158,7 +171,17 @@ impl StoreSession {
     async fn login_headers(&self) -> Result<HashMap<String, String>, AppStoreError> {
         match self.machine.store_amd().await {
             Ok(amd) => Ok(amd_headers(amd)),
-            Err(_) => self.machine.anisette_headers().await,
+            Err(error) => {
+                tracing::debug!(
+                    service = "ipakeep",
+                    component = "appstore",
+                    operation = "login",
+                    event_name = "appstore.login.store_amd_unavailable",
+                    error_type = error_type(&error),
+                    "no Store AMD proof yet; signing in with anisette headers"
+                );
+                self.machine.anisette_headers().await
+            }
         }
     }
 
@@ -176,6 +199,14 @@ impl StoreSession {
         challenge: String,
         hardware_id: Vec<u8>,
     ) -> Result<HashMap<String, String>, AppStoreError> {
+        let started = Instant::now();
+        tracing::info!(
+            service = "ipakeep",
+            component = "appstore",
+            operation = "login",
+            event_name = "appstore.login.store_provisioning_started",
+            "Apple requested Store provisioning"
+        );
         let kbsync = self.machine.kbsync(&hardware_id, PROVISIONING_DSID).await?;
         let kbsync = base64::engine::general_purpose::STANDARD.encode(kbsync);
         let identity: Vec<(String, String)> =
@@ -191,7 +222,17 @@ impl StoreSession {
             identity: &identity,
         };
         self.machine.provision_store(&request).await?;
-        Ok(amd_headers(self.machine.store_amd().await?))
+        let headers = amd_headers(self.machine.store_amd().await?);
+        tracing::info!(
+            service = "ipakeep",
+            component = "appstore",
+            operation = "login",
+            event_name = "appstore.login.store_provisioned",
+            outcome = "success",
+            duration_ms = elapsed_ms(started),
+            "Store provisioning completed"
+        );
+        Ok(headers)
     }
 
     /// Acquire the free license for `app_id`. Apple answers "sign in again"
@@ -202,6 +243,16 @@ impl StoreSession {
     ///
     /// Purchase, authentication and network failures.
     pub async fn purchase(
+        &self,
+        account: &Account,
+        app_id: i64,
+        guid: &str,
+    ) -> Result<(), AppStoreError> {
+        let purchasing = self.acquire_license(account, app_id, guid);
+        observed("purchase", Some(app_id), purchasing).await
+    }
+
+    async fn acquire_license(
         &self,
         account: &Account,
         app_id: i64,
@@ -232,11 +283,14 @@ impl StoreSession {
         app_id: i64,
         guid: &str,
     ) -> Result<Vec<AppVersion>, AppStoreError> {
-        require_signed_in(account)?;
-        let bag = self.bag(guid).await?;
-        let hardware_id = hardware_id(guid)?;
-        let downloader = self.downloader(bag, &hardware_id);
-        downloader.list_versions(account, app_id, guid).await
+        let listing = async {
+            require_signed_in(account)?;
+            let bag = self.bag(guid).await?;
+            let hardware_id = hardware_id(guid)?;
+            let downloader = self.downloader(bag, &hardware_id);
+            downloader.list_versions(account, app_id, guid).await
+        };
+        observed("list_versions", Some(app_id), listing).await
     }
 
     /// The songList item of `app_id` (optionally pinned to a version) for the
@@ -252,11 +306,14 @@ impl StoreSession {
         guid: &str,
         version_id: Option<&str>,
     ) -> Result<Vec<DownloadItem>, AppStoreError> {
-        require_signed_in(account)?;
-        let bag = self.bag(guid).await?;
-        let hardware_id = hardware_id(guid)?;
-        let downloader = self.downloader(bag, &hardware_id);
-        downloader.download(account, app_id, guid, version_id).await
+        let ticket = async {
+            require_signed_in(account)?;
+            let bag = self.bag(guid).await?;
+            let hardware_id = hardware_id(guid)?;
+            let downloader = self.downloader(bag, &hardware_id);
+            downloader.download(account, app_id, guid, version_id).await
+        };
+        observed("download", Some(app_id), ticket).await
     }
 
     fn downloader<'a>(&'a self, bag: &'a StoreBag, hardware_id: &'a [u8]) -> Downloader<'a> {
@@ -288,6 +345,20 @@ impl StoreSession {
         limit: u32,
         guid: &str,
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        observed(
+            "owned_apps",
+            None,
+            self.purchase_history(account, limit, guid),
+        )
+        .await
+    }
+
+    async fn purchase_history(
+        &self,
+        account: &Account,
+        limit: u32,
+        guid: &str,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
         require_signed_in(account)?;
         let bag = self.bag(guid).await?;
         self.connect_sap(bag, guid).await?;
@@ -304,6 +375,81 @@ impl StoreSession {
     }
 }
 
+/// Run one Store operation inside an `appstore_operation` span (so the
+/// commerce events it emits carry the operation and app id) and record its
+/// start, outcome and duration. Only the error variant is logged: messages
+/// can quote Apple's free text.
+async fn observed<T>(
+    operation: &'static str,
+    app_id: Option<i64>,
+    future: impl Future<Output = Result<T, AppStoreError>>,
+) -> Result<T, AppStoreError> {
+    let span = tracing::info_span!(
+        "appstore_operation",
+        operation,
+        app_id = tracing::field::Empty
+    );
+    if let Some(app_id) = app_id {
+        span.record("app_id", app_id);
+    }
+    span.in_scope(log_started);
+    let started = Instant::now();
+    let result = future.instrument(span.clone()).await;
+    let duration_ms = elapsed_ms(started);
+    span.in_scope(|| log_outcome(operation, result.as_ref().err(), duration_ms));
+    result
+}
+
+fn log_started() {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        event_name = "appstore.operation.started",
+        "Store operation started"
+    );
+}
+
+/// A pending 2FA code is the expected first sign-in answer, not a failure.
+fn log_outcome(operation: &'static str, error: Option<&AppStoreError>, duration_ms: u64) {
+    match error {
+        None => {
+            tracing::info!(
+                service = "ipakeep",
+                component = "appstore",
+                operation,
+                event_name = "appstore.operation.completed",
+                outcome = "success",
+                duration_ms,
+                "Store operation completed"
+            );
+        }
+        Some(error @ AppStoreError::AuthCodeRequired { .. }) => {
+            tracing::info!(
+                service = "ipakeep",
+                component = "appstore",
+                operation,
+                event_name = "appstore.operation.completed",
+                outcome = "auth_code_required",
+                error_type = error_type(error),
+                duration_ms,
+                "Store operation needs a 2FA code"
+            );
+        }
+        Some(error) => {
+            tracing::warn!(
+                service = "ipakeep",
+                component = "appstore",
+                operation,
+                event_name = "appstore.operation.failed",
+                outcome = "failure",
+                error_type = error_type(error),
+                duration_ms,
+                "Store operation failed"
+            );
+        }
+    }
+}
+
 /// Commerce needs the `MZFinance` purchase token of a Store sign-in.
 fn require_signed_in(account: &Account) -> Result<(), AppStoreError> {
     if account.password_token.is_empty() || account.directory_services_id.is_empty() {
@@ -316,9 +462,8 @@ fn require_signed_in(account: &Account) -> Result<(), AppStoreError> {
 
 /// The hardware identifier bytes of an uppercase hex machine GUID.
 fn hardware_id(guid: &str) -> Result<Vec<u8>, AppStoreError> {
-    hex::decode(guid).map_err(|_| {
-        AppStoreError::Unexpected(format!("machine GUID {guid:?} is not a hex hardware id"))
-    })
+    hex::decode(guid)
+        .map_err(|_| AppStoreError::Unexpected("machine GUID is not a hex hardware id".into()))
 }
 
 /// `url` with its scheme, host and port replaced by `origin`, when given.

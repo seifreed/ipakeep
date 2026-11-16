@@ -4,8 +4,10 @@
 //! handling of the former `tools/modern-anisette/store.go` helper.
 
 use super::bag::{AMS_SESSION_HEADERS, STORE_USER_AGENT, decode_store_plist, encode_request_plist};
+use super::telemetry::{apple_code, error_type};
 use crate::domain::entity::Account;
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use std::future::Future;
 
 const BUY_HOST: &str = "buy.itunes.apple.com";
@@ -85,7 +87,10 @@ where
     }
     match outcome {
         Attempt::Purchased | Attempt::AlreadyOwned => Ok(()),
-        Attempt::TokenExpired => owns_license().await.map_err(|_| expired_token_error()),
+        Attempt::TokenExpired => {
+            let owned = owns_license().await;
+            owned.map_err(|error| unconfirmed_license(&error))
+        }
         Attempt::TemporarilyUnavailable => Err(unavailable_error()),
     }
 }
@@ -94,6 +99,20 @@ fn unavailable_error() -> AppStoreError {
     AppStoreError::PurchaseFailed(format!(
         "failed to purchase item with param '{PRICING_ARCADE}': item is temporarily unavailable"
     ))
+}
+
+/// Apple asked for a fresh sign-in and no license could be confirmed.
+fn unconfirmed_license(error: &AppStoreError) -> AppStoreError {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "purchase",
+        event_name = "appstore.purchase.license_unconfirmed",
+        outcome = "failure",
+        error_type = error_type(error),
+        "Apple asked for a fresh sign-in and the license could not be confirmed"
+    );
+    expired_token_error()
 }
 
 fn expired_token_error() -> AppStoreError {
@@ -121,15 +140,44 @@ async fn attempt(
     for (name, value) in AMS_SESSION_HEADERS {
         request = request.header(name, value);
     }
-    let response = request.body(body).send().await.map_err(|error| {
-        AppStoreError::NetworkError(format!("purchase request failed: {error}"))
-    })?;
+    let response = send_with_observability(context.client, request.body(body))
+        .await
+        .map_err(|error| {
+            AppStoreError::NetworkError(format!("purchase request failed: {error}"))
+        })?;
     let status = response.status().as_u16();
-    let data = response
-        .bytes()
+    let data = read_response_bytes(response)
         .await
         .map_err(|error| AppStoreError::NetworkError(format!("read purchase response: {error}")))?;
-    classify(status, &decode_store_plist(&data)?, pricing)
+    let result = decode_store_plist(&data)?;
+    let outcome = classify(status, &result, pricing);
+    log_attempt(pricing, status, &result, &outcome);
+    outcome
+}
+
+fn log_attempt(
+    pricing: &str,
+    status: u16,
+    result: &plist::Dictionary,
+    outcome: &Result<Attempt, AppStoreError>,
+) {
+    let text = |key: &str| {
+        apple_code(
+            result
+                .get(key)
+                .and_then(plist::Value::as_string)
+                .unwrap_or_default(),
+        )
+    };
+    let (failure_type, customer_message) = (text("failureType"), text("customerMessage"));
+    let outcome = match outcome {
+        Ok(Attempt::Purchased) => "purchased",
+        Ok(Attempt::AlreadyOwned) => "already_owned",
+        Ok(Attempt::TemporarilyUnavailable) => "temporarily_unavailable",
+        Ok(Attempt::TokenExpired) => "token_expired",
+        Err(_) => "failure",
+    };
+    tracing::debug!(service = "ipakeep", component = "appstore", operation = "purchase", event_name = "appstore.purchase.response", pricing, status, failure_type = %failure_type, customer_message = %customer_message, outcome, "Store purchase response classified");
 }
 
 /// The `buyProduct` plist as the Store session sends it: upstream's fields
@@ -241,9 +289,35 @@ fn purchase_status(result: &plist::Dictionary) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use std::sync::atomic::{AtomicBool, Ordering};
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
+
+    #[tokio::test]
+    async fn logs_classified_attempts_without_account_secrets() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let owned = MockServer::start().await;
+        let license = failure(
+            FAILURE_LICENSE_EXISTS,
+            "You already own it, user@example.com",
+        );
+        mount(&owned, PRICING_APP_STORE, 200, license).await;
+        let rejected = MockServer::start().await;
+        let subscription = failure("", MESSAGE_SUBSCRIPTION_REQUIRED);
+        mount(&rejected, PRICING_APP_STORE, 200, subscription).await;
+
+        assert!(run(&owned, Ok(())).await.0.is_ok());
+        assert!(run(&rejected, Ok(())).await.0.is_err());
+
+        let logs = capture.contents();
+        assert!(logs.contains("outcome=\"already_owned\"") && logs.contains("failure_type=5002"));
+        assert!(logs.contains("outcome=\"failure\"") && logs.contains("customer_message=redacted"));
+        for secret in ["user@example.com", "token", "1234", GUID] {
+            assert!(!logs.contains(secret), "{secret} leaked");
+        }
+    }
 
     const GUID: &str = "AABBCCDDEEFF";
     const APP: i64 = 1_234_567_890;

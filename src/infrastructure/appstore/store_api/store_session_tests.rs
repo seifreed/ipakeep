@@ -1,4 +1,5 @@
 use super::*;
+use crate::infrastructure::observability::log_capture::LogCapture;
 use async_trait::async_trait;
 use std::sync::Mutex;
 use wiremock::matchers::{header, header_exists, method, path};
@@ -395,4 +396,230 @@ fn reroutes_apple_urls_to_the_configured_origin() {
 fn hardware_id_requires_a_hex_guid() {
     assert_eq!(hardware_id("00FF").expect("hex"), [0, 0xFF]);
     assert!(hardware_id("not-hex").is_err());
+}
+
+fn json_events(capture: &LogCapture) -> Vec<serde_json::Value> {
+    capture
+        .contents()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+fn find_event<'a>(
+    events: &'a [serde_json::Value],
+    name: &str,
+    operation: &str,
+) -> &'a serde_json::Value {
+    events
+        .iter()
+        .find(|event| event["event_name"] == name && event["span"]["operation"] == operation)
+        .unwrap_or_else(|| panic!("missing {name} for {operation}"))
+}
+
+fn assert_no_secrets(logs: &str) {
+    for secret in [
+        "user@example.com",
+        "secret",
+        "123456",
+        GUID,
+        "8765",
+        "pending-2fa",
+        "anisette-otp",
+        "anisette-mid",
+        "store-otp",
+        "store-mid",
+        "c2lnbmF0dXJl",
+        "a2JzeW5j",
+        "Y2hhbGxlbmdl",
+        "iosapps.itunes.apple.com",
+    ] {
+        assert!(!logs.contains(secret), "{secret} leaked into the logs");
+    }
+}
+
+#[tokio::test]
+async fn sign_in_records_operation_outcomes_without_credentials() {
+    let capture = LogCapture::default();
+    let _guard = capture.install_json();
+    let harness = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path(AUTHENTICATE_PATH))
+        .and(header("Cookie", "session=pending-2fa"))
+        .respond_with(signed_in())
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(AUTHENTICATE_PATH))
+        .respond_with(
+            plist_response(&format!(
+                "<key>customerMessage</key><string>{BAD_LOGIN}</string>"
+            ))
+            .insert_header("Set-Cookie", "session=pending-2fa; Path=/"),
+        )
+        .mount(&harness.server)
+        .await;
+
+    let first = harness.session().login(credentials(None), GUID).await;
+    assert!(first.is_err());
+    let events = json_events(&capture);
+    let pending = find_event(&events, "appstore.operation.completed", "login");
+    assert_eq!(pending["level"], "INFO");
+    assert_eq!(pending["outcome"], "auth_code_required");
+    assert!(pending["duration_ms"].is_number());
+    let response = find_event(&events, "appstore.login.response", "login");
+    assert_eq!(response["customer_message"], BAD_LOGIN);
+    assert_eq!(response["status"], 200);
+    let fallback = find_event(&events, "appstore.login.store_amd_unavailable", "login");
+    assert_eq!(fallback["error_type"], "authentication_failed");
+
+    harness
+        .session()
+        .login(credentials(Some("123456")), GUID)
+        .await
+        .expect("coded sign-in");
+
+    let events = json_events(&capture);
+    find_event(&events, "appstore.operation.started", "login");
+    assert!(events.iter().any(|event| {
+        event["event_name"] == "appstore.operation.completed" && event["outcome"] == "success"
+    }));
+    assert_no_secrets(&capture.contents());
+}
+
+#[tokio::test]
+async fn store_provisioning_is_logged_without_its_challenge_or_proof() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let harness = Harness::new().await;
+    Mock::given(method("POST"))
+        .and(path(AUTHENTICATE_PATH))
+        .and(header("X-Apple-AMD", "store-otp"))
+        .respond_with(signed_in())
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(AUTHENTICATE_PATH))
+        .respond_with(
+            plist_response("")
+                .insert_header("X-Apple-AMD-Action", "SP")
+                .insert_header("X-Apple-AMD-Data", "Y2hhbGxlbmdl"),
+        )
+        .mount(&harness.server)
+        .await;
+
+    harness
+        .session()
+        .login(credentials(Some("123456")), GUID)
+        .await
+        .expect("sign-in after Store provisioning");
+
+    let logs = capture.contents();
+    for event in [
+        "appstore.login.machine_action",
+        "appstore.login.store_provisioning_started",
+        "appstore.login.store_provisioned",
+    ] {
+        assert!(logs.contains(event), "missing {event}");
+    }
+    assert_no_secrets(&logs);
+}
+
+#[tokio::test]
+async fn purchase_logs_apple_codes_and_the_nested_version_listing() {
+    let capture = LogCapture::default();
+    let _guard = capture.install_json();
+    let harness = Harness::new().await;
+    *harness.machine.store_provisioned.lock().expect("lock") = true;
+    for (route, response) in [
+        (BUY_PATH, sign_in_again()),
+        (VOLUME_PATH, version_listing()),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(route))
+            .respond_with(response)
+            .mount(&harness.server)
+            .await;
+    }
+
+    harness
+        .session()
+        .purchase(&account(), 42, GUID)
+        .await
+        .expect("owned app counts as purchased");
+
+    let events = json_events(&capture);
+    let attempt = find_event(&events, "appstore.purchase.response", "purchase");
+    assert_eq!(attempt["failure_type"], "2034");
+    assert_eq!(attempt["outcome"], "token_expired");
+    assert_eq!(attempt["span"]["app_id"], 42);
+    let ticket = find_event(&events, "appstore.download.response", "list_versions");
+    assert_eq!(
+        ticket["endpoint"],
+        "buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
+    );
+    let completed: Vec<&str> = events
+        .iter()
+        .filter(|event| event["event_name"] == "appstore.operation.completed")
+        .filter_map(|event| event["operation"].as_str())
+        .collect();
+    assert_eq!(completed, ["list_versions", "purchase"]);
+    assert_no_secrets(&capture.contents());
+}
+
+#[tokio::test]
+async fn unconfirmed_license_is_a_logged_operation_failure() {
+    let capture = LogCapture::default();
+    let _guard = capture.install_json();
+    let harness = Harness::new().await;
+    *harness.machine.store_provisioned.lock().expect("lock") = true;
+    Mock::given(method("POST"))
+        .and(path(BUY_PATH))
+        .respond_with(sign_in_again())
+        .mount(&harness.server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(VOLUME_PATH))
+        .respond_with(plist_response(
+            "<key>failureType</key><string>9610</string><key>customerMessage</key><string>License not found</string>",
+        ))
+        .mount(&harness.server)
+        .await;
+
+    assert!(
+        harness
+            .session()
+            .purchase(&account(), 42, GUID)
+            .await
+            .is_err()
+    );
+
+    let events = json_events(&capture);
+    let unconfirmed = find_event(&events, "appstore.purchase.license_unconfirmed", "purchase");
+    assert_eq!(unconfirmed["error_type"], "no_license");
+    let failed = find_event(&events, "appstore.operation.failed", "purchase");
+    assert_eq!(failed["level"], "WARN");
+    assert_eq!(failed["error_type"], "authentication_failed");
+    assert!(!capture.contents().contains("License not found"));
+    assert_no_secrets(&capture.contents());
+}
+
+#[tokio::test]
+async fn signed_out_download_fails_observably() {
+    let capture = LogCapture::default();
+    let _guard = capture.install_json();
+    let harness = Harness::new().await;
+    let mut signed_out = account();
+    signed_out.password_token.clear();
+
+    let result = harness
+        .session()
+        .download(&signed_out, 42, GUID, None)
+        .await;
+
+    assert!(result.is_err());
+    let events = json_events(&capture);
+    let failed = find_event(&events, "appstore.operation.failed", "download");
+    assert_eq!(failed["error_type"], "authentication_failed");
+    assert_eq!(failed["span"]["app_id"], 42);
 }

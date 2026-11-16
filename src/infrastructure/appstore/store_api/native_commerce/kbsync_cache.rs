@@ -102,6 +102,7 @@ impl KbsyncCache {
             guid: guid.to_string(),
             data: data.to_string(),
         };
+        log_invalidated();
         let mut memory = self.entry.lock().unwrap_or_else(PoisonError::into_inner);
         if memory.as_ref() == Some(&rejected) {
             *memory = None;
@@ -114,8 +115,12 @@ impl KbsyncCache {
     }
 
     fn read_file(&self) -> Option<KbsyncCacheEntry> {
-        let bytes = std::fs::read(&self.path).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let bytes = std::fs::read(&self.path)
+            .inspect_err(warn_unreadable)
+            .ok()?;
+        serde_json::from_slice(&bytes)
+            .inspect_err(warn_corrupt)
+            .ok()
     }
 }
 
@@ -151,6 +156,36 @@ fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
 }
 
+fn log_invalidated() {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "download",
+        event_name = "appstore.kbsync_cache.invalidated",
+        outcome = "invalidated",
+        "Apple rejected the cached kbsync; generating a fresh one"
+    );
+}
+
+/// A missing file is the normal cold cache.
+fn warn_unreadable(error: &std::io::Error) {
+    if error.kind() != std::io::ErrorKind::NotFound {
+        tracing::warn!(service = "ipakeep", component = "appstore", operation = "download", event_name = "appstore.kbsync_cache.read_failed", outcome = "failure", error_type = ?error.kind(), "failed to read kbsync cache");
+    }
+}
+
+fn warn_corrupt(_error: &serde_json::Error) {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "download",
+        event_name = "appstore.kbsync_cache.read_failed",
+        outcome = "failure",
+        error_type = "invalid_json",
+        "ignoring unreadable kbsync cache"
+    );
+}
+
 fn warn_persistence(error: &std::io::Error) {
     tracing::warn!(service = "ipakeep", component = "appstore", operation = "download", event_name = "appstore.kbsync_cache.persist_failed", outcome = "failure", error_type = ?error.kind(), "failed to persist kbsync cache");
 }
@@ -158,6 +193,7 @@ fn warn_persistence(error: &std::io::Error) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
 
     const GUID: &str = "001122334455";
     const BLOB: &str = "a2JzeW5jIGJsb2I=";
@@ -221,6 +257,26 @@ mod tests {
         cache.invalidate(7, GUID, BLOB);
         assert_eq!(cache.cached(7, GUID), None);
         assert!(!directory.path().join("ipakeep/kbsync-v1.json").exists());
+    }
+
+    #[test]
+    fn logs_unreadable_files_and_rejections_without_the_blob() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("kbsync-v1.json");
+        std::fs::write(&path, format!("{{\"data\":\"{BLOB}\"")).expect("write");
+        assert_eq!(KbsyncCache::new(path).cached(7, GUID), None);
+        let blocker = directory.path().join("file");
+        std::fs::write(&blocker, b"x").expect("write");
+        KbsyncCache::new(blocker.join("kbsync-v1.json")).invalidate(7, GUID, BLOB);
+        assert_eq!(cache_in(&directory).cached(7, GUID), None);
+
+        let logs = capture.contents();
+        assert_eq!(logs.matches("appstore.kbsync_cache.read_failed").count(), 2);
+        assert!(logs.contains("invalid_json") && logs.contains("NotADirectory"));
+        assert!(logs.contains("appstore.kbsync_cache.invalidated"));
+        assert!(!logs.contains(BLOB) && !logs.contains(GUID));
     }
 
     #[test]

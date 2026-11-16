@@ -23,10 +23,12 @@ use super::bag::{
 };
 use super::kbsync_cache::KbsyncCache;
 use super::storefront::{DEFAULT_USER_AGENT, StorefrontResolver};
+use super::telemetry::{apple_code, endpoint, error_type};
 use crate::domain::entity::{Account, AppVersion, DownloadItem};
 use crate::domain::error::AppStoreError;
 use crate::infrastructure::appstore::store_api::parsing::parse_download_item;
 use crate::infrastructure::http::plist_codec::decode_plist;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::Engine;
 use reqwest::Url;
 use serde_json::Value;
@@ -216,10 +218,11 @@ where
     }
 
     async fn send_download_product(&self, ticket: &Ticket<'_>, version: Option<String>) -> Attempt {
-        if let Some(ent) = self.bag.volume_store_download_product.as_deref()
-            && let Ok(response) = self.preferred_download(ticket, ent, version.clone()).await
-        {
-            return Ok(response);
+        if let Some(ent) = self.bag.volume_store_download_product.as_deref() {
+            let preferred = self.preferred_download(ticket, ent, version.clone()).await;
+            if let Some(response) = preferred_response(preferred) {
+                return Ok(response);
+            }
         }
         let volume = volume_store_endpoint(&ticket.account.pod);
         let response = self
@@ -402,11 +405,12 @@ where
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        let response = request
-            .send()
+        let response = send_with_observability(self.client, request)
             .await
             .map_err(|error| failure(None, network("send Store commerce request", &error)))?;
-        read_store_response(response).await
+        let attempt = read_store_response(response).await;
+        log_commerce_attempt(&url, &attempt);
+        attempt
     }
 
     fn commerce_headers(
@@ -530,9 +534,11 @@ where
 
     async fn catalog_version(&self, account: &Account, app_id: i64) -> Option<String> {
         let storefronts = &self.storefronts;
-        let country = storefronts.country_code(&account.store_front).await.ok()?;
+        let country = storefronts.country_code(&account.store_front).await;
+        let country = country.inspect_err(log_label_unavailable).ok()?;
         let url = itunes_lookup_url(app_id, &country);
-        let (status, body) = self.get_json(&url).await.ok()?;
+        let lookup = self.get_json(&url).await;
+        let (status, body) = lookup.inspect_err(log_label_unavailable).ok()?;
         if status != reqwest::StatusCode::OK.as_u16() {
             return None;
         }
@@ -543,14 +549,12 @@ where
 
     async fn get_json(&self, url: &str) -> Result<(u16, Value), AppStoreError> {
         let request = self.client.get(self.wire_url(url));
-        let response = request
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
-            .send()
+        let request = request.header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT);
+        let response = send_with_observability(self.client, request)
             .await
             .map_err(|error| network("Store lookup request failed", &error))?;
         let status = response.status().as_u16();
-        let bytes = response
-            .bytes()
+        let bytes = read_response_bytes(response)
             .await
             .map_err(|error| network("read Store lookup response", &error))?;
         if status == reqwest::StatusCode::NOT_FOUND.as_u16() {
@@ -625,6 +629,50 @@ fn rerouted_url(origin: &str, url: &str) -> String {
             format!("{origin}{}{query}", parsed.path())
         },
     )
+}
+
+/// The `ent/download` answer, or `None` after logging why the legacy chain
+/// takes over.
+fn preferred_response(attempt: Attempt) -> Option<StoreResponse> {
+    attempt
+        .inspect_err(|failure| log_ent_fallback(&failure.error))
+        .ok()
+}
+
+fn log_ent_fallback(error: &AppStoreError) {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "download",
+        event_name = "appstore.download.ent_fallback",
+        error_type = error_type(error),
+        "ent/download failed; falling back to the legacy download chain"
+    );
+}
+
+fn log_label_unavailable(error: &AppStoreError) {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "list_versions",
+        event_name = "appstore.versions.label_unavailable",
+        error_type = error_type(error),
+        "catalog version label unavailable; listing versions without it"
+    );
+}
+
+/// Endpoint, status and Apple's failure code only: commerce responses carry
+/// package URLs, sinfs and account data.
+fn log_commerce_attempt(url: &str, attempt: &Attempt) {
+    match attempt {
+        Ok(response) => {
+            let failure_type = apple_code(&failure_type(&response.body));
+            tracing::debug!(service = "ipakeep", component = "appstore", operation = "download", event_name = "appstore.download.response", endpoint = %endpoint(url), status = response.status, failure_type = %failure_type, outcome = "received", "Store download response received");
+        }
+        Err(failure) => {
+            tracing::debug!(service = "ipakeep", component = "appstore", operation = "download", event_name = "appstore.download.response", endpoint = %endpoint(url), error_type = error_type(&failure.error), outcome = "failure", "Store download response unusable");
+        }
+    }
 }
 
 fn required_endpoint(url: &str, path: &str) -> Result<Endpoint, Failure> {
@@ -817,8 +865,7 @@ fn sorted_dictionary(fields: BTreeMap<&str, plist::Value>) -> plist::Dictionary 
 
 async fn read_store_response(response: reqwest::Response) -> Attempt {
     let status = response.status();
-    let bytes = response
-        .bytes()
+    let bytes = read_response_bytes(response)
         .await
         .map_err(|error| failure(None, network("read Store commerce response", &error)))?;
     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {

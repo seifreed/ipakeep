@@ -9,8 +9,10 @@ use super::bag::{
     validate_authentication_endpoint,
 };
 use super::owned_apps::ActionSign;
+use super::telemetry::{apple_code, endpoint};
 use crate::domain::entity::Account;
 use crate::domain::error::{AppStoreError, TwoFactorMethod};
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::Engine;
 use reqwest::header::{HeaderMap, LOCATION, RETRY_AFTER, SET_COOKIE};
 use reqwest::{StatusCode, Url};
@@ -105,6 +107,7 @@ where
     loop {
         match sign_in(context, credentials).await {
             Err(LoginFailure::MachineAction { action, data }) => {
+                log_machine_action(&action);
                 let store_provisioning = action == ACTION_STORE_PROVISIONING;
                 if action == ACTION_RESET_PROVISIONING && !reset_done {
                     reset_done = true;
@@ -167,12 +170,14 @@ async fn sign_in(
     loop {
         let body = login_body(credentials, &auth_code, context.guid, attempt)?;
         let response = send_with_retries(context, &url, &body, redirects > 0).await?;
+        log_auth_response(&url, &response, attempt);
         cookies.extend(set_cookies(&response.headers));
         match next_step(context, &response, attempt, !auth_code.is_empty(), &url)? {
             Step::Done => return Ok(account_from(&response, credentials.email, cookies)?),
             Step::Retry => attempt += 1,
             Step::Redirect(target) if redirects < MAX_REDIRECTS => {
                 redirects += 1;
+                log_redirect(&target, redirects);
                 url = target;
             }
             Step::Redirect(target) => {
@@ -661,7 +666,9 @@ async fn send_with_retries(
         if attempt == MAX_REQUEST_ATTEMPTS {
             return Err(exhausted(&outcomes, &failure.error, at_pod));
         }
-        tokio::time::sleep(retry_delay(attempt, failure.retry_after.as_deref())?).await;
+        let delay = retry_delay(attempt, failure.retry_after.as_deref())?;
+        log_retry(attempt, failure.status, delay);
+        tokio::time::sleep(delay).await;
         attempt += 1;
     }
 }
@@ -722,15 +729,13 @@ async fn send_once(
     if let Some(storefront) = &context.storefront_hint {
         request = request.header("X-Apple-Store-Front", storefront);
     }
-    let response = request
+    let request = request
         .header(
             "X-Apple-ActionSignature",
             base64::engine::general_purpose::STANDARD.encode(signature),
         )
-        .body(body.to_vec())
-        .send()
-        .await;
-    match response {
+        .body(body.to_vec());
+    match send_with_observability(context.client, request).await {
         Ok(response) => read_response(response).await,
         Err(error) => transport_failure(&error),
     }
@@ -795,7 +800,7 @@ async fn read_response(
     let status = response.status();
     let headers = response.headers().clone();
     let retry_after = header(&headers, RETRY_AFTER.as_str());
-    let body = match response.bytes().await {
+    let body = match read_response_bytes(response).await {
         Ok(body) => body,
         Err(error) => return transport_failure(&error),
     };
@@ -832,6 +837,38 @@ async fn read_response(
     }
 }
 
+fn log_auth_response(url: &str, response: &AuthResponse, attempt: u32) {
+    let status = response.status.as_u16();
+    let failure_type = apple_code(&text(&response.body, "failureType"));
+    let customer_message = apple_code(&text(&response.body, "customerMessage"));
+    tracing::debug!(service = "ipakeep", component = "appstore", operation = "login", event_name = "appstore.login.response", endpoint = %endpoint(url), status, attempt, failure_type = %failure_type, customer_message = %customer_message, "Store sign-in response received");
+}
+
+/// Only the action code: `X-Apple-AMD-Data` is a provisioning challenge.
+fn log_machine_action(action: &str) {
+    tracing::info!(service = "ipakeep", component = "appstore", operation = "login", event_name = "appstore.login.machine_action", action = %apple_code(action), "Apple requested an authentication machine action");
+}
+
+fn log_redirect(target: &str, redirects: u32) {
+    tracing::debug!(service = "ipakeep", component = "appstore", operation = "login", event_name = "appstore.login.redirect", endpoint = %endpoint(target), redirects, "Store sign-in redirected");
+}
+
+fn log_retry(attempt: u32, status: Option<StatusCode>, delay: Duration) {
+    let status = status.map_or(0, |status| status.as_u16());
+    let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    tracing::warn!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "login",
+        event_name = "appstore.login.retry",
+        attempt,
+        status,
+        delay_ms,
+        outcome = "retry",
+        "Store sign-in request failed transiently; retrying"
+    );
+}
+
 /// Never echo bodies: authentication responses can carry credentials.
 fn unexpected(status: StatusCode, reason: &str, length: usize) -> AppStoreError {
     let advice = if status == StatusCode::TOO_MANY_REQUESTS {
@@ -848,6 +885,7 @@ fn unexpected(status: StatusCode, reason: &str, length: usize) -> AppStoreError 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use std::sync::{Arc, Mutex};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -1169,6 +1207,8 @@ mod tests {
 
     #[tokio::test]
     async fn handles_reset_then_store_provisioning_actions() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
         let harness = Harness::new().await;
         let action = |name: &str| {
             ResponseTemplate::new(200)
@@ -1206,6 +1246,12 @@ mod tests {
             Some("dev")
         );
         assert_eq!(header_of(&requests[2], "X-Mme-Device-Id"), None);
+        let logs = capture.contents();
+        assert!(logs.contains("appstore.login.machine_action"));
+        assert!(logs.contains("action=RP") && logs.contains("action=SP"));
+        for secret in ["spdata", "store-amd"] {
+            assert!(!logs.contains(secret), "{secret} leaked");
+        }
     }
 
     fn action(name: &str) -> ResponseTemplate {
@@ -1723,5 +1769,73 @@ mod tests {
         assert_eq!(retry_delay(1, Some("0")).ok(), Some(Duration::from_secs(1)));
         assert_eq!(retry_delay(1, Some("5")).ok(), Some(Duration::from_secs(5)));
         assert!(retry_delay(1, Some("31")).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn logs_retries_redirects_and_codes_without_credentials() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let harness = Harness::new().await;
+        let pod = format!(
+            "{}/pod42/authenticate?ticket=query-secret",
+            harness.server.uri()
+        );
+        let busy = ResponseTemplate::new(503).set_body_string("busy-body-secret");
+        harness.respond(AUTH_PATH, busy, 1).await;
+        let redirect = ResponseTemplate::new(302).insert_header("Location", pod.as_str());
+        harness.respond(AUTH_PATH, redirect, 1).await;
+        harness.respond("/pod42/authenticate", success(), 1).await;
+        let headers = HashMap::from([(MACHINE_ID_HEADER.to_string(), "otp-secret".to_string())]);
+
+        harness
+            .login(Some("123456"), headers)
+            .await
+            .expect("account");
+
+        let logs = capture.contents();
+        for event in [
+            "appstore.login.retry",
+            "appstore.login.redirect",
+            "appstore.login.response",
+            "http.response.headers_received",
+        ] {
+            assert!(logs.contains(event), "missing {event}");
+        }
+        assert!(logs.contains("/pod42/authenticate") && logs.contains("status=503"));
+        for secret in [
+            PASSWORD,
+            "123456",
+            EMAIL,
+            "real@example.com",
+            GUID,
+            "query-secret",
+            "busy-body-secret",
+            "otp-secret",
+            "c2lnbmF0dXJl",
+            "mz_at_ssl",
+            "8765",
+        ] {
+            assert!(!logs.contains(secret), "{secret} leaked");
+        }
+    }
+
+    #[tokio::test]
+    async fn logs_apple_codes_but_redacts_free_text_messages() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let harness = Harness::new().await;
+        let failure = plist_body(
+            "<key>failureType</key><string>2034</string>\
+             <key>customerMessage</key><string>The Apple ID user@example.com is locked</string>",
+        );
+        let response = ResponseTemplate::new(200).set_body_string(failure);
+        harness.respond(AUTH_PATH, response, 1).await;
+
+        assert!(harness.login(None, HashMap::new()).await.is_err());
+
+        let logs = capture.contents();
+        assert!(logs.contains("failure_type=2034"));
+        assert!(logs.contains("customer_message=redacted"));
+        assert!(!logs.contains(EMAIL) && !logs.contains("locked"));
     }
 }

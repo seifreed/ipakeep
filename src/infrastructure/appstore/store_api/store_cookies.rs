@@ -60,8 +60,28 @@ fn save_error(detail: &str) -> AppStoreError {
 }
 
 fn read_store(path: &Path) -> Option<CookieStore> {
-    let file = File::open(path).ok()?;
-    cookie_store::serde::json::load_all(BufReader::new(file)).ok()
+    let file = File::open(path).inspect_err(warn_unreadable).ok()?;
+    let store = cookie_store::serde::json::load_all(BufReader::new(file));
+    store.inspect_err(|_| warn_corrupt()).ok()
+}
+
+/// A missing jar is the normal first run.
+fn warn_unreadable(error: &std::io::Error) {
+    if error.kind() != std::io::ErrorKind::NotFound {
+        tracing::warn!(service = "ipakeep", component = "appstore", operation = "store_cookies", event_name = "appstore.cookies.load_failed", outcome = "failure", error_type = ?error.kind(), "failed to read Store cookies; starting with an empty jar");
+    }
+}
+
+fn warn_corrupt() {
+    tracing::warn!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "store_cookies",
+        event_name = "appstore.cookies.load_failed",
+        outcome = "failure",
+        error_type = "invalid_json",
+        "ignoring unreadable Store cookies; starting with an empty jar"
+    );
 }
 
 fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -132,6 +152,7 @@ impl reqwest::cookie::CookieStore for PersistentCookies {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use reqwest::cookie::CookieStore as _;
 
     fn apple_url() -> Url {
@@ -192,6 +213,25 @@ mod tests {
                 .cookies(&apple_url())
                 .is_none()
         );
+    }
+
+    #[test]
+    fn unreadable_jars_are_logged_without_their_contents() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join(STORE_COOKIES_FILE);
+        drop(PersistentCookies::load(missing.clone()));
+        assert_eq!(capture.contents(), "");
+
+        std::fs::write(&missing, b"{\"mz_at0-42\":\"cookie-secret\"").expect("corrupt file");
+        drop(PersistentCookies::load(missing.clone()));
+        drop(PersistentCookies::load(missing.join(STORE_COOKIES_FILE)));
+
+        let logs = capture.contents();
+        assert_eq!(logs.matches("appstore.cookies.load_failed").count(), 2);
+        assert!(logs.contains("invalid_json") && logs.contains("NotADirectory"));
+        assert!(!logs.contains("cookie-secret") && !logs.contains("mz_at0"));
     }
 
     #[test]

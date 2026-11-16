@@ -9,6 +9,7 @@ use super::bag::STORE_USER_AGENT;
 use super::daap::{self, DmapError};
 use crate::domain::entity::{Account, OwnedApp};
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::Engine;
 use std::collections::HashMap;
 
@@ -101,6 +102,7 @@ pub async fn owned_apps(
         records.extend(fetch_storefront(context, &scoped).await?);
     }
     let mut records = merge(records);
+    log_merged(records.len());
     sort_by_purchase_date(&mut records);
     let limit = normalized_limit(limit);
     Ok(records
@@ -108,6 +110,17 @@ pub async fn owned_apps(
         .take(limit)
         .map(PurchaseRecord::into_owned_app)
         .collect())
+}
+
+fn log_merged(count: usize) {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "owned_apps",
+        event_name = "appstore.owned_apps.merged",
+        count,
+        "purchase history merged across storefronts"
+    );
 }
 
 fn normalized_limit(limit: u32) -> usize {
@@ -264,15 +277,14 @@ async fn send(
         request = request.header(reqwest::header::CONTENT_LENGTH, "0");
     }
     let label = step.label();
-    let response = request
-        .send()
+    let response = send_with_observability(context.client, request)
         .await
         .map_err(|error| AppStoreError::NetworkError(format!("{label} request failed: {error}")))?;
     let status = u64::from(response.status().as_u16());
-    let data = response
-        .bytes()
+    let data = read_response_bytes(response)
         .await
         .map_err(|error| AppStoreError::NetworkError(format!("read {label} response: {error}")))?;
+    log_step(label, status, data.len());
     check_status(label, status, "request returned HTTP")?;
     let daap_status = daap::first_uint(&data, "mstt").map_err(|error| {
         AppStoreError::Unexpected(format!("failed to parse {label} response: {error}"))
@@ -280,7 +292,20 @@ async fn send(
     if let Some(status) = daap_status {
         check_status(label, status, "response returned DAAP status")?;
     }
-    Ok(data.to_vec())
+    Ok(data)
+}
+
+fn log_step(label: &str, status: u64, body_bytes: usize) {
+    tracing::debug!(
+        service = "ipakeep",
+        component = "appstore",
+        operation = "owned_apps",
+        event_name = "appstore.owned_apps.step",
+        step = label,
+        status,
+        body_bytes,
+        "purchase history response received"
+    );
 }
 
 fn check_status(label: &str, status: u64, what: &str) -> Result<(), AppStoreError> {
@@ -550,6 +575,7 @@ fn rfc3339(unix_seconds: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infrastructure::observability::log_capture::LogCapture;
     use std::sync::{Arc, Mutex};
     use wiremock::matchers::{body_bytes, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -686,6 +712,28 @@ mod tests {
             &server.received_requests().await.expect("recorded"),
             &update,
         );
+    }
+
+    #[tokio::test]
+    async fn logs_each_daap_step_without_account_secrets() {
+        let capture = LogCapture::default();
+        let _guard = capture.install();
+        let server = MockServer::start().await;
+        mount_storefront(&server, "143441-1,34", listing(&[item(1, 131_072, 1, 300)])).await;
+        mount_storefront(&server, "143441-1,13", listing(&[])).await;
+        let signed = Arc::new(Mutex::new(Vec::new()));
+
+        run(&server, &signed, 0).await.expect("owned apps");
+
+        let logs = capture.contents();
+        for step in ["login", "update", "items"] {
+            let event = format!("step=\"purchase history {step}\"");
+            assert_eq!(logs.matches(&event).count(), 2, "{step}");
+        }
+        assert!(logs.contains("appstore.owned_apps.merged") && logs.contains("count=1"));
+        for secret in ["token", "1234", GUID, "c2ln", "session-id"] {
+            assert!(!logs.contains(secret), "{secret} leaked");
+        }
     }
 
     fn header(request: &Request, name: &str) -> Option<String> {

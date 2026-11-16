@@ -4,6 +4,7 @@
 //! normalisation in `pkg/http/client.go`.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use base64::Engine;
 use reqwest::Url;
 use std::sync::Arc;
@@ -119,11 +120,11 @@ pub async fn fetch_bag(
     bag_url: &str,
     guid: &str,
 ) -> Result<StoreBag, AppStoreError> {
-    let response = client
+    let request = client
         .get(format!("{bag_url}?ix={BAG_INDEX}&guid={guid}"))
         .header("Accept", "application/xml")
-        .header("User-Agent", STORE_USER_AGENT)
-        .send()
+        .header("User-Agent", STORE_USER_AGENT);
+    let response = send_with_observability(client, request)
         .await
         .map_err(|error| AppStoreError::NetworkError(format!("bag request failed: {error}")))?;
     let status = response.status();
@@ -133,8 +134,7 @@ pub async fn fetch_bag(
             status.as_u16()
         )));
     }
-    let body = response
-        .bytes()
+    let body = read_response_bytes(response)
         .await
         .map_err(|error| AppStoreError::NetworkError(format!("read bag: {error}")))?;
     StoreBag::from_dictionary(&decode_store_plist(&body)?)

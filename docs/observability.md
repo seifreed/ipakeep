@@ -237,6 +237,27 @@ the high-severity `quick-xml` issues are fixed in 0.41.0 and later
 ([namespace allocation](https://rustsec.org/advisories/RUSTSEC-2026-0195.html),
 [duplicate-attribute parsing](https://rustsec.org/advisories/RUSTSEC-2026-0194.html)).
 
+### Milestone 13 — native App Store session
+
+`StoreSession` login, purchase, list-versions, download and owned-apps calls
+run in an `appstore_operation` span (`operation`, `app_id`) and emit
+`appstore.operation.started`, `appstore.operation.completed` (with
+`outcome="auth_code_required"` at INFO for the expected 2FA prompt) or
+`appstore.operation.failed` (WARN, `error_type` only) with `duration_ms`. The
+native commerce requests go through the shared HTTP telemetry helper, so
+transport errors no longer carry the request URL (which held the machine GUID
+in its query). Store-level events add the allowlisted endpoint host and path
+(never the query), HTTP status, sign-in attempt/redirect/retry counts, the
+`X-Apple-AMD-Action` code, and Apple's `failureType`/`customerMessage` only
+when they are machine-readable codes; free text, which can name the account,
+is logged as `redacted`. Previously silent fallbacks (no Store AMD proof yet,
+`ent/download` falling back to the legacy chain, a rejected cached kbsync, an
+unconfirmed license after Apple's 2034, a missing catalog version label, and
+unreadable cookie or kbsync files) now emit events with an `error_type`.
+LogCapture tests assert these events and that passwords, 2FA codes, Apple
+IDs, DSIDs, tokens, cookies, AMD/MD headers, action signatures, kbsync blobs,
+provisioning challenges, package URLs and the GUID stay out of the logs.
+
 ## Operator guide
 
 ### Configuration and destination
@@ -287,6 +308,12 @@ Useful events include:
   credential persistence.
 - `process.completed` and `process.spawn_failed` for host tools.
 - `auth.retry.scheduled` and `appstore.request.retry` for recoverable retries.
+- `appstore.operation.started`, `appstore.operation.completed` and
+  `appstore.operation.failed` for native Store login, purchase, version
+  listing, download tickets and purchase history; `appstore.login.response`,
+  `appstore.login.retry`, `appstore.login.redirect`,
+  `appstore.purchase.response`, `appstore.download.response` and
+  `appstore.owned_apps.step` for the individual Store requests.
 - `download.artifact.saved` for the local IPA write.
 - `developer.csr.generated` and `developer.csr.failed` for the native RSA key
   and certificate signing request generation (never the subject or key).
@@ -321,7 +348,8 @@ fallback paths; 408, 429, and 5xx remain WARN.
 Do not log CLI arguments verbatim, signed URLs, query strings, request or
 response bodies, auth headers, cookies, account fields, filesystem paths, or
 child-process arguments/output. HTTP events keep the hostname and omit the
-path/query. Process events keep only the executable basename and exit metadata.
+path/query; App Store events may add the fixed, allowlisted Store endpoint path
+but never its query. Process events keep only the executable basename and exit metadata.
 Response errors retain status and safe parser/error classifications; raw
 request URLs and arbitrary server bodies are removed. User-facing CLI output
 may still include a path when it identifies the requested file operation, but

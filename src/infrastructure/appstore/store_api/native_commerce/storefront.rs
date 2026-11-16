@@ -9,6 +9,7 @@
 //! Only the headers upstream sets explicitly are reproduced here.
 
 use crate::domain::error::AppStoreError;
+use crate::infrastructure::http::telemetry::{read_response_bytes, send_with_observability};
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
@@ -115,11 +116,9 @@ impl StorefrontResolver {
     }
 
     async fn fetch_available(&self) -> Result<HashMap<String, String>, AppStoreError> {
-        let response = self
-            .client
-            .get(&self.available_url)
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
-            .send()
+        let request = self.client.get(&self.available_url);
+        let request = request.header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT);
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|error| network("available storefronts request failed", &error))?;
         if response.status() != reqwest::StatusCode::OK {
@@ -128,8 +127,7 @@ impl StorefrontResolver {
                 response.status().as_u16()
             )));
         }
-        let body = response
-            .bytes()
+        let body = read_response_bytes(response)
             .await
             .map_err(|error| network("read available storefronts", &error))?;
         parse_available_storefronts(&body)
@@ -160,15 +158,15 @@ impl StorefrontResolver {
     }
 
     async fn fetch_genre_page(&self, identifier: &str) -> Result<Option<Vec<u8>>, AppStoreError> {
-        let response = self
+        let request = self
             .client
             .get(&self.genre_url)
             .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
             .header(
                 STORE_FRONT_HEADER,
                 format!("{identifier}{GENRE_STORE_FRONT_SUFFIX}"),
-            )
-            .send()
+            );
+        let response = send_with_observability(&self.client, request)
             .await
             .map_err(|error| network("storefront country code request failed", &error))?;
         let status = response.status();
@@ -181,11 +179,10 @@ impl StorefrontResolver {
                 status.as_u16()
             )));
         }
-        let body = response
-            .bytes()
+        let body = read_response_bytes(response)
             .await
             .map_err(|error| network("read storefront country code", &error))?;
-        Ok(Some(body.to_vec()))
+        Ok(Some(body))
     }
 }
 
