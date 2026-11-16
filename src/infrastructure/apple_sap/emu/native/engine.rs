@@ -14,11 +14,13 @@ use std::time::{Duration, Instant};
 
 use super::super::error::{EmuError, EngineErrorCode};
 use super::super::register::Register;
+use super::block::{BlockCache, BlockId, Exit, run_block};
 use super::{INSN_SIZE, NativeCpu, NativeError, Step};
 
 /// The stop sentinel the machine layer uses as a return address (holds `brk #0`).
 pub(crate) const RETURN_ADDRESS: u64 = 0x1_0000_0000;
-/// How many instructions run between two wall-clock deadline checks.
+/// How many instructions (or run-loop iterations) run between two wall-clock
+/// deadline checks; a check can overshoot by at most one block.
 const DEADLINE_CHECK_INTERVAL: usize = 4096;
 
 /// Little-endian `RET X30`.
@@ -65,6 +67,8 @@ impl CodeHookEntry<'_> {
 /// the Unicorn `Engine`.
 pub struct NativeEngine<'a> {
     cpu: NativeCpu,
+    /// Pre-decoded basic blocks (see [`super::block`]).
+    blocks: BlockCache,
     code_hooks: Vec<CodeHookEntry<'a>>,
     /// Inclusive `[lo, hi]` hull of every hook range (`lo > hi` when there are
     /// no hooks), so the per-instruction check is two compares.
@@ -79,6 +83,7 @@ impl<'a> NativeEngine<'a> {
     pub(crate) fn new() -> Result<Self, EmuError> {
         Ok(Self {
             cpu: NativeCpu::new(),
+            blocks: BlockCache::default(),
             code_hooks: Vec::new(),
             hook_span: (u64::MAX, 0),
             next_id: 1,
@@ -93,6 +98,15 @@ impl<'a> NativeEngine<'a> {
     pub(crate) fn mem_map(&mut self, address: u64, size: u64) -> Result<(), EmuError> {
         self.cpu.mem.map(address, size);
         Ok(())
+    }
+
+    /// Drops the cached blocks of every code page written or unmapped since
+    /// the last call.
+    fn sync_code_writes(&mut self) {
+        if self.cpu.mem.code_written() {
+            let pages = self.cpu.mem.take_code_writes();
+            self.blocks.invalidate_pages(&pages);
+        }
     }
 
     pub(crate) fn mem_read(&self, address: u64, size: usize) -> Result<Vec<u8>, EmuError> {
@@ -112,10 +126,9 @@ impl<'a> NativeEngine<'a> {
     }
 
     pub(crate) fn mem_write(&mut self, address: u64, data: &[u8]) -> Result<(), EmuError> {
-        self.cpu
-            .mem
-            .write(address, data)
-            .map_err(|error| native_err(error, None))
+        let written = self.cpu.mem.write(address, data);
+        self.sync_code_writes();
+        written.map_err(|error| native_err(error, None))
     }
 
     pub(crate) fn read_u32(&self, address: u64) -> Result<u32, EmuError> {
@@ -192,6 +205,8 @@ impl<'a> NativeEngine<'a> {
             hook: Box::new(hook),
         });
         self.update_hook_span();
+        // Cached blocks may run straight through the newly hooked addresses.
+        self.blocks.clear();
         Ok(HookId(id))
     }
 
@@ -260,6 +275,7 @@ impl<'a> NativeEngine<'a> {
     /// Unmaps the pages covering `[address, address+size)`.
     pub(crate) fn mem_unmap(&mut self, address: u64, size: u64) -> Result<(), EmuError> {
         self.cpu.mem.unmap(address, size);
+        self.sync_code_writes();
         Ok(())
     }
 
@@ -291,30 +307,36 @@ impl<'a> NativeEngine<'a> {
     ) -> Result<(), EmuError> {
         self.cpu.set_pc(begin);
         self.stopped = false;
+        if let Some(error) = self.fault.take() {
+            return Err(error);
+        }
         let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
+        let limit = if instruction_limit == 0 {
+            usize::MAX
+        } else {
+            instruction_limit
+        };
         let mut count = 0usize;
-        let mut iterations = 0usize;
+        // Starts "due" so the first iteration checks the clock, as before.
+        let mut since_check = DEADLINE_CHECK_INTERVAL;
+        // The block that ran last, whose exit links locate the next one.
+        let mut prev: Option<BlockId> = None;
         loop {
-            if let Some(error) = self.fault.take() {
-                return Err(error);
-            }
             let pc = self.cpu.pc();
-            if pc == until {
+            if pc == until || count >= limit {
                 return Ok(());
             }
-            if instruction_limit != 0 && count >= instruction_limit {
-                return Ok(());
-            }
-            // Reading the clock costs more than most instructions, so the
-            // wall-clock bound is only checked every `DEADLINE_CHECK_INTERVAL`
-            // instructions (the timeout is a coarse safety net, not exact).
+            // Reading the clock costs more than a whole block, so the bound is
+            // only checked every `DEADLINE_CHECK_INTERVAL` instructions (the
+            // timeout is a coarse safety net, not exact).
             if let Some(deadline) = deadline
-                && iterations.is_multiple_of(DEADLINE_CHECK_INTERVAL)
-                && Instant::now() >= deadline
+                && since_check >= DEADLINE_CHECK_INTERVAL
             {
-                return Err(EmuError::Timeout { timeout });
+                since_check = 0;
+                if Instant::now() >= deadline {
+                    return Err(EmuError::Timeout { timeout });
+                }
             }
-            iterations = iterations.wrapping_add(1);
 
             if let Err(error) = self.fire_code_hooks(pc) {
                 // The hook path also recorded the fault; consume it so it can't
@@ -330,20 +352,74 @@ impl<'a> NativeEngine<'a> {
             // A hook may have redirected control flow; if so, resume at the new
             // PC without executing the hooked instruction.
             if self.cpu.pc() != pc {
+                since_check += 1;
                 continue;
             }
 
-            match self
-                .cpu
-                .step()
-                .map_err(|error| native_err(error, Some(pc)))?
-            {
-                Step::Next => self.cpu.set_pc(pc + INSN_SIZE),
-                Step::Branch(target) => self.cpu.set_pc(target),
-                Step::Break(_) => return Ok(()),
+            let (done, exit) = self.run_block_at(&mut prev, pc, until, limit - count);
+            count += done;
+            since_check += done.max(1);
+            match exit {
+                Exit::Next(next) => self.cpu.set_pc(next),
+                Exit::Break(at) => {
+                    self.cpu.set_pc(at);
+                    return Ok(());
+                }
+                Exit::Fault { pc: at, error } => {
+                    self.cpu.set_pc(at);
+                    self.sync_code_writes();
+                    return Err(native_err(error, Some(at)));
+                }
             }
-            count += 1;
+            self.sync_code_writes();
         }
+    }
+
+    /// Executes guest code starting at `pc` (hooks at `pc` already fired):
+    /// at most `budget` (>= 1) instructions, stopping before `until` and
+    /// before any hooked address. Returns how many instructions completed and
+    /// where execution continues. `prev` is the block that ran last (chaining
+    /// hint) and is updated to the block run here.
+    ///
+    /// This is the single place guest instructions run, so an alternative
+    /// executor (e.g. a JIT) only needs to provide the same contract here.
+    fn run_block_at(
+        &mut self,
+        prev: &mut Option<BlockId>,
+        pc: u64,
+        until: u64,
+        budget: usize,
+    ) -> (usize, Exit) {
+        if pc & (INSN_SIZE - 1) != 0 {
+            // Misaligned PC: no block (its word could straddle a page); run the
+            // single instruction exactly as the decoder would.
+            *prev = None;
+            return match self.cpu.step() {
+                Ok(Step::Next) => (1, Exit::Next(pc + INSN_SIZE)),
+                Ok(Step::Branch(target)) => (1, Exit::Next(target)),
+                Ok(Step::Break(_)) => (0, Exit::Break(pc)),
+                Err(error) => (0, Exit::Fault { pc, error }),
+            };
+        }
+        let (hooks, span) = (&self.code_hooks, self.hook_span);
+        let hooked = |addr: u64| {
+            addr >= span.0 && addr <= span.1 && hooks.iter().any(|entry| entry.covers(addr))
+        };
+        let id = match self.blocks.lookup(&mut self.cpu.mem, *prev, pc, hooked) {
+            Ok(id) => id,
+            Err(error) => return (0, Exit::Fault { pc, error }),
+        };
+        *prev = Some(id);
+        let block = self.blocks.get(id);
+        // `until` may sit inside the block: stop right before it.
+        let mut max = block.len().min(budget);
+        if until > pc
+            && until - pc < (max as u64) * INSN_SIZE
+            && (until - pc).is_multiple_of(INSN_SIZE)
+        {
+            max = ((until - pc) / INSN_SIZE) as usize;
+        }
+        run_block(&mut self.cpu, block, max)
     }
 }
 

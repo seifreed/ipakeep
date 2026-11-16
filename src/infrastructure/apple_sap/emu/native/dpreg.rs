@@ -76,7 +76,7 @@ fn logical_nz(result: u64, sf: u32) -> u32 {
 }
 
 /// `ShiftReg`: applies shift `type` of `amount` to a datasize-wide value.
-fn shift_reg(value: u64, shift_type: u32, amount: u32, sf: u32) -> u64 {
+pub(super) fn shift_reg(value: u64, shift_type: u32, amount: u32, sf: u32) -> u64 {
     let datasize = if sf == 1 { 64 } else { 32 };
     let v = mask_width(value, sf);
     let result = match shift_type {
@@ -102,7 +102,7 @@ fn shift_reg(value: u64, shift_type: u32, amount: u32, sf: u32) -> u64 {
 }
 
 /// `ExtendReg`: extends the low bits of `value` per `option`, then LSL by `shift`.
-fn extend_reg(value: u64, option: u32, shift: u32, sf: u32) -> u64 {
+pub(super) fn extend_reg(value: u64, option: u32, shift: u32, sf: u32) -> u64 {
     let datasize = if sf == 1 { 64 } else { 32 };
     let (base_len, unsigned) = match option & 0b111 {
         0b000 => (8, true),
