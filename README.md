@@ -625,6 +625,17 @@ If this project is useful in your workflows, you can support development:
 
 This project is licensed under the MIT license. See [Cargo.toml](Cargo.toml).
 
+The ipakeep source code is MIT-licensed (see [LICENSE](LICENSE)). The native
+Apple SAP/anisette stack statically links the
+[Unicorn](https://www.unicorn-engine.org/) emulator through the `unicorn-engine`
+crate, which is licensed under the
+[GPL-2.0](https://github.com/unicorn-engine/unicorn/blob/master/COPYING).
+Unicorn is a mandatory dependency, so every compiled `ipakeep` binary is a
+combined work: distributing binaries is governed by the GPL-2.0 (including its
+source-availability and license-text requirements), while the MIT terms still
+apply to the ipakeep source on its own. The full dependency license list is in
+the CycloneDX SBOM at [sbom/ipakeep.cdx.json](sbom/ipakeep.cdx.json).
+
 **Attribution**
 - Author: **Marc Rivero López** | [@seifreed](https://github.com/seifreed)
 - Repository: [github.com/seifreed/ipakeep](https://github.com/seifreed/ipakeep)
