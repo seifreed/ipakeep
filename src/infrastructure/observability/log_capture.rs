@@ -1,4 +1,10 @@
 //! Test-only capture writer for `tracing` assertions.
+//!
+//! Each capture installs a thread-local default subscriber, so it only sees
+//! events emitted on the installing thread, and the global lock serializes
+//! captures. Captured lines carry no timestamps: their sub-second digits are
+//! random text that once made "secret never logged" assertions flaky (a fake
+//! DSID `1234` matched `…:37.123425Z`).
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -31,6 +37,7 @@ impl LogCapture {
         Self::install_subscriber(
             tracing_subscriber::fmt()
                 .with_max_level(tracing::Level::DEBUG)
+                .without_time()
                 .with_ansi(false)
                 .with_writer(self.clone())
                 .finish(),
@@ -44,6 +51,7 @@ impl LogCapture {
                 .json()
                 .flatten_event(true)
                 .with_current_span(true)
+                .without_time()
                 .with_max_level(tracing::Level::DEBUG)
                 .with_writer(self.clone())
                 .finish(),
@@ -108,5 +116,40 @@ impl Write for LogWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogCapture;
+
+    #[test]
+    fn captures_only_the_installing_thread_without_timestamps() {
+        let capture = LogCapture::default();
+        let guard = capture.install();
+        tracing::info!(event_name = "test.capture.own_thread", "captured");
+        std::thread::spawn(|| tracing::info!(event_name = "test.capture.other_thread", "ignored"))
+            .join()
+            .expect("logging thread");
+        drop(guard);
+        tracing::info!(event_name = "test.capture.after_guard", "ignored");
+
+        let logs = capture.contents();
+        assert!(logs.starts_with(" INFO "), "{logs}");
+        assert_eq!(logs.lines().count(), 1, "{logs}");
+        assert!(logs.contains("test.capture.own_thread"), "{logs}");
+    }
+
+    #[test]
+    fn json_capture_has_no_timestamp_field() {
+        let capture = LogCapture::default();
+        let guard = capture.install_json();
+        tracing::info!(event_name = "test.capture.json", "captured");
+        drop(guard);
+
+        let event: serde_json::Value =
+            serde_json::from_str(capture.contents().trim()).expect("one JSON event");
+        assert_eq!(event["event_name"], "test.capture.json");
+        assert!(event.get("timestamp").is_none(), "{event}");
     }
 }
