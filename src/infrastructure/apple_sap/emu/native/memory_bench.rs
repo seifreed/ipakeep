@@ -26,6 +26,9 @@ const BASE: u64 = 0x1_0000_0000;
 /// Pages mapped for the benchmark (covers the largest working set).
 const PAGES: u64 = 2048;
 
+/// A benchmark case: label, working-set pages, store?, page picker.
+type Case = (&'static str, u64, bool, fn(u64, u64) -> u64);
+
 /// Deterministic xorshift64 address stream.
 fn next(state: &mut u64) -> u64 {
     *state ^= *state << 13;
@@ -75,7 +78,7 @@ fn memory_bench() {
         mem.write(BASE + page * PAGE_SIZE + 8, &(page + 1).to_le_bytes())
             .unwrap();
     }
-    let cases: [(&str, u64, bool, fn(u64, u64) -> u64); 7] = [
+    let cases: [Case; 7] = [
         ("load  1 page        ", 1, false, |_, _| 0),
         ("load  3 interleaved ", 3, false, |i, _| i),
         ("load  32 random     ", 32, false, |_, r| r),

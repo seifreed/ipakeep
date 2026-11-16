@@ -108,22 +108,43 @@ impl Hasher for PageHasher {
 type PageIndex = HashMap<u64, usize, BuildHasherDefault<PageHasher>>;
 type Frame = Box<[u8; PAGE_SIZE as usize]>;
 
-/// A page-number cache entry that never matches (page keys are page-aligned).
+/// A page-number cache entry that never matches: TLB tags are page numbers
+/// (`address >> 12`, at most 2^52 - 1) and the fetch cache keys page-aligned
+/// addresses, so `u64::MAX` is never a valid key in either.
 const NO_PAGE: (u64, usize) = (u64::MAX, 0);
+
+/// log2 of [`PAGE_SIZE`].
+const PAGE_SHIFT: u32 = 12;
+
+/// Entries in the data software TLB (a power of two; 16 KiB of slots).
+/// Boxed so `Memory` (and the futures that own an engine) stay small.
+/// Measured on the kbsync access stream (271M data accesses, ~420 distinct
+/// data pages): a one-entry cache misses 85%, 64 entries 0.9%, 256 entries
+/// 0.26%, 1024 entries 0.01%. kbsync never unmaps, so the bigger flush is free.
+const TLB_ENTRIES: usize = 1024;
 
 /// Sparse page-granular guest memory.
 ///
 /// Page contents live in `frames`; `index` maps a page-aligned address to its
-/// frame. Two one-entry caches (instruction fetch and data access) remember
-/// the last page each touched, so straight-line code and loops over one
-/// buffer skip the hash lookup. Frame indices only change on `unmap`, which
-/// resets both caches; writes go through the frames, so they never stale a
-/// cache.
+/// frame. Lookups avoid the hash map through two caches:
+///
+/// * `tlb` — a direct-mapped software TLB for data accesses. Slot
+///   `page_number % TLB_ENTRIES` holds `(page_number, frame)`. A hit costs one
+///   compare; a miss consults `index` and refills the slot (evicting whatever
+///   page shared it). Only mapped pages are ever cached (no negative entries).
+/// * `fetch_cache` — a one-entry cache for instruction fetch, which walks one
+///   page at a time and would otherwise compete with data for TLB slots.
+///
+/// Coherence: `map` only adds pages and never moves an existing frame, and no
+/// cache remembers an unmapped page, so `map` needs no invalidation. `unmap`
+/// is the only operation that removes a page or renumbers frames
+/// (`swap_remove`), so it flushes every cache. Writes go through the frames
+/// and never stale a cache.
 pub(crate) struct Memory {
     index: PageIndex,
     frames: Vec<Frame>,
     fetch_cache: Cell<(u64, usize)>,
-    data_cache: Cell<(u64, usize)>,
+    tlb: Box<[Cell<(u64, usize)>; TLB_ENTRIES]>,
 }
 
 impl Default for Memory {
@@ -132,23 +153,72 @@ impl Default for Memory {
             index: PageIndex::default(),
             frames: Vec::new(),
             fetch_cache: Cell::new(NO_PAGE),
-            data_cache: Cell::new(NO_PAGE),
+            tlb: Box::new(std::array::from_fn(|_| Cell::new(NO_PAGE))),
         }
     }
 }
 
+/// Copies `src` into `dst` (equal lengths). The power-of-two sizes of A64
+/// scalar and vector accesses get fixed-size copies, which compile to plain
+/// loads/stores instead of a `memcpy` call.
+// Forced inline: the whole point is a call-free load/store fast path.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn copy_small(dst: &mut [u8], src: &[u8]) {
+    match dst.len() {
+        1 => dst[0] = src[0],
+        2 => dst[..2].copy_from_slice(&src[..2]),
+        4 => dst[..4].copy_from_slice(&src[..4]),
+        8 => dst[..8].copy_from_slice(&src[..8]),
+        16 => dst[..16].copy_from_slice(&src[..16]),
+        _ => dst.copy_from_slice(src),
+    }
+}
+
 impl Memory {
-    /// Frame index of the page containing `address`, via `cache`.
+    /// Frame index of the page containing `address`, via the one-entry
+    /// instruction-fetch cache.
     #[inline]
-    fn frame_of(&self, address: u64, cache: &Cell<(u64, usize)>) -> Option<usize> {
+    fn fetch_frame(&self, address: u64) -> Option<usize> {
         let page = address & !(PAGE_SIZE - 1);
-        let (cached_page, cached_frame) = cache.get();
+        let (cached_page, cached_frame) = self.fetch_cache.get();
         if cached_page == page {
             return Some(cached_frame);
         }
         let frame = *self.index.get(&page)?;
-        cache.set((page, frame));
+        self.fetch_cache.set((page, frame));
         Some(frame)
+    }
+
+    /// Frame index of the page containing `address`, via the data TLB.
+    // Forced inline: a TLB hit must not cost a call.
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
+    fn data_frame(&self, address: u64) -> Option<usize> {
+        let vpn = address >> PAGE_SHIFT;
+        let slot = &self.tlb[vpn as usize & (TLB_ENTRIES - 1)];
+        let (tag, frame) = slot.get();
+        if tag == vpn {
+            return Some(frame);
+        }
+        self.tlb_fill(vpn, slot)
+    }
+
+    /// TLB miss: looks the page up in `index` and, if mapped, caches it in
+    /// `slot` (evicting the previous occupant).
+    #[inline(never)]
+    fn tlb_fill(&self, vpn: u64, slot: &Cell<(u64, usize)>) -> Option<usize> {
+        let frame = *self.index.get(&(vpn << PAGE_SHIFT))?;
+        slot.set((vpn, frame));
+        Some(frame)
+    }
+
+    /// Drops every cached translation (after frames were removed/renumbered).
+    fn flush_caches(&self) {
+        self.fetch_cache.set(NO_PAGE);
+        for slot in &self.tlb {
+            slot.set(NO_PAGE);
+        }
     }
 
     fn page_mut(&mut self, page: u64) -> &mut [u8; PAGE_SIZE as usize] {
@@ -173,8 +243,7 @@ impl Memory {
 
     /// Unmaps the pages covering `[address, address+size)`.
     pub(crate) fn unmap(&mut self, address: u64, size: u64) {
-        self.fetch_cache.set(NO_PAGE);
-        self.data_cache.set(NO_PAGE);
+        self.flush_caches();
         let start = address & !(PAGE_SIZE - 1);
         let end = (address + size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
         let mut page = start;
@@ -202,17 +271,32 @@ impl Memory {
 
     /// Reads `buf.len()` bytes starting at `address`.
     ///
-    /// Copies page-sized chunks; on an unmapped page the bytes before it are
-    /// already filled and the error names the first unmapped byte, exactly as
-    /// a byte-by-byte copy would.
+    /// An access inside one mapped page (every aligned A64 load) takes the
+    /// fast path: one TLB lookup and a fixed-size copy. Anything else —
+    /// page-straddling, unmapped or empty — takes [`Memory::read_slow`].
     pub(crate) fn read(&self, address: u64, buf: &mut [u8]) -> Result<(), NativeError> {
+        let offset = (address & (PAGE_SIZE - 1)) as usize;
+        if offset + buf.len() <= PAGE_SIZE as usize
+            && let Some(frame) = self.data_frame(address)
+        {
+            copy_small(buf, &self.frames[frame][offset..offset + buf.len()]);
+            return Ok(());
+        }
+        self.read_slow(address, buf)
+    }
+
+    /// General read: copies page-sized chunks; on an unmapped page the bytes
+    /// before it are already filled and the error names the first unmapped
+    /// byte, exactly as a byte-by-byte copy would.
+    #[inline(never)]
+    fn read_slow(&self, address: u64, buf: &mut [u8]) -> Result<(), NativeError> {
         let mut done = 0usize;
         while done < buf.len() {
             let addr = address + done as u64;
             let offset = (addr & (PAGE_SIZE - 1)) as usize;
             let chunk = (PAGE_SIZE as usize - offset).min(buf.len() - done);
             let frame = self
-                .frame_of(addr, &self.data_cache)
+                .data_frame(addr)
                 .ok_or(NativeError::Unmapped { address: addr })?;
             buf[done..done + chunk].copy_from_slice(&self.frames[frame][offset..offset + chunk]);
             done += chunk;
@@ -222,15 +306,28 @@ impl Memory {
 
     /// Writes `data` starting at `address`.
     ///
-    /// Same chunking and partial-write-on-fault behavior as [`Memory::read`].
+    /// Same fast path and partial-write-on-fault behavior as [`Memory::read`].
     pub(crate) fn write(&mut self, address: u64, data: &[u8]) -> Result<(), NativeError> {
+        let offset = (address & (PAGE_SIZE - 1)) as usize;
+        if offset + data.len() <= PAGE_SIZE as usize
+            && let Some(frame) = self.data_frame(address)
+        {
+            copy_small(&mut self.frames[frame][offset..offset + data.len()], data);
+            return Ok(());
+        }
+        self.write_slow(address, data)
+    }
+
+    /// General write; see [`Memory::read_slow`].
+    #[inline(never)]
+    fn write_slow(&mut self, address: u64, data: &[u8]) -> Result<(), NativeError> {
         let mut done = 0usize;
         while done < data.len() {
             let addr = address + done as u64;
             let offset = (addr & (PAGE_SIZE - 1)) as usize;
             let chunk = (PAGE_SIZE as usize - offset).min(data.len() - done);
             let frame = self
-                .frame_of(addr, &self.data_cache)
+                .data_frame(addr)
                 .ok_or(NativeError::Unmapped { address: addr })?;
             self.frames[frame][offset..offset + chunk].copy_from_slice(&data[done..done + chunk]);
             done += chunk;
@@ -239,13 +336,18 @@ impl Memory {
     }
 
     /// Fetches the instruction word at `address` (through the fetch cache).
-    #[inline]
+    ///
+    /// Forced inline: it runs once per guest instruction, and LLVM otherwise
+    /// leaves it out of line in `NativeCpu::step` (measured: ~12% more host
+    /// instructions on kbsync).
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn read_u32(&self, address: u64) -> Result<u32, NativeError> {
         // Fast path: an aligned word never straddles a page, so one (usually
         // cached) page lookup and a direct 4-byte load suffice.
         let offset = (address & (PAGE_SIZE - 1)) as usize;
         if offset <= PAGE_SIZE as usize - 4
-            && let Some(frame) = self.frame_of(address, &self.fetch_cache)
+            && let Some(frame) = self.fetch_frame(address)
         {
             let page = &self.frames[frame];
             return Ok(u32::from_le_bytes([
@@ -255,8 +357,10 @@ impl Memory {
                 page[offset + 3],
             ]));
         }
+        // Straddling or unmapped: the general path (kept out of line so this
+        // function stays small enough to inline into the step loop).
         let mut b = [0u8; 4];
-        self.read(address, &mut b)?;
+        self.read_slow(address, &mut b)?;
         Ok(u32::from_le_bytes(b))
     }
 }
@@ -446,6 +550,10 @@ mod coverage_tests;
 /// `IPAKEEP_MEM_BENCH_ITERS` asks for a real measurement).
 #[cfg(test)]
 mod memory_bench;
+
+/// Software-TLB and access-path tests for [`Memory`].
+#[cfg(test)]
+mod memory_tlb_tests;
 
 #[cfg(test)]
 mod memory_tests {
