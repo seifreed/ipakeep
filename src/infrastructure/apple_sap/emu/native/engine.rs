@@ -210,10 +210,32 @@ impl NativeEngine {
         outcome
     }
 
+    /// Unmaps the pages covering `[address, address+size)`.
+    pub(crate) fn mem_unmap(&mut self, address: u64, size: u64) -> Result<(), EmuError> {
+        self.cpu.mem.unmap(address, size);
+        Ok(())
+    }
+
+    /// Runs from `begin` until `pc == until` or a `brk`, with no instruction or
+    /// time bound beyond `timeout`. This matches the machine layer's call shape.
+    pub(crate) fn run(
+        &mut self,
+        begin: u64,
+        until: u64,
+        timeout: Duration,
+    ) -> Result<(), EmuError> {
+        self.start_bounded(begin, until, timeout, 0)
+    }
+
+    /// Runs with no instruction or time bound (`until` is the only stop).
+    pub(crate) fn start(&mut self, begin: u64, until: u64) -> Result<(), EmuError> {
+        self.start_bounded(begin, until, Duration::ZERO, 0)
+    }
+
     /// Runs from `begin` until `pc == until`, a `brk`, the instruction limit, or
     /// the timeout. `instruction_limit == 0` means unlimited; `timeout`
     /// `Duration::ZERO` means no wall-clock bound.
-    pub(crate) fn run(
+    pub(crate) fn start_bounded(
         &mut self,
         begin: u64,
         until: u64,
@@ -286,7 +308,7 @@ mod tests {
         })
         .unwrap();
 
-        e.run(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
+        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
 
         assert_eq!(e.reg_read(Register::X(0)).unwrap(), 42);
         assert_eq!(e.reg_read(Register::Pc).unwrap(), RETURN_ADDRESS);
@@ -307,7 +329,7 @@ mod tests {
         })
         .unwrap();
 
-        e.run(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
+        e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap();
         assert_eq!(e.reg_read(Register::Pc).unwrap(), RETURN_ADDRESS);
     }
 
@@ -321,7 +343,7 @@ mod tests {
             Err(EmuError::guest("boom"))
         })
         .unwrap();
-        let error = e.run(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap_err();
+        let error = e.start_bounded(CODE, RETURN_ADDRESS, Duration::ZERO, 16).unwrap_err();
         assert!(matches!(error, EmuError::Guest(_)));
     }
 }

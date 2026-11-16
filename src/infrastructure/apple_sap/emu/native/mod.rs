@@ -100,6 +100,17 @@ impl Memory {
         }
     }
 
+    /// Unmaps the pages covering `[address, address+size)`.
+    pub(crate) fn unmap(&mut self, address: u64, size: u64) {
+        let start = address & !(PAGE_SIZE - 1);
+        let end = (address + size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+        let mut page = start;
+        while page < end {
+            self.pages.remove(&page);
+            page += PAGE_SIZE;
+        }
+    }
+
     fn is_mapped(&self, address: u64) -> bool {
         self.pages.contains_key(&(address & !(PAGE_SIZE - 1)))
     }
