@@ -19,8 +19,10 @@ allow = [
     "Unlicense",
     "Unicode-3.0",
     "MPL-2.0",
-    # unicorn-engine: the ARM64 emulator that runs Apple SAP/ADI code. Linking it
-    # makes distributed ipakeep binaries GPL-2.0 (accepted by the maintainer).
+    # unicorn-engine: only with the deprecated `unicorn` feature (legacy ARM64
+    # backend / differential-test oracle). Linking it makes distributed ipakeep
+    # binaries GPL-2.0 (accepted by the maintainer). Not in the default graph,
+    # so `cargo deny check` reports it as an unused allowance (warning only).
     "GPL-2.0",
     # libloading (via unicorn-engine build tooling); ring.
     "ISC",

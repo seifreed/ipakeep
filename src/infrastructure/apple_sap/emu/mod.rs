@@ -1,10 +1,17 @@
-//! ARM64 emulator layer over the `unicorn-engine` crate.
+//! ARM64 emulator layer that runs the Apple SAP/ADI guest code.
 //!
-//! Port of ipatool's `internal/sap/unicorn` engine wrapper (CPU model, memory,
-//! registers, bounded execution, code/memory hooks, memory guard) and of
-//! `internal/sap/machine/arm64.go` (software emulation of `CASAL`, `SWPAL` and
-//! `EOR3`). Unicorn is compiled from source by the crate, so nothing is
-//! downloaded or loaded at runtime.
+//! Two backends implement the same [`Engine`] API:
+//!
+//! - `native-cpu` (default, MIT): the native Rust A64 interpreter in `native`.
+//! - `unicorn` (deprecated, GPLv2): a port of ipatool's `internal/sap/unicorn`
+//!   engine wrapper (CPU model, memory, registers, bounded execution,
+//!   code/memory hooks, memory guard) and of `internal/sap/machine/arm64.go`
+//!   (software emulation of `CASAL`, `SWPAL` and `EOR3`) over the
+//!   `unicorn-engine` crate, compiled from source (needs cmake and libclang).
+//!   Kept as a legacy backend and as the oracle of the differential tests.
+//!
+//! `native-cpu` wins when both features are on; the Unicorn engine then stays
+//! reachable as `UnicornEngine`. Nothing is downloaded or loaded at runtime.
 //!
 //! # Host-implemented functions (shims)
 //!
@@ -19,16 +26,16 @@ mod consts;
 mod error;
 mod register;
 
-// Unicorn backend (GPLv2): compiled only when it is the selected backend, i.e.
-// `unicorn` is on and `native-cpu` (which takes priority) is off. Compiling it
-// alongside `native-cpu` would leave the whole backend dead.
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+// Deprecated Unicorn backend (GPLv2): compiled whenever `unicorn` is on. It is
+// the selected `Engine` only without `native-cpu`; with both features it stays
+// reachable as [`UnicornEngine`], the oracle of the native differential tests.
+#[cfg(feature = "unicorn")]
 mod arm64;
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+#[cfg(feature = "unicorn")]
 mod engine;
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+#[cfg(feature = "unicorn")]
 mod guard;
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+#[cfg(feature = "unicorn")]
 mod hook;
 
 /// Backend-neutral A64 instruction classifier (decode-only, no execution).
@@ -47,6 +54,10 @@ pub use register::{
 };
 
 // Backend selection — `native-cpu` takes priority when both features are on.
+/// The deprecated Unicorn engine under an explicit name, whichever backend is
+/// selected as [`Engine`].
+#[cfg(feature = "unicorn")]
+pub use engine::Engine as UnicornEngine;
 #[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
 pub use engine::{Engine, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE};
 #[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
@@ -54,6 +65,6 @@ pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
 #[cfg(feature = "native-cpu")]
 pub use native::engine::{HookId, NativeEngine as Engine};
 
-// Unicorn-backend tests: they exercise APIs only the Unicorn `Engine` exposes.
-#[cfg(all(test, feature = "unicorn", not(feature = "native-cpu")))]
+// Unicorn-backend tests: they exercise APIs only the Unicorn engine exposes.
+#[cfg(all(test, feature = "unicorn"))]
 mod tests;
