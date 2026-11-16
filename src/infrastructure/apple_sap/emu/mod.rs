@@ -16,6 +16,10 @@
 //! `Err` stops the guest and surfaces the error from [`Engine::run`].
 
 mod arm64;
+/// Backend-neutral A64 instruction classifier (decode-only, no execution).
+/// Foundation for the native interpreter and the opcode-histogram probe.
+#[cfg(test)]
+pub(crate) mod decode;
 mod engine;
 mod error;
 mod guard;

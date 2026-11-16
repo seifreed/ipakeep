@@ -960,4 +960,59 @@ mod golden_tests {
         eprintln!("  TOTAL    : {total:>9} insns");
         eprintln!("  otp16 = {}", hex::encode(&otp.otp[8..24]));
     }
+
+    #[test]
+    #[ignore = "instrumentation: needs the cached Apple SAP assets"]
+    fn otp_opcode_histogram_probe() {
+        use std::collections::HashMap;
+        let golden = fixture("adi.json");
+        let state = hex_at(&golden, "/adi_state_hex");
+        let id = identifier(&golden);
+        let host = SeededHost::new(PRIMARY_SEED);
+        let env = GuestEnvironment {
+            host: Rc::clone(&host) as Rc<dyn HostEnv>,
+            preparation_cache:
+                crate::infrastructure::apple_sap::macho::PreparationCache::default_location(),
+        };
+        let mut adi = ModernAdi::open(&bundle(), &env, &id, &state).unwrap();
+
+        // Decode each executed instruction into its mnemonic and histogram it —
+        // the dynamic opcode distribution of the real ~6.7M-insn OTP hot path,
+        // confirming the static r2 histogram and bounding the interpreter's ISA.
+        let hist: Rc<RefCell<HashMap<&'static str, u64>>> = Rc::new(RefCell::new(HashMap::new()));
+        let reg = |rt: &SharedRuntime| {
+            let h = Rc::clone(&hist);
+            rt.borrow_mut()
+                .engine()
+                .add_code_hook(0, u64::MAX, move |engine, addr, _size| {
+                    if let Ok(word) = engine.read_u32(addr) {
+                        let mnem = crate::infrastructure::apple_sap::emu::decode::mnemonic(word);
+                        *h.borrow_mut().entry(mnem).or_insert(0) += 1;
+                    }
+                    Ok(())
+                })
+                .unwrap();
+        };
+        reg(&adi.runtime);
+        reg(&adi.daemon);
+        reg(&adi.fairplay);
+        if let Some(ref k) = adi.kernel {
+            reg(k);
+        }
+
+        let _ = adi.request_otp(MACHINE_PROVISIONING_DSID).unwrap();
+
+        let map = hist.borrow();
+        let total: u64 = map.values().sum();
+        let mut rows: Vec<(&&'static str, &u64)> = map.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        eprintln!("=== OTP DYNAMIC OPCODE HISTOGRAM (one request_otp) ===");
+        eprintln!(
+            "  total instructions: {total}  distinct mnemonics: {}",
+            map.len()
+        );
+        for (mnem, count) in rows.iter().take(70) {
+            eprintln!("  {count:>10}  {mnem}");
+        }
+    }
 }
