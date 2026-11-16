@@ -9,6 +9,7 @@
 //! the engine yet is called with `&mut NativeEngine`; the borrow is resolved by
 //! moving the hook list out with `mem::take` for the duration of the call.
 
+use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 use super::super::error::{EmuError, EngineErrorCode};
@@ -33,28 +34,29 @@ fn native_err(error: NativeError) -> EmuError {
 
 /// Identifies a registered hook so it can be removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HookId(u64);
+pub struct HookId(u64);
 
-type CodeHook = Box<dyn FnMut(&mut NativeEngine, u64, u32) -> Result<(), EmuError>>;
+type CodeHook<'a> = Box<dyn FnMut(&mut NativeEngine<'a>, u64, u32) -> Result<(), EmuError> + 'a>;
 
-struct CodeHookEntry {
+struct CodeHookEntry<'a> {
     id: u64,
     begin: u64,
     end: u64,
-    hook: CodeHook,
+    hook: CodeHook<'a>,
 }
 
 /// A native ARM64 engine exposing the same surface the machine layer calls on
 /// the Unicorn `Engine`.
-pub(crate) struct NativeEngine {
+pub struct NativeEngine<'a> {
     cpu: NativeCpu,
-    code_hooks: Vec<CodeHookEntry>,
+    code_hooks: Vec<CodeHookEntry<'a>>,
     next_id: u64,
     fault: Option<EmuError>,
     stopped: bool,
+    _marker: PhantomData<&'a ()>,
 }
 
-impl NativeEngine {
+impl<'a> NativeEngine<'a> {
     pub(crate) fn new() -> Result<Self, EmuError> {
         Ok(Self {
             cpu: NativeCpu::new(),
@@ -62,6 +64,7 @@ impl NativeEngine {
             next_id: 1,
             fault: None,
             stopped: false,
+            _marker: PhantomData,
         })
     }
 
@@ -149,7 +152,7 @@ impl NativeEngine {
         hook: F,
     ) -> Result<HookId, EmuError>
     where
-        F: FnMut(&mut NativeEngine, u64, u32) -> Result<(), EmuError> + 'static,
+        F: FnMut(&mut NativeEngine<'a>, u64, u32) -> Result<(), EmuError> + 'a,
     {
         let id = self.next_id;
         self.next_id += 1;

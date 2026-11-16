@@ -476,7 +476,7 @@ fn cls(v: u64, datasize: u32) -> u32 {
     count
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unicorn"))]
 mod tests {
     use super::super::diff::{check, check_zero, init_x};
 

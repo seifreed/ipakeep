@@ -15,30 +15,42 @@
 //! result to `X0` and return `Ok(())`; the stub then returns to `LR`. Returning
 //! `Err` stops the guest and surfaces the error from [`Engine::run`].
 
-mod arm64;
-/// Backend-neutral A64 instruction classifier (decode-only, no execution).
-/// Foundation for the native interpreter and the opcode-histogram probe.
-#[cfg(test)]
-pub(crate) mod decode;
-mod engine;
+mod consts;
 mod error;
-mod guard;
-mod hook;
-/// Native Rust A64 interpreter (in development; validated differentially
-/// against the Unicorn backend before replacing it).
-#[cfg(test)]
-mod native;
 mod register;
 
-pub use engine::{
-    Engine, INSTRUCTION_SIZE, RET_INSTRUCTION, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE,
-};
+// Unicorn backend (GPLv2): compiled only when the `unicorn` feature is on.
+#[cfg(feature = "unicorn")]
+mod arm64;
+#[cfg(feature = "unicorn")]
+mod engine;
+#[cfg(feature = "unicorn")]
+mod guard;
+#[cfg(feature = "unicorn")]
+mod hook;
+
+/// Backend-neutral A64 instruction classifier (decode-only, no execution).
+/// Foundation for the native interpreter and the opcode-histogram probe.
+#[cfg(any(test, feature = "native-cpu"))]
+pub(crate) mod decode;
+/// Native Rust A64 interpreter (permissively licensed replacement for Unicorn).
+#[cfg(any(test, feature = "native-cpu"))]
+mod native;
+
+pub use consts::{INSTRUCTION_SIZE, RET_INSTRUCTION};
 pub use error::EmuError;
-pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
 pub use register::{
     ARGUMENT_REGISTER_COUNT, FRAME_POINTER_INDEX, LINK_REGISTER_INDEX, Register,
     VECTOR_REGISTER_COUNT,
 };
 
-#[cfg(test)]
+// Backend selection — `native-cpu` takes priority when both features are on.
+#[cfg(feature = "native-cpu")]
+pub use native::engine::{HookId, NativeEngine as Engine};
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+pub use engine::{Engine, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE};
+#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
+pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
+
+#[cfg(all(test, feature = "unicorn"))]
 mod tests;

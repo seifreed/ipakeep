@@ -182,7 +182,7 @@ fn system(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     Err(unsupported(cpu, word, "system register / msr"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unicorn"))]
 mod tests {
     use super::super::diff::{Init, check, init_x};
     use super::super::{NativeCpu, Step};

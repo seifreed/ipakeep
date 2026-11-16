@@ -33,7 +33,7 @@
 mod branch;
 mod dpimm;
 mod dpreg;
-mod engine;
+pub(crate) mod engine;
 mod ldst;
 mod simd;
 
@@ -320,5 +320,5 @@ fn class_name(class: A64Class) -> &'static str {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unicorn"))]
 mod diff;

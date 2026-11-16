@@ -1,7 +1,9 @@
 //! ARM64 register naming independent of Unicorn's numeric identifiers.
 
+#[cfg(feature = "unicorn")]
 use unicorn_engine::RegisterARM64;
 
+#[cfg(feature = "unicorn")]
 use super::error::EmuError;
 
 /// Index of the frame pointer in the general-purpose register file.
@@ -33,6 +35,7 @@ impl Register {
     pub const LR: Self = Self::X(LINK_REGISTER_INDEX);
 
     /// Resolves this register to Unicorn's numeric identifier.
+    #[cfg(feature = "unicorn")]
     pub(super) fn unicorn_id(self) -> Result<i32, EmuError> {
         match self {
             Self::X(index) if index < FRAME_POINTER_INDEX => {
@@ -51,6 +54,7 @@ impl Register {
 }
 
 /// Resolves vector register `V<index>` to Unicorn's numeric identifier.
+#[cfg(feature = "unicorn")]
 pub(super) fn vector_id(index: u8) -> Result<i32, EmuError> {
     if index >= VECTOR_REGISTER_COUNT {
         return Err(EmuError::InvalidRegister {
@@ -61,7 +65,7 @@ pub(super) fn vector_id(index: u8) -> Result<i32, EmuError> {
     Ok(i32::from(RegisterARM64::V0) + i32::from(index))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unicorn"))]
 mod tests {
     use super::*;
 

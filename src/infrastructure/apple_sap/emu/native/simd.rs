@@ -949,7 +949,7 @@ fn ldst_literal(cpu: &mut NativeCpu, word: u32) -> Result<Step, NativeError> {
     Ok(Step::Next)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "unicorn"))]
 mod tests {
     use super::super::diff::{Init, check, init_x};
 
