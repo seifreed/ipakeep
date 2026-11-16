@@ -61,6 +61,9 @@ impl CodeHookEntry<'_> {
 pub struct NativeEngine<'a> {
     cpu: NativeCpu,
     code_hooks: Vec<CodeHookEntry<'a>>,
+    /// Inclusive `[lo, hi]` hull of every hook range (`lo > hi` when there are
+    /// no hooks), so the per-instruction check is two compares.
+    hook_span: (u64, u64),
     next_id: u64,
     fault: Option<EmuError>,
     stopped: bool,
@@ -72,6 +75,7 @@ impl<'a> NativeEngine<'a> {
         Ok(Self {
             cpu: NativeCpu::new(),
             code_hooks: Vec::new(),
+            hook_span: (u64::MAX, 0),
             next_id: 1,
             fault: None,
             stopped: false,
@@ -173,11 +177,13 @@ impl<'a> NativeEngine<'a> {
             end,
             hook: Box::new(hook),
         });
+        self.update_hook_span();
         Ok(HookId(id))
     }
 
     pub(crate) fn remove_hook(&mut self, id: HookId) -> Result<(), EmuError> {
         self.code_hooks.retain(|entry| entry.id != id.0);
+        self.update_hook_span();
         Ok(())
     }
 
@@ -198,7 +204,8 @@ impl<'a> NativeEngine<'a> {
     fn fire_code_hooks(&mut self, pc: u64) -> Result<(), EmuError> {
         // Fast path: almost every instruction is outside every hook range, so
         // skip moving the hook list out and back in when nothing covers `pc`.
-        if !self.code_hooks.iter().any(|entry| entry.covers(pc)) {
+        let (lo, hi) = self.hook_span;
+        if pc < lo || pc > hi || !self.code_hooks.iter().any(|entry| entry.covers(pc)) {
             return Ok(());
         }
         let mut hooks = std::mem::take(&mut self.code_hooks);
@@ -218,7 +225,22 @@ impl<'a> NativeEngine<'a> {
         let added = std::mem::take(&mut self.code_hooks);
         self.code_hooks = hooks;
         self.code_hooks.extend(added);
+        self.update_hook_span();
         outcome
+    }
+
+    /// Recomputes `hook_span` after the hook list changes.
+    fn update_hook_span(&mut self) {
+        self.hook_span = self
+            .code_hooks
+            .iter()
+            .fold((u64::MAX, 0), |(lo, hi), entry| {
+                if entry.begin > entry.end {
+                    (0, u64::MAX) // an "all addresses" hook
+                } else {
+                    (lo.min(entry.begin), hi.max(entry.end))
+                }
+            });
     }
 
     /// Unmaps the pages covering `[address, address+size)`.
