@@ -18,6 +18,9 @@ use super::{INSN_SIZE, NativeCpu, NativeError, Step};
 
 /// The stop sentinel the machine layer uses as a return address (holds `brk #0`).
 pub(crate) const RETURN_ADDRESS: u64 = 0x1_0000_0000;
+/// How many instructions run between two wall-clock deadline checks.
+const DEADLINE_CHECK_INTERVAL: usize = 4096;
+
 /// Little-endian `RET X30`.
 pub(crate) const RET_INSTRUCTION: [u8; 4] = [0xc0, 0x03, 0x5f, 0xd6];
 
@@ -249,6 +252,7 @@ impl<'a> NativeEngine<'a> {
         self.stopped = false;
         let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
         let mut count = 0usize;
+        let mut iterations = 0usize;
         loop {
             if let Some(error) = self.fault.take() {
                 return Err(error);
@@ -260,11 +264,16 @@ impl<'a> NativeEngine<'a> {
             if instruction_limit != 0 && count >= instruction_limit {
                 return Ok(());
             }
+            // Reading the clock costs more than most instructions, so the
+            // wall-clock bound is only checked every `DEADLINE_CHECK_INTERVAL`
+            // instructions (the timeout is a coarse safety net, not exact).
             if let Some(deadline) = deadline
+                && iterations % DEADLINE_CHECK_INTERVAL == 0
                 && Instant::now() >= deadline
             {
                 return Err(EmuError::Timeout { timeout });
             }
+            iterations = iterations.wrapping_add(1);
 
             self.fire_code_hooks(pc)?;
             if self.stopped {
