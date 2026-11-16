@@ -700,6 +700,57 @@ cost. Earlier optimisation work (page-wise memory, page caches, the hook and
 deadline fast paths) already made the SAP signing test about 5× faster in
 release and 13× faster in debug.
 
+### Optional JIT tier (`jit` feature)
+
+`--features jit` adds a [Cranelift](https://cranelift.dev/) JIT tier on top of
+the interpreter. It is off by default.
+
+```bash
+cargo build --release --features jit
+```
+
+- **Tiering:** the JIT counts how often each guest block is entered and
+  compiles a block after 1024 entries. A block covers straight-line code up to
+  and including the first branch, at most 96 instructions, and never crosses a
+  hooked address. A block that branches back to its own start is compiled as
+  a loop.
+- **What it translates:** integer data processing, integer loads and stores,
+  and branches, with NZCV evaluated lazily. Anything else (SIMD/FP,
+  exclusives and atomics, `brk`, system registers) ends the block, and the
+  interpreter runs it.
+- **Memory:** guest memory goes through a 256-entry TLB of host page pointers.
+  A miss, a page-crossing access or a store to a page that holds compiled code
+  leaves the block before that instruction. The interpreter then runs it, so a
+  fault reports exactly what it reports without the JIT.
+- **Exactness:** instruction limits stay exact and the deadline stays bounded.
+  Blocks are re-checked against guest memory before they run again, so
+  self-modifying code and host writes are picked up. Adding a hook discards
+  compiled code. Differential tests compare the full architectural state and
+  memory with the interpreter's.
+- **Platforms:** Cranelift 0.137 (Apache-2.0 WITH LLVM-exception, pure Rust)
+  supports x86-64 and AArch64 hosts. Its executable memory is never writable
+  and executable at once: it is mapped read-write, then `mprotect`ed to
+  read-execute. It does not use `MAP_JIT`. On macOS that works for normal
+  (`cargo`-built, ad-hoc signed) binaries. A binary signed with the hardened
+  runtime also needs the
+  `com.apple.security.cs.allow-unsigned-executable-memory` entitlement;
+  `com.apple.security.cs.allow-jit` alone covers only `MAP_JIT` mappings.
+
+Golden tests, release build on an Apple M5 Max under heavy load. Times are the
+median of 3 runs, in CPU user time; wall time is in brackets.
+
+| Workload | Interpreter | `--features jit` |
+|----------|-------------|------------------|
+| kbsync, two blobs | 8.8 s (8.9 s) | 1.7 s (1.8 s) |
+| SAP session | 0.55 s | 0.44 s |
+| SAP signer (`connect_and_sign`) | 0.61 s | 0.51 s |
+| ADI provisioning | 1.09 s | 1.04 s |
+
+kbsync runs about 1.0 billion guest instructions. Per blob, the JIT compiles
+about 460 blocks (10.7k guest instructions) in 0.2 to 0.27 s, and those blocks
+execute about 97 % of the instructions. The short SAP and ADI runs are
+dominated by image loading and cold code, so they gain little.
+
 ### Backends
 
 | Build | Engine | License of the binary |
