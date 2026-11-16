@@ -186,7 +186,17 @@ impl Memory {
         Ok(())
     }
 
+    #[inline]
     fn read_u32(&self, address: u64) -> Result<u32, NativeError> {
+        // Fast path for the instruction fetch: an aligned word never straddles
+        // a page, so one lookup and a direct 4-byte load suffice.
+        let offset = (address & (PAGE_SIZE - 1)) as usize;
+        if offset <= PAGE_SIZE as usize - 4
+            && let Some(page) = self.pages.get(&(address & !(PAGE_SIZE - 1)))
+        {
+            let bytes: [u8; 4] = page[offset..offset + 4].try_into().unwrap_or_default();
+            return Ok(u32::from_le_bytes(bytes));
+        }
         let mut b = [0u8; 4];
         self.read(address, &mut b)?;
         Ok(u32::from_le_bytes(b))
