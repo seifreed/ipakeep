@@ -38,6 +38,7 @@ mod ldst;
 mod simd;
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 use super::decode::{A64Class, classify};
 
@@ -76,10 +77,40 @@ pub(crate) enum Step {
     Break(u16),
 }
 
+/// Hasher for page-aligned addresses. Keys are already well-distributed
+/// integers, so a single multiply (Fibonacci hashing) replaces SipHash, which
+/// dominated the interpreter's profile (two hashes per guest byte accessed).
+#[derive(Default)]
+struct PageHasher(u64);
+
+impl Hasher for PageHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0.rotate_left(8) ^ u64::from(byte)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        }
+    }
+
+    #[inline]
+    fn write_u64(&mut self, value: u64) {
+        // Page addresses have their low 12 bits clear; fold the high product
+        // bits down so hashbrown's top-7-bit tag and bucket index both vary.
+        let h = (value >> 12).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 = h ^ (h >> 32);
+    }
+}
+
+type PageMap = HashMap<u64, Box<[u8; PAGE_SIZE as usize]>, BuildHasherDefault<PageHasher>>;
+
 /// Sparse page-granular guest memory.
 #[derive(Default)]
 pub(crate) struct Memory {
-    pages: HashMap<u64, Box<[u8; PAGE_SIZE as usize]>>,
+    pages: PageMap,
 }
 
 impl Memory {
@@ -116,27 +147,41 @@ impl Memory {
     }
 
     /// Reads `buf.len()` bytes starting at `address`.
+    ///
+    /// Copies page-sized chunks; on an unmapped page the bytes before it are
+    /// already filled and the error names the first unmapped byte, exactly as
+    /// a byte-by-byte copy would.
     pub(crate) fn read(&self, address: u64, buf: &mut [u8]) -> Result<(), NativeError> {
-        for (i, byte) in buf.iter_mut().enumerate() {
-            let addr = address + i as u64;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let addr = address + done as u64;
+            let offset = (addr & (PAGE_SIZE - 1)) as usize;
+            let chunk = (PAGE_SIZE as usize - offset).min(buf.len() - done);
             let page = self
                 .pages
                 .get(&(addr & !(PAGE_SIZE - 1)))
                 .ok_or(NativeError::Unmapped { address: addr })?;
-            *byte = page[(addr & (PAGE_SIZE - 1)) as usize];
+            buf[done..done + chunk].copy_from_slice(&page[offset..offset + chunk]);
+            done += chunk;
         }
         Ok(())
     }
 
     /// Writes `data` starting at `address`.
+    ///
+    /// Same chunking and partial-write-on-fault behavior as [`Memory::read`].
     pub(crate) fn write(&mut self, address: u64, data: &[u8]) -> Result<(), NativeError> {
-        for (i, byte) in data.iter().enumerate() {
-            let addr = address + i as u64;
-            if !self.is_mapped(addr) {
-                return Err(NativeError::Unmapped { address: addr });
-            }
-            let page = self.page_mut(addr & !(PAGE_SIZE - 1));
-            page[(addr & (PAGE_SIZE - 1)) as usize] = *byte;
+        let mut done = 0usize;
+        while done < data.len() {
+            let addr = address + done as u64;
+            let offset = (addr & (PAGE_SIZE - 1)) as usize;
+            let chunk = (PAGE_SIZE as usize - offset).min(data.len() - done);
+            let page = self
+                .pages
+                .get_mut(&(addr & !(PAGE_SIZE - 1)))
+                .ok_or(NativeError::Unmapped { address: addr })?;
+            page[offset..offset + chunk].copy_from_slice(&data[done..done + chunk]);
+            done += chunk;
         }
         Ok(())
     }
