@@ -24,6 +24,10 @@ mod engine;
 mod error;
 mod guard;
 mod hook;
+/// Native Rust A64 interpreter (in development; validated differentially
+/// against the Unicorn backend before replacing it).
+#[cfg(test)]
+mod native;
 mod register;
 
 pub use engine::{

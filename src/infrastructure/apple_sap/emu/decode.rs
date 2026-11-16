@@ -14,6 +14,16 @@
 //! a coarse `"simd/fp"` family tag (with a few easily-decoded exceptions such as
 //! `EOR3`, `BCAX` and the `AES*` round helpers). Anything unresolved returns
 //! `"unknown (<Class>)"`.
+// Dense bit-encoded instruction literals and field extraction make these
+// pedantic lints noise in a decoder.
+#![allow(
+    clippy::unreadable_literal,
+    clippy::match_same_arms,
+    clippy::unnested_or_patterns,
+    clippy::verbose_bit_mask,
+    clippy::similar_names,
+    clippy::cast_possible_truncation
+)]
 
 /// Top-level A64 encoding groups, selected by `op0` (`word[28:25]`) and its
 /// neighbouring bits per the Arm ARM "A64 instruction set encoding" table.

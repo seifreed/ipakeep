@@ -799,6 +799,7 @@ mod golden_tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     #[ignore = "instrumentation: needs the cached Apple SAP assets"]
     fn otp_entropy_and_determinism_probe() {
         let golden = fixture("adi.json");
@@ -895,10 +896,10 @@ mod golden_tests {
                 t / 60,
                 hex::encode(&otp)
             );
-            if let Some((po, ref pv)) = prev {
-                if *pv != otp {
-                    eprintln!("    ^ CHANGED vs t=base+{po}");
-                }
+            if let Some((po, ref pv)) = prev
+                && *pv != otp
+            {
+                eprintln!("    ^ CHANGED vs t=base+{po}");
             }
             prev = Some((off, otp));
         }
@@ -962,6 +963,7 @@ mod golden_tests {
     }
 
     #[test]
+    #[allow(clippy::similar_names)]
     #[ignore = "instrumentation: needs the cached Apple SAP assets"]
     fn otp_opcode_histogram_probe() {
         use std::collections::HashMap;
