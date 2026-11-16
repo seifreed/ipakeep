@@ -37,6 +37,7 @@ pub(crate) mod engine;
 mod ldst;
 mod simd;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -105,19 +106,59 @@ impl Hasher for PageHasher {
     }
 }
 
-type PageMap = HashMap<u64, Box<[u8; PAGE_SIZE as usize]>, BuildHasherDefault<PageHasher>>;
+type PageIndex = HashMap<u64, usize, BuildHasherDefault<PageHasher>>;
+type Frame = Box<[u8; PAGE_SIZE as usize]>;
+
+/// A page-number cache entry that never matches (page keys are page-aligned).
+const NO_PAGE: (u64, usize) = (u64::MAX, 0);
 
 /// Sparse page-granular guest memory.
-#[derive(Default)]
+///
+/// Page contents live in `frames`; `index` maps a page-aligned address to its
+/// frame. Two one-entry caches (instruction fetch and data access) remember
+/// the last page each touched, so straight-line code and loops over one
+/// buffer skip the hash lookup. Frame indices only change on `unmap`, which
+/// resets both caches; writes go through the frames, so they never stale a
+/// cache.
 pub(crate) struct Memory {
-    pages: PageMap,
+    index: PageIndex,
+    frames: Vec<Frame>,
+    fetch_cache: Cell<(u64, usize)>,
+    data_cache: Cell<(u64, usize)>,
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Self {
+            index: PageIndex::default(),
+            frames: Vec::new(),
+            fetch_cache: Cell::new(NO_PAGE),
+            data_cache: Cell::new(NO_PAGE),
+        }
+    }
 }
 
 impl Memory {
+    /// Frame index of the page containing `address`, via `cache`.
+    #[inline]
+    fn frame_of(&self, address: u64, cache: &Cell<(u64, usize)>) -> Option<usize> {
+        let page = address & !(PAGE_SIZE - 1);
+        let (cached_page, cached_frame) = cache.get();
+        if cached_page == page {
+            return Some(cached_frame);
+        }
+        let frame = *self.index.get(&page)?;
+        cache.set((page, frame));
+        Some(frame)
+    }
+
     fn page_mut(&mut self, page: u64) -> &mut [u8; PAGE_SIZE as usize] {
-        self.pages
-            .entry(page)
-            .or_insert_with(|| Box::new([0u8; PAGE_SIZE as usize]))
+        let frames = &mut self.frames;
+        let frame = *self.index.entry(page).or_insert_with(|| {
+            frames.push(Box::new([0u8; PAGE_SIZE as usize]));
+            frames.len() - 1
+        });
+        &mut self.frames[frame]
     }
 
     /// Maps `[address, address+size)` as zeroed pages (idempotent).
@@ -133,17 +174,31 @@ impl Memory {
 
     /// Unmaps the pages covering `[address, address+size)`.
     pub(crate) fn unmap(&mut self, address: u64, size: u64) {
+        self.fetch_cache.set(NO_PAGE);
+        self.data_cache.set(NO_PAGE);
         let start = address & !(PAGE_SIZE - 1);
         let end = (address + size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
         let mut page = start;
         while page < end {
-            self.pages.remove(&page);
+            if let Some(frame) = self.index.remove(&page) {
+                // `swap_remove` moves the last frame into the hole; repoint
+                // the page that owned it (unmap is rare, so a scan is fine).
+                self.frames.swap_remove(frame);
+                if frame < self.frames.len() {
+                    for slot in self.index.values_mut() {
+                        if *slot == self.frames.len() {
+                            *slot = frame;
+                            break;
+                        }
+                    }
+                }
+            }
             page += PAGE_SIZE;
         }
     }
 
     fn is_mapped(&self, address: u64) -> bool {
-        self.pages.contains_key(&(address & !(PAGE_SIZE - 1)))
+        self.index.contains_key(&(address & !(PAGE_SIZE - 1)))
     }
 
     /// Reads `buf.len()` bytes starting at `address`.
@@ -157,11 +212,10 @@ impl Memory {
             let addr = address + done as u64;
             let offset = (addr & (PAGE_SIZE - 1)) as usize;
             let chunk = (PAGE_SIZE as usize - offset).min(buf.len() - done);
-            let page = self
-                .pages
-                .get(&(addr & !(PAGE_SIZE - 1)))
+            let frame = self
+                .frame_of(addr, &self.data_cache)
                 .ok_or(NativeError::Unmapped { address: addr })?;
-            buf[done..done + chunk].copy_from_slice(&page[offset..offset + chunk]);
+            buf[done..done + chunk].copy_from_slice(&self.frames[frame][offset..offset + chunk]);
             done += chunk;
         }
         Ok(())
@@ -176,26 +230,31 @@ impl Memory {
             let addr = address + done as u64;
             let offset = (addr & (PAGE_SIZE - 1)) as usize;
             let chunk = (PAGE_SIZE as usize - offset).min(data.len() - done);
-            let page = self
-                .pages
-                .get_mut(&(addr & !(PAGE_SIZE - 1)))
+            let frame = self
+                .frame_of(addr, &self.data_cache)
                 .ok_or(NativeError::Unmapped { address: addr })?;
-            page[offset..offset + chunk].copy_from_slice(&data[done..done + chunk]);
+            self.frames[frame][offset..offset + chunk].copy_from_slice(&data[done..done + chunk]);
             done += chunk;
         }
         Ok(())
     }
 
+    /// Fetches the instruction word at `address` (through the fetch cache).
     #[inline]
     fn read_u32(&self, address: u64) -> Result<u32, NativeError> {
-        // Fast path for the instruction fetch: an aligned word never straddles
-        // a page, so one lookup and a direct 4-byte load suffice.
+        // Fast path: an aligned word never straddles a page, so one (usually
+        // cached) page lookup and a direct 4-byte load suffice.
         let offset = (address & (PAGE_SIZE - 1)) as usize;
         if offset <= PAGE_SIZE as usize - 4
-            && let Some(page) = self.pages.get(&(address & !(PAGE_SIZE - 1)))
+            && let Some(frame) = self.frame_of(address, &self.fetch_cache)
         {
-            let bytes: [u8; 4] = page[offset..offset + 4].try_into().unwrap_or_default();
-            return Ok(u32::from_le_bytes(bytes));
+            let page = &self.frames[frame];
+            return Ok(u32::from_le_bytes([
+                page[offset],
+                page[offset + 1],
+                page[offset + 2],
+                page[offset + 3],
+            ]));
         }
         let mut b = [0u8; 4];
         self.read(address, &mut b)?;
@@ -377,3 +436,36 @@ fn class_name(class: A64Class) -> &'static str {
 
 #[cfg(all(test, feature = "unicorn"))]
 mod diff;
+
+#[cfg(test)]
+mod memory_tests {
+    use super::{Memory, NativeError, PAGE_SIZE};
+
+    /// Unmapping a page moves another frame; every surviving page (and both
+    /// page caches) must still resolve to its own contents.
+    #[test]
+    fn unmap_keeps_other_pages_and_caches_coherent() {
+        let mut mem = Memory::default();
+        mem.map(0x1000, 3 * PAGE_SIZE);
+        for (i, page) in [0x1000u64, 0x2000, 0x3000].iter().enumerate() {
+            mem.write(*page, &[i as u8 + 1; 4]).unwrap();
+        }
+        assert_eq!(mem.read_u32(0x3000).unwrap(), 0x0303_0303);
+        mem.unmap(0x1000, PAGE_SIZE);
+        assert_eq!(
+            mem.read_u32(0x1000),
+            Err(NativeError::Unmapped { address: 0x1000 })
+        );
+        assert_eq!(mem.read_u32(0x2000).unwrap(), 0x0202_0202);
+        assert_eq!(mem.read_u32(0x3000).unwrap(), 0x0303_0303);
+        let mut buf = [0u8; 8];
+        assert_eq!(
+            mem.read(0x2ffc, &mut buf),
+            Ok(()),
+            "a read straddling two mapped pages succeeds"
+        );
+        assert_eq!(buf, [0, 0, 0, 0, 3, 3, 3, 3]);
+        mem.write(0x3000, &[9; 4]).unwrap();
+        assert_eq!(mem.read_u32(0x3000).unwrap(), 0x0909_0909);
+    }
+}
