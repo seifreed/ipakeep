@@ -1,4 +1,8 @@
 [report]
+# LLVM source-based coverage on every OS. Linux's default ptrace engine
+# mis-attributes struct-literal fields, `.mem` chain lines and bare
+# `break`/`continue` (99.87% there vs 100% under LLVM on macOS).
+engine = "Llvm"
 out = ["Stdout", "Json"]
 output-dir = "target/tarpaulin"
 
