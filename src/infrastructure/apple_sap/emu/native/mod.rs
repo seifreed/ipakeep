@@ -382,9 +382,11 @@ impl Memory {
 
     /// Fetches the instruction word at `address` (through the fetch cache).
     ///
-    /// Forced inline: it runs once per guest instruction, and LLVM otherwise
-    /// leaves it out of line in `NativeCpu::step` (measured: ~12% more host
-    /// instructions on kbsync).
+    /// Forced inline: LLVM otherwise leaves it out of line in
+    /// `NativeCpu::step` (measured before the block cache: ~12% more host
+    /// instructions on kbsync). With the block cache, fetch runs once per
+    /// instruction translated (and per misaligned-PC step), not per executed
+    /// instruction.
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn read_u32(&self, address: u64) -> Result<u32, NativeError> {
