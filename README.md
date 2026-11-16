@@ -152,6 +152,13 @@ The default build needs only the Rust toolchain: the Apple guest code runs on
 ipakeep's native Rust ARM64 interpreter (`native-cpu` feature). Apple's signed
 framework assets are downloaded and verified on the first sign-in.
 
+Optional, faster build: `scripts/pgo.sh` makes a profile-guided (PGO) build at
+`target/pgo/release/ipakeep`. It trains on the real-asset golden tests, so it
+needs the cached Apple assets and `rustup component add llvm-tools`.
+`scripts/pgo.sh --verify` builds and times the kbsync golden test instead. In
+local measurements, PGO cut the interpreter's kbsync CPU time by ~18%. The
+default build does not use it.
+
 The legacy Unicorn backend is still available but **deprecated**:
 `cargo build --release --no-default-features --features unicorn`. It builds
 `unicorn-engine-sys` from source and needs a C toolchain, CMake and libclang:
