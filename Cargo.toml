@@ -27,6 +27,18 @@ path = "src/lib.rs"
 default = ["native-cpu"]
 unicorn = ["dep:unicorn-engine"]
 native-cpu = []
+# Optional Cranelift JIT tier for the native interpreter (off by default): hot
+# guest basic blocks are compiled to host code; anything not translated falls
+# back to the interpreter, so results stay byte-identical. Cranelift is
+# Apache-2.0 WITH LLVM-exception (pure Rust, no C toolchain).
+jit = [
+    "native-cpu",
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-jit",
+    "dep:cranelift-module",
+    "dep:cranelift-native",
+]
 
 [dependencies]
 # CLI
@@ -91,6 +103,13 @@ p256 = { version = "0.14", features = ["ecdh", "pem", "pkcs8"] }
 ctr = "0.9"
 hkdf = "0.12"
 unicorn-engine = { version = "2.1", default-features = false, features = ["arch_aarch64"], optional = true }
+# Optional JIT tier (`jit` feature) — exact pins so the generated code and its
+# W^X handling only change with an explicit bump.
+cranelift-codegen = { version = "=0.137.0", optional = true }
+cranelift-frontend = { version = "=0.137.0", optional = true }
+cranelift-jit = { version = "=0.137.0", optional = true }
+cranelift-module = { version = "=0.137.0", optional = true }
+cranelift-native = { version = "=0.137.0", optional = true }
 
 # Developer certificate request (RSA-2048 key + PKCS#10 CSR)
 rsa = { version = "0.10", default-features = false, features = ["std", "encoding", "pkcs1v15"] }

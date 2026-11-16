@@ -33,6 +33,8 @@ mod branch;
 mod dpimm;
 mod dpreg;
 pub(crate) mod engine;
+#[cfg(feature = "jit")]
+pub(crate) mod jit;
 mod ldst;
 mod simd;
 

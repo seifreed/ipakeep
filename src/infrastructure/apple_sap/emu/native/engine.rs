@@ -72,6 +72,9 @@ pub struct NativeEngine<'a> {
     next_id: u64,
     fault: Option<EmuError>,
     stopped: bool,
+    /// Optional Cranelift JIT tier (see [`super::jit`]).
+    #[cfg(feature = "jit")]
+    jit: super::jit::Jit,
     _marker: PhantomData<&'a ()>,
 }
 
@@ -84,6 +87,8 @@ impl<'a> NativeEngine<'a> {
             next_id: 1,
             fault: None,
             stopped: false,
+            #[cfg(feature = "jit")]
+            jit: super::jit::Jit::new(),
             _marker: PhantomData,
         })
     }
@@ -91,6 +96,8 @@ impl<'a> NativeEngine<'a> {
     // --- memory ---
 
     pub(crate) fn mem_map(&mut self, address: u64, size: u64) -> Result<(), EmuError> {
+        #[cfg(feature = "jit")]
+        self.jit.flush_tlb();
         self.cpu.mem.map(address, size);
         Ok(())
     }
@@ -259,6 +266,8 @@ impl<'a> NativeEngine<'a> {
 
     /// Unmaps the pages covering `[address, address+size)`.
     pub(crate) fn mem_unmap(&mut self, address: u64, size: u64) -> Result<(), EmuError> {
+        #[cfg(feature = "jit")]
+        self.jit.flush_tlb();
         self.cpu.mem.unmap(address, size);
         Ok(())
     }
@@ -333,6 +342,27 @@ impl<'a> NativeEngine<'a> {
                 continue;
             }
 
+            // JIT tier: run compiled blocks from `pc` (never across a hooked
+            // address, `until` or the instruction limit); `None` means the
+            // interpreter executes this instruction.
+            #[cfg(feature = "jit")]
+            {
+                let budget = if instruction_limit == 0 {
+                    usize::MAX
+                } else {
+                    instruction_limit - count
+                };
+                let hooks = &self.code_hooks;
+                let hooked = |address: u64| hooks.iter().any(|entry| entry.covers(address));
+                if let Some(ran) =
+                    self.jit
+                        .try_run(&mut self.cpu, until, budget, self.next_id, &hooked)
+                {
+                    count += ran;
+                    continue;
+                }
+            }
+
             match self
                 .cpu
                 .step()
@@ -344,6 +374,14 @@ impl<'a> NativeEngine<'a> {
             }
             count += 1;
         }
+    }
+}
+
+#[cfg(all(test, feature = "jit"))]
+impl NativeEngine<'_> {
+    /// The JIT tier, for tests (threshold, statistics).
+    pub(crate) fn jit_mut(&mut self) -> &mut super::jit::Jit {
+        &mut self.jit
     }
 }
 
