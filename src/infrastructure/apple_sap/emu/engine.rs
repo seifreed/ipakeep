@@ -5,8 +5,26 @@ use std::time::Duration;
 
 use unicorn_engine::{Arch, Arm64CpuModel, Mode, Prot, Query, Unicorn, uc_error};
 
-use super::error::{EmuError, native};
+use super::error::{EmuError, EngineErrorCode};
 use super::register::{Register, vector_id};
+
+/// Maps a Unicorn status code onto the backend-neutral [`EngineErrorCode`].
+fn code_of(source: uc_error) -> EngineErrorCode {
+    match source {
+        uc_error::MAP => EngineErrorCode::Map,
+        uc_error::READ_UNMAPPED => EngineErrorCode::ReadUnmapped,
+        uc_error::WRITE_UNMAPPED => EngineErrorCode::WriteUnmapped,
+        uc_error::FETCH_UNMAPPED => EngineErrorCode::FetchUnmapped,
+        uc_error::EXCEPTION => EngineErrorCode::Exception,
+        uc_error::INSN_INVALID => EngineErrorCode::InvalidInstruction,
+        _ => EngineErrorCode::Other,
+    }
+}
+
+/// Builds a `map_err` adapter that tags a Unicorn status with its operation.
+pub(super) fn native(operation: &'static str) -> impl Fn(uc_error) -> EmuError {
+    move |source| EmuError::engine(operation, code_of(source))
+}
 
 /// Size in bytes of an ARM64 instruction and of a `ret` stub.
 pub const INSTRUCTION_SIZE: u64 = 4;

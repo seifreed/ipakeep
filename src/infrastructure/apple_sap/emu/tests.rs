@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
-use unicorn_engine::uc_error;
+use super::error::EngineErrorCode;
 
 use super::*;
 
@@ -83,7 +83,7 @@ fn memory_round_trips_and_unmapped_access_fails() {
     assert_eq!(engine.mem_read(DATA + 8, 2).ok(), Some(vec![0x88, 0x77]));
     assert_eq!(engine.mem_read(UNMAPPED, 0).ok(), Some(Vec::new()));
     let error = engine.read_u32(UNMAPPED).expect_err("unmapped");
-    assert_eq!(error.unicorn_code(), Some(uc_error::READ_UNMAPPED));
+    assert_eq!(error.engine_code(), Some(EngineErrorCode::ReadUnmapped));
 
     engine.mem_unmap(DATA, PAGE).expect("unmap");
     assert!(engine.read_u32(DATA).is_err());
@@ -91,8 +91,8 @@ fn memory_round_trips_and_unmapped_access_fails() {
         engine
             .mem_map(CODE, PAGE)
             .err()
-            .and_then(|e| e.unicorn_code()),
-        Some(uc_error::MAP)
+            .and_then(|e| e.engine_code()),
+        Some(EngineErrorCode::Map)
     );
 }
 
@@ -277,7 +277,7 @@ fn unhandled_memory_fault_reports_unicorn_error() {
 
     let error = run(&mut engine, &program).expect_err("unmapped");
 
-    assert_eq!(error.unicorn_code(), Some(uc_error::WRITE_UNMAPPED));
+    assert_eq!(error.engine_code(), Some(EngineErrorCode::WriteUnmapped));
 }
 
 #[test]
@@ -397,7 +397,7 @@ fn invalid_instruction_without_emulation_fails() {
 
     let error = run(&mut engine, &program).expect_err("invalid");
 
-    assert!(error.unicorn_code().is_some());
+    assert!(error.engine_code().is_some());
     assert_eq!(engine.reg_read(Register::Pc).ok(), Some(CODE));
 }
 
@@ -650,7 +650,7 @@ fn armv8_0_core_rejects_lse_without_soft_emulation() {
 
     let error = engine.start(CODE, end_of(&program)).expect_err("undefined");
 
-    assert_eq!(error.unicorn_code(), Some(uc_error::EXCEPTION));
+    assert_eq!(error.engine_code(), Some(EngineErrorCode::Exception));
 }
 
 #[test]
@@ -693,6 +693,6 @@ fn memory_fault_hook_reports_instruction_fetches() {
         .run(UNMAPPED, UNMAPPED + INSTRUCTION_SIZE, TIMEOUT)
         .expect_err("unmapped fetch");
 
-    assert_eq!(error.unicorn_code(), Some(uc_error::FETCH_UNMAPPED));
+    assert_eq!(error.engine_code(), Some(EngineErrorCode::FetchUnmapped));
     assert_eq!(*faults.borrow(), vec![(MemoryAccess::Fetch, UNMAPPED)]);
 }

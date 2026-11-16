@@ -6,8 +6,8 @@
 
 use unicorn_engine::{HookType, MemType, UcHookId, Unicorn};
 
-use super::engine::{Engine, EngineState};
-use super::error::{EmuError, native};
+use super::engine::{Engine, EngineState, native};
+use super::error::EmuError;
 
 /// Hook range start that, paired with [`ALL_ADDRESSES_END`], covers every address.
 pub const ALL_ADDRESSES_BEGIN: u64 = 1;

@@ -94,7 +94,7 @@ impl Engine<'_> {
             }
             let error = match self.start_bounded(next, until, remaining, UNLIMITED_INSTRUCTIONS) {
                 Ok(()) => return Ok(()),
-                Err(error @ EmuError::Unicorn { .. }) => error,
+                Err(error @ EmuError::Engine { .. }) => error,
                 Err(error) => return Err(error.with_timeout(timeout)),
             };
             if !self.emulate_invalid_instruction()? {
