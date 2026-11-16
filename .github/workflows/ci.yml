@@ -25,17 +25,15 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
-
+      # Default features = native ARM64 interpreter: no C toolchain needed.
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Check all targets and features
-        run: cargo check --all-targets --all-features --locked
+      - name: Check all targets (default features)
+        run: cargo check --all-targets --locked
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: Clippy (default features)
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Install quality tools
         run: |
@@ -43,7 +41,6 @@ jobs:
           cargo install --locked cargo-machete --version 0.9.2
           cargo install --locked cargo-audit --version 0.22.0
           cargo install --locked cargo-deny --version 0.19.4
-          cargo install --locked cargo-tarpaulin --version 0.37.6
 
       - name: Check unused dependencies
         run: cargo machete
@@ -54,12 +51,10 @@ jobs:
       - name: Check dependency policy
         run: cargo deny check
 
-      - name: Enforce coverage threshold
-        run: cargo tarpaulin --all-features --workspace --locked --out xml
-
+      # License report of the default (MIT, native-backend) build.
       - name: Export dependency licenses
         run: >-
-          mkdir -p target/reports && cargo license --json --all-features
+          mkdir -p target/reports && cargo license --json
           --output target/reports/cargo-license.json
 
       - uses: actions/upload-artifact@v4
@@ -81,28 +76,50 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v2
 
-      - if: runner.os == 'Linux'
-        name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
-
-      - if: runner.os == 'macOS'
-        name: Install native build dependencies
-        run: brew install cmake ninja
-
-      # MSVC comes with the runner image; unicorn-engine-sys builds with
-      # CMake + Ninja and bindgen needs libclang from LLVM.
-      - if: runner.os == 'Windows'
-        name: Install native build dependencies
-        shell: pwsh
-        run: |
-          choco install -y --no-progress cmake ninja llvm
-          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
+      # Default features (native backend): no CMake/libclang/Ninja/LLVM.
       - name: Tests
         run: cargo test --all --locked
+
+  unicorn-oracle:
+    name: Unicorn backend + differential oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          components: clippy
+
+      # The deprecated `unicorn` feature builds unicorn-engine-sys from source.
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
+
+      - name: Check all targets and features
+        run: cargo check --all-targets --all-features --locked
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Clippy (legacy Unicorn backend only)
+        run: >-
+          cargo clippy --all-targets --no-default-features --features unicorn
+          --locked -- -D warnings
+
+      # Both backends: the native interpreter is `Engine` and the differential
+      # tests compare it against `UnicornEngine`.
+      - name: Tests (all features, differential oracle)
+        run: cargo test --all --all-features --locked
+
+      - name: Tests (legacy Unicorn backend only)
+        run: cargo test --lib --no-default-features --features unicorn --locked
+
+      - name: Install cargo-tarpaulin
+        run: cargo install --locked cargo-tarpaulin --version 0.37.6
+
+      # Coverage of the native interpreter comes from the differential tests,
+      # which need the Unicorn oracle, so coverage runs with all features.
+      - name: Enforce coverage threshold
+        run: cargo tarpaulin --all-features --workspace --locked --out xml
 
   unused-dependencies:
     name: cargo-udeps
@@ -113,9 +130,6 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           toolchain: nightly
-
-      - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
 
       - name: Install cargo-udeps
         run: cargo install --locked cargo-udeps --version 0.1.61

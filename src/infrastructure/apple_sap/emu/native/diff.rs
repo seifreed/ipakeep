@@ -3,10 +3,13 @@
 //!
 //! This is the oracle for every instruction group: a group is correct when its
 //! encodings produce byte-identical registers/flags on both engines.
+//!
+//! The oracle is always [`UnicornEngine`], never the selected `Engine` (which is
+//! the native interpreter itself whenever `native-cpu` is on).
 
 use std::time::Duration;
 
-use super::super::{Engine, Register};
+use super::super::{Register, UnicornEngine};
 use super::NativeCpu;
 
 const CODE: u64 = 0x1_0000;
@@ -46,7 +49,7 @@ pub(super) struct Dump {
 }
 
 fn run_unicorn(code: &[u32], init: &Init, steps: usize) -> Dump {
-    let mut e = Engine::new().expect("engine");
+    let mut e = UnicornEngine::new().expect("engine");
     e.mem_map(CODE, 0x4000).unwrap();
     e.mem_map(DATA, DATA_SIZE).unwrap();
     e.mem_map(STACK & !0xfff, 0x4000).unwrap();

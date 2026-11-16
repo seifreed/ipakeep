@@ -7,6 +7,10 @@ use std::time::Duration;
 use super::error::EngineErrorCode;
 
 use super::*;
+// Explicit imports win over the glob: these tests always target the Unicorn
+// engine, even when `native-cpu` makes the native interpreter the `Engine`.
+use super::engine::{Engine, VECTOR_REGISTER_SIZE};
+use super::hook::MemoryAccess;
 
 const PAGE: u64 = 0x1000;
 const CODE: u64 = 0x1_0000;
