@@ -196,6 +196,12 @@ pub(crate) fn upgrade(mut stream: BoxStream, pair: &PairRecord) -> Result<BoxStr
              (a certificate error means the pair record is stale; re-pair the device)"
         )
     })?;
+    tracing::debug!(
+        event = "device.tls.established",
+        version = ?connection.protocol_version(),
+        cipher = ?connection.negotiated_cipher_suite().map(|suite| suite.suite()),
+        "device TLS session established"
+    );
     Ok(Box::new(StreamOwned::new(connection, stream)))
 }
 

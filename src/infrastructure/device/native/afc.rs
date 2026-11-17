@@ -142,7 +142,8 @@ impl Afc {
         Self { stream, packets: 0 }
     }
 
-    fn transact(
+    /// Send one request packet and read the device's reply.
+    pub(super) fn transact(
         &mut self,
         operation: u64,
         data: Vec<u8>,
@@ -208,7 +209,8 @@ impl Afc {
         self.expect_ok(op::MAKE_LINK, data, &[], &format!("symlink {link}"))
     }
 
-    fn write_file(&mut self, local: &Path, remote: &str) -> Result<(), String> {
+    /// Copy the local file `local` to `remote` (created or truncated).
+    pub(super) fn write_file(&mut self, local: &Path, remote: &str) -> Result<(), String> {
         let mut file = fs::File::open(local).map_err(path_error(local))?;
         let mut data = OPEN_WRITE_ONLY.to_le_bytes().to_vec();
         data.extend(c_path(remote));

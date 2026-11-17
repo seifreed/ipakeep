@@ -88,6 +88,15 @@ impl Lockdown {
         Ok(Self { stream })
     }
 
+    /// Read `key` from lockdownd's global domain (`GetValue`).
+    pub(crate) fn get_value(&mut self, key: &str) -> Result<Value, String> {
+        let reply = exchange(&mut self.stream, "GetValue", dict([("Key", key.into())]))?;
+        reply
+            .get("Value")
+            .cloned()
+            .ok_or_else(|| format!("lockdownd GetValue {key} returned no value"))
+    }
+
     /// Ask lockdownd to spawn `service` and return its port.
     pub(crate) fn start_service(&mut self, service: &str) -> Result<Service, String> {
         let reply = exchange(

@@ -65,6 +65,8 @@ pub(crate) mod usbmux;
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
+mod probe;
+#[cfg(test)]
 mod tests;
 
 use std::io::{Read, Write};
@@ -93,6 +95,13 @@ pub(crate) fn install_app(
     let pair = tls::PairRecord::parse(&usbmux::read_pair_record(address, &device.serial)?)?;
     let mut lockdown =
         lockdown::Lockdown::open(usbmux::connect(address, device.id, lockdown::PORT)?, &pair)?;
+    let ios_version = lockdown.get_value("ProductVersion").ok();
+    tracing::info!(
+        event = "device.native.session",
+        udid = %device.serial,
+        ios_version = ?ios_version.as_ref().and_then(plist::Value::as_string),
+        "lockdown session established"
+    );
     let mut open = |name: &str| -> Result<BoxStream, String> {
         let service = lockdown.start_service(name)?;
         let stream = usbmux::connect(address, device.id, service.port)?;

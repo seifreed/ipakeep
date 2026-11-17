@@ -399,3 +399,21 @@ fn progress_lines_show_percentages_when_known() {
     assert_eq!(progress_line(&update), "  Complete (40%)");
     print_progress(&update);
 }
+
+#[test]
+fn lockdown_reads_global_values_over_the_tls_session() {
+    let fake = serve_tcp(Scenario::working());
+    let device = usbmux::find_device(&usbmux::list_devices(&fake.address).unwrap(), UDID).unwrap();
+    let pair = PairRecord::parse(&usbmux::read_pair_record(&fake.address, &device.serial).unwrap())
+        .unwrap();
+    let stream = usbmux::connect(&fake.address, device.id, lockdown::PORT).unwrap();
+    let mut session = lockdown::Lockdown::open(stream, &pair).unwrap();
+    assert_eq!(
+        session.get_value("ProductVersion").unwrap(),
+        Value::from("16.7.16")
+    );
+    assert_eq!(
+        session.get_value("Missing").unwrap_err(),
+        "lockdownd GetValue Missing returned no value"
+    );
+}

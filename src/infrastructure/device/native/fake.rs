@@ -309,6 +309,7 @@ fn serve_lockdown(mut stream: BoxStream, scenario: &Scenario) {
         let reply = match (kind, error) {
             (_, Some(error)) => dict([("Error", error.into())]),
             ("QueryType", None) => dict([("Type", scenario.lockdown_type.into())]),
+            ("GetValue", None) => get_value(&request),
             ("StartSession", None) => dict([
                 ("SessionID", "SESSION".into()),
                 ("EnableSessionSSL", scenario.session_ssl.into()),
@@ -331,6 +332,21 @@ fn serve_lockdown(mut stream: BoxStream, scenario: &Scenario) {
             stream = server_tls(stream, scenario);
         }
     }
+}
+
+/// `GetValue` replies with the iPhone 8 / iOS 16.7.16 values the real-device
+/// probe recorded; unknown keys come back without a `Value`, as lockdownd does.
+fn get_value(request: &Dictionary) -> Dictionary {
+    let mut reply = dict([("Request", "GetValue".into())]);
+    let value = match string(request, "Key") {
+        Some("ProductVersion") => Some("16.7.16"),
+        Some("ProductType") => Some("iPhone10,1"),
+        _ => None,
+    };
+    if let Some(value) = value {
+        reply.insert("Value".into(), value.into());
+    }
+    reply
 }
 
 fn c_string(bytes: &[u8]) -> (String, &[u8]) {
