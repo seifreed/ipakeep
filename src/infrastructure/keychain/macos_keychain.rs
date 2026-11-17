@@ -18,7 +18,10 @@ const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 const DEFAULT_SERVICE: &str = "com.github.seifreed.ipakeep";
 const DEFAULT_ACCOUNT: &str = "default";
-const KEYCHAIN_READ_TIMEOUT: Duration = Duration::from_secs(5);
+// ponytail: 60 s, not 5, because the FIRST read from a freshly built binary
+// blocks on an interactive macOS permission dialog the user must click; 5 s
+// fired before a human could react. Raise if signed/notarized builds still hit it.
+const KEYCHAIN_READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// macOS Keychain credential repository.
 ///
@@ -72,7 +75,9 @@ async fn find_generic_password(service: &str, account: &str) -> Result<Vec<u8>, 
 
     let joined = timeout(KEYCHAIN_READ_TIMEOUT, handle).await.map_err(|_| {
         CredentialError::LoadFailed(
-            "macOS Keychain did not respond within 5 seconds; unlock it or use --file-keychain"
+            "macOS Keychain did not respond within 60 seconds. If a permission prompt is \
+             showing on your Mac, click Allow and retry; otherwise unlock the keychain or \
+             use --file-keychain."
                 .into(),
         )
     })?;
