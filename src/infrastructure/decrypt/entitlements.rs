@@ -81,9 +81,39 @@ fn verdict(key: &str) -> EntitlementVerdict {
     }
 }
 
+/// Reject an `.ipa` archive where an extracted `.app` or Mach-O is expected.
+///
+/// `codesign` cannot read inside a zip and reports the archive as "not signed
+/// at all", which hides the real mistake.
+///
+/// # Errors
+///
+/// Returns an actionable error when `path` has an `.ipa` extension.
+pub(super) fn reject_ipa_archive(path: &std::path::Path) -> Result<(), String> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ipa"))
+    {
+        return Err(format!(
+            "{}: is an IPA archive; unzip it and pass the Payload/<App>.app bundle or a Mach-O",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_ipa_archives_but_accepts_bundles_and_binaries() {
+        use std::path::Path;
+        let err = reject_ipa_archive(Path::new("/tmp/App.IPA")).unwrap_err();
+        assert!(err.contains("unzip it"), "{err}");
+        assert!(reject_ipa_archive(Path::new("/tmp/Payload/App.app")).is_ok());
+        assert!(reject_ipa_archive(Path::new("/tmp/App")).is_ok());
+    }
 
     fn dict(keys: &[&str]) -> plist::Dictionary {
         let mut d = plist::Dictionary::new();

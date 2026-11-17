@@ -58,6 +58,7 @@ pub(crate) fn extract_entitlements(executable: &Path) -> Result<String, String> 
 ///
 /// Returns an error if the executable cannot be located or `codesign` fails.
 pub fn entitlements_report(path: &Path) -> Result<Vec<EntitlementVerdict>, String> {
+    super::entitlements::reject_ipa_archive(path)?;
     let binary = if path.extension().is_some_and(|e| e == "app") {
         path.join(bundle_executable_on_disk(path)?)
     } else {
