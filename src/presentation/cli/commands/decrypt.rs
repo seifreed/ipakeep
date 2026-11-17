@@ -193,11 +193,11 @@ where
     Ok(())
 }
 
-/// Decrypt a local encrypted IPA offline with `ipadecrypt`, then verify it.
+/// Decrypt a local encrypted IPA offline (native Rust), then verify it.
 ///
 /// # Errors
 ///
-/// Returns an error if `ipadecrypt` is missing or not bootstrapped, decryption
+/// Returns an error if no matching `FairPlay` credential is found, decryption
 /// fails, the result does not verify, or the output cannot be written.
 pub fn handle_offline(
     ipa: &Path,
@@ -921,5 +921,21 @@ mod tests {
     #[test]
     fn entitlement_warning_is_silent_when_report_cannot_be_read() {
         warn_unregrantable_entitlements(Path::new("/missing/App.app"));
+    }
+
+    #[test]
+    fn offline_help_does_not_require_the_dropped_ipadecrypt_binary() {
+        use clap::CommandFactory;
+        let mut cli = crate::presentation::cli::app::Cli::command();
+        let decrypt = cli.find_subcommand_mut("decrypt").unwrap();
+        let summary = decrypt.render_long_help().to_string();
+        let offline = decrypt
+            .find_subcommand_mut("offline")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        for help in [summary, offline] {
+            assert!(!help.contains("ipadecrypt"), "stale help: {help}");
+        }
     }
 }

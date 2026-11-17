@@ -1,8 +1,8 @@
 //! `FairPlay` decrypt bridge — inspect, patch, and re-sign.
 //!
-//! ipakeep never decrypts on its own: an external on-device dumper (see
-//! `scripts/frida/`) produces the plaintext bytes per slice, or `ipadecrypt`
-//! decrypts a local IPA offline ([`run_offline`]). This module reports
+//! An on-device dumper (see `scripts/frida/`) produces the plaintext bytes per
+//! slice, or the native credential-based decryptor decrypts a local IPA
+//! offline ([`run_offline`]). This module reports
 //! exactly what is encrypted and where ([`inspect_ipa`]), patches dumped bytes
 //! back into the archive while zeroing `cryptid` ([`patch_ipa_decrypted`]), and
 //! re-signs a bundle preserving its entitlements ([`resign_app`]).

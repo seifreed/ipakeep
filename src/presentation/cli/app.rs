@@ -322,8 +322,8 @@ pub enum DecryptCommands {
         ssh_user: String,
     },
 
-    /// Decrypt a local encrypted IPA on this computer with `ipadecrypt`
-    /// (no running app needed; run `ipadecrypt bootstrap` once first).
+    /// Decrypt a local encrypted IPA natively on this computer (no device or
+    /// running app; needs the owning account's `FairPlay` credential).
     Offline {
         /// Path to the encrypted IPA.
         ipa: PathBuf,
@@ -332,7 +332,7 @@ pub enum DecryptCommands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Never let ipadecrypt fall back to decrypting on its jailbroken device.
+        /// Accepted for compatibility; no effect (decryption is always local).
         #[arg(long)]
         no_on_device: bool,
     },
