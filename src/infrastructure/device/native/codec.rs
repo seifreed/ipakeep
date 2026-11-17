@@ -27,7 +27,14 @@ pub(super) fn from_plist(bytes: &[u8]) -> Result<Dictionary, String> {
 
 /// Describe an I/O failure; an EOF means the peer dropped the connection.
 pub(super) fn io_error(context: &str, error: &io::Error) -> String {
-    if error.kind() == io::ErrorKind::UnexpectedEof {
+    // A reset/aborted peer is a dropped connection too (macOS and Windows often
+    // report RST instead of EOF when the device side closes first).
+    if matches!(
+        error.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+    ) {
         format!("connection to the device closed unexpectedly while {context}")
     } else {
         format!("I/O error while {context}: {error}")
@@ -139,6 +146,13 @@ mod tests {
     fn io_errors_distinguish_dropped_connections() {
         let eof = io::Error::from(io::ErrorKind::UnexpectedEof);
         assert!(io_error("x", &eof).contains("closed unexpectedly while x"));
+        for kind in [
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::ConnectionAborted,
+        ] {
+            let reset = io::Error::from(kind);
+            assert!(io_error("x", &reset).contains("closed unexpectedly while x"));
+        }
         let other = io::Error::other("boom");
         assert_eq!(io_error("x", &other), "I/O error while x: boom");
     }
