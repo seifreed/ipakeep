@@ -416,7 +416,7 @@ fn serve_instproxy(mut stream: BoxStream, scenario: &Scenario, recorded: &Mutex<
 }
 
 /// Device side of the TLS upgrade, requiring the pair record's host certificate.
-fn server_tls(stream: BoxStream, scenario: &Scenario) -> BoxStream {
+pub(super) fn server_tls(stream: BoxStream, scenario: &Scenario) -> BoxStream {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let versions: &[&rustls::SupportedProtocolVersion] = if scenario.tls12_only {
         &[&rustls::version::TLS12]
