@@ -817,14 +817,16 @@ fn after_write(cpu: &NativeCpu, pc: u64) -> Step {
 /// that wrote to a page holding cached code reports `Branch(pc + 4)` instead of
 /// `Next` (see [`after_write`]).
 #[inline]
-// One arm per op on single-line patterns (rustfmt would split them, which
-// confuses line-coverage attribution of the arm heads).
+// One arm per op on a single-line pattern, and a block arm opens its first
+// statement on that line. Since Rust 1.100, LLVM gives a binding pattern no
+// coverage region of its own, while cargo-tarpaulin (0.37.6) still reports
+// every line of an `#[inline]` body: a pattern line without code would read as
+// a miss. rustfmt would split both the patterns and these arms.
 #[rustfmt::skip]
 pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, NativeError> {
     let x = |cpu: &NativeCpu, slot: u8| cpu.slot(slot);
     match *op {
-        Op::Fallback(word) => {
-            cpu.set_pc(pc);
+        Op::Fallback(word) => { cpu.set_pc(pc);
             return match cpu.execute(word)? {
                 Step::Next => Ok(after_write(cpu, pc)),
                 other => Ok(other),
@@ -832,20 +834,10 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
         }
         Op::Nop => {}
         Op::Mov { rd, value } => cpu.set_slot(rd, value),
-        Op::MovK { rd, rs, shift, bits, width } => {
-            let keep = !(0xffffu64 << shift);
-            cpu.set_slot(rd, ((x(cpu, rs) & keep) | bits) & width.mask());
-        }
-        Op::AddImm { rd, rn, imm, width } => {
-            let value = cpu.slot(rn).wrapping_add(imm) & width.mask();
-            cpu.set_slot(rd, value);
-        }
-        Op::SubImm { rd, rn, imm, width } => {
-            let value = cpu.slot(rn).wrapping_sub(imm) & width.mask();
-            cpu.set_slot(rd, value);
-        }
-        Op::AddSubImmS { rd, rn, imm, sub, sf } => {
-            let sf = u32::from(sf);
+        Op::MovK { rd, rs, shift, bits, width } => cpu.set_slot(rd, ((x(cpu, rs) & !(0xffffu64 << shift)) | bits) & width.mask()),
+        Op::AddImm { rd, rn, imm, width } => cpu.set_slot(rd, x(cpu, rn).wrapping_add(imm) & width.mask()),
+        Op::SubImm { rd, rn, imm, width } => cpu.set_slot(rd, x(cpu, rn).wrapping_sub(imm) & width.mask()),
+        Op::AddSubImmS { rd, rn, imm, sub, sf } => { let sf = u32::from(sf);
             let a = cpu.slot(rn) & width_mask(sf);
             let (result, nzcv) = add_sub_flags(a, imm & width_mask(sf), sub, sf);
             cpu.set_nzcv(nzcv);
@@ -854,45 +846,33 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
         Op::AndImm { rd, rn, imm, width } => cpu.set_slot(rd, x(cpu, rn) & width.mask() & imm),
         Op::OrrImm { rd, rn, imm, width } => cpu.set_slot(rd, (x(cpu, rn) & width.mask()) | imm),
         Op::EorImm { rd, rn, imm, width } => cpu.set_slot(rd, (x(cpu, rn) & width.mask()) ^ imm),
-        Op::Ubfm64 { rd, rn, r, mask } => {
-            cpu.set_slot(rd, x(cpu, rn).rotate_right(u32::from(r)) & mask);
-        }
-        Op::Ubfm32 { rd, rn, r, mask } => {
-            let rotated = (x(cpu, rn) as u32).rotate_right(u32::from(r));
-            cpu.set_slot(rd, u64::from(rotated) & mask);
-        }
+        Op::Ubfm64 { rd, rn, r, mask } => cpu.set_slot(rd, x(cpu, rn).rotate_right(u32::from(r)) & mask),
+        Op::Ubfm32 { rd, rn, r, mask } => cpu.set_slot(rd, u64::from((x(cpu, rn) as u32).rotate_right(u32::from(r))) & mask),
         Op::MovReg { rd, rm, width } => cpu.set_slot(rd, x(cpu, rm) & width.mask()),
-        Op::AndReg { rd, rn, rm, shift, amount, invert, sf } => {
-            let b = logical_operand(cpu, rm, shift, amount, invert, sf);
+        Op::AndReg { rd, rn, rm, shift, amount, invert, sf } => { let b = logical_operand(cpu, rm, shift, amount, invert, sf);
             cpu.set_slot(rd, x(cpu, rn) & width_mask(u32::from(sf)) & b);
         }
-        Op::OrrReg { rd, rn, rm, shift, amount, invert, sf } => {
-            let b = logical_operand(cpu, rm, shift, amount, invert, sf);
+        Op::OrrReg { rd, rn, rm, shift, amount, invert, sf } => { let b = logical_operand(cpu, rm, shift, amount, invert, sf);
             cpu.set_slot(rd, (x(cpu, rn) & width_mask(u32::from(sf))) | b);
         }
-        Op::EorReg { rd, rn, rm, shift, amount, invert, sf } => {
-            let b = logical_operand(cpu, rm, shift, amount, invert, sf);
+        Op::EorReg { rd, rn, rm, shift, amount, invert, sf } => { let b = logical_operand(cpu, rm, shift, amount, invert, sf);
             cpu.set_slot(rd, (x(cpu, rn) & width_mask(u32::from(sf))) ^ b);
         }
-        Op::AddReg { rd, rn, rm, shift, amount, sf } => {
-            let b = shifted_operand(cpu, rm, shift, amount, sf);
+        Op::AddReg { rd, rn, rm, shift, amount, sf } => { let b = shifted_operand(cpu, rm, shift, amount, sf);
             let mask = width_mask(u32::from(sf));
             cpu.set_slot(rd, x(cpu, rn).wrapping_add(b) & mask);
         }
-        Op::SubReg { rd, rn, rm, shift, amount, sf } => {
-            let b = shifted_operand(cpu, rm, shift, amount, sf);
+        Op::SubReg { rd, rn, rm, shift, amount, sf } => { let b = shifted_operand(cpu, rm, shift, amount, sf);
             let mask = width_mask(u32::from(sf));
             cpu.set_slot(rd, x(cpu, rn).wrapping_sub(b) & mask);
         }
-        Op::AddSubRegS { rd, rn, rm, shift, amount, sub, sf } => {
-            let b = shifted_operand(cpu, rm, shift, amount, sf);
+        Op::AddSubRegS { rd, rn, rm, shift, amount, sub, sf } => { let b = shifted_operand(cpu, rm, shift, amount, sf);
             let a = x(cpu, rn) & width_mask(u32::from(sf));
             let (result, nzcv) = add_sub_flags(a, b, sub, u32::from(sf));
             cpu.set_nzcv(nzcv);
             cpu.set_slot(rd, result);
         }
-        Op::AddSubExt { rd, rn, rm, option, amount, sub, flags, sf } => {
-            let sf = u32::from(sf);
+        Op::AddSubExt { rd, rn, rm, option, amount, sub, flags, sf } => { let sf = u32::from(sf);
             let mask = width_mask(sf);
             let operand2 = extend_reg(x(cpu, rm), u32::from(option), u32::from(amount), sf);
             let a = cpu.slot(rn) & mask;
@@ -904,8 +884,7 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
                 cpu.set_slot(rd, result);
             }
         }
-        Op::CondSel { rd, rn, rm, cond, kind, width } => {
-            let mask = width.mask();
+        Op::CondSel { rd, rn, rm, cond, kind, width } => { let mask = width.mask();
             let result = if cond_holds(cpu.nzcv(), cond) {
                 x(cpu, rn)
             } else {
@@ -919,61 +898,47 @@ pub(super) fn run_op(cpu: &mut NativeCpu, op: &Op, pc: u64) -> Result<Step, Nati
             };
             cpu.set_slot(rd, result & mask);
         }
-        Op::Madd { rd, rn, rm, ra, width } => {
-            let mask = width.mask();
+        Op::Madd { rd, rn, rm, ra, width } => { let mask = width.mask();
             let product = (x(cpu, rn) & mask).wrapping_mul(x(cpu, rm) & mask);
             cpu.set_slot(rd, (x(cpu, ra) & mask).wrapping_add(product) & mask);
         }
-        Op::Umaddl { rd, rn, rm, ra, width } => {
-            let mask = width.mask();
+        Op::Umaddl { rd, rn, rm, ra, width } => { let mask = width.mask();
             let product = u64::from(x(cpu, rn) as u32) * u64::from(x(cpu, rm) as u32);
             cpu.set_slot(rd, x(cpu, ra).wrapping_add(product) & mask);
         }
-        Op::Load { rt, rn, offset, bytes, ext } => {
-            let addr = cpu.slot(rn).wrapping_add(offset);
+        Op::Load { rt, rn, offset, bytes, ext } => { let addr = cpu.slot(rn).wrapping_add(offset);
             let raw = load_bytes(cpu, addr, usize::from(bytes))?;
             finish_load(cpu, rt, raw, bytes, ext);
         }
-        Op::Store { rt, rn, offset, bytes } => {
-            let addr = cpu.slot(rn).wrapping_add(offset);
+        Op::Store { rt, rn, offset, bytes } => { let addr = cpu.slot(rn).wrapping_add(offset);
             store_bytes(cpu, addr, usize::from(bytes), x(cpu, rt))?;
             return Ok(after_write(cpu, pc));
         }
-        Op::LoadReg { rt, rn, rm, option, shift, bytes, ext } => {
-            let index = index_reg(x(cpu, rm), u32::from(option), u32::from(shift));
+        Op::LoadReg { rt, rn, rm, option, shift, bytes, ext } => { let index = index_reg(x(cpu, rm), u32::from(option), u32::from(shift));
             let addr = cpu.slot(rn).wrapping_add(index);
             let raw = load_bytes(cpu, addr, usize::from(bytes))?;
             finish_load(cpu, rt, raw, bytes, ext);
         }
-        Op::StoreReg { rt, rn, rm, option, shift, bytes } => {
-            let index = index_reg(x(cpu, rm), u32::from(option), u32::from(shift));
+        Op::StoreReg { rt, rn, rm, option, shift, bytes } => { let index = index_reg(x(cpu, rm), u32::from(option), u32::from(shift));
             let addr = cpu.slot(rn).wrapping_add(index);
             store_bytes(cpu, addr, usize::from(bytes), x(cpu, rt))?;
             return Ok(after_write(cpu, pc));
         }
         Op::B { target } => return Ok(Step::Branch(target)),
-        Op::Bl { target } => {
-            cpu.set_slot(30, pc.wrapping_add(4));
+        Op::Bl { target } => { cpu.set_slot(30, pc.wrapping_add(4));
             return Ok(Step::Branch(target));
         }
-        Op::BCond { cond, target } => {
-            if cond_holds(cpu.nzcv(), cond) {
-                return Ok(Step::Branch(target));
-            }
-        }
-        Op::Cbz { rt, width, nonzero, target } => {
-            if (x(cpu, rt) & width.mask() == 0) != nonzero {
-                return Ok(Step::Branch(target));
-            }
-        }
-        Op::Tbz { rt, bit, set, target } => {
-            if ((x(cpu, rt) >> bit) & 1 == 1) == set {
-                return Ok(Step::Branch(target));
-            }
-        }
+        Op::BCond { cond, target } => if cond_holds(cpu.nzcv(), cond) {
+            return Ok(Step::Branch(target));
+        },
+        Op::Cbz { rt, width, nonzero, target } => if (x(cpu, rt) & width.mask() == 0) != nonzero {
+            return Ok(Step::Branch(target));
+        },
+        Op::Tbz { rt, bit, set, target } => if ((x(cpu, rt) >> bit) & 1 == 1) == set {
+            return Ok(Step::Branch(target));
+        },
         Op::Br { rn } => return Ok(Step::Branch(x(cpu, rn))),
-        Op::Blr { rn } => {
-            let target = x(cpu, rn);
+        Op::Blr { rn } => { let target = x(cpu, rn);
             cpu.set_slot(30, pc.wrapping_add(4));
             return Ok(Step::Branch(target));
         }

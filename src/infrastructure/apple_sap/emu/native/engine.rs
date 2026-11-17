@@ -360,18 +360,24 @@ impl<'a> NativeEngine<'a> {
             since_check += done.max(1);
             match exit {
                 Exit::Next(next) => self.cpu.set_pc(next),
-                Exit::Break(at) => {
-                    self.cpu.set_pc(at);
-                    return Ok(());
-                }
-                Exit::Fault { pc: at, error } => {
-                    self.cpu.set_pc(at);
-                    self.sync_code_writes();
-                    return Err(native_err(error, Some(at)));
-                }
+                Exit::Break(at) => return self.stop_at(at),
+                Exit::Fault { pc: at, error } => return Err(self.fault_at(at, error)),
             }
             self.sync_code_writes();
         }
+    }
+
+    /// Ends a run at the `brk` at `at`, which did not complete.
+    fn stop_at(&mut self, at: u64) -> Result<(), EmuError> {
+        self.cpu.set_pc(at);
+        Ok(())
+    }
+
+    /// Ends a run at the instruction at `at`, which failed with `error`.
+    fn fault_at(&mut self, at: u64, error: NativeError) -> EmuError {
+        self.cpu.set_pc(at);
+        self.sync_code_writes();
+        native_err(error, Some(at))
     }
 
     /// Executes guest code starting at `pc` (hooks at `pc` already fired):
@@ -488,6 +494,27 @@ mod tests {
                 pc: Some(CODE),
                 ..
             }
+        ));
+    }
+
+    /// A host-side read of unmapped memory reports the address and no PC.
+    #[test]
+    fn unmapped_host_reads_report_address_without_pc() {
+        const UNMAPPED: u64 = 0xdead_0000_0000;
+        let e = NativeEngine::new().unwrap();
+        let unmapped = |error: EmuError| {
+            matches!(
+                error,
+                EmuError::Unmapped {
+                    address: UNMAPPED,
+                    pc: None,
+                    ..
+                }
+            )
+        };
+        assert!(unmapped(e.mem_read(UNMAPPED, 4).unwrap_err()));
+        assert!(unmapped(
+            e.mem_read_into(UNMAPPED, &mut [0u8; 4]).unwrap_err()
         ));
     }
 
