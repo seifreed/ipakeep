@@ -62,6 +62,10 @@ pub(crate) mod lockdown;
 pub(crate) mod tls;
 pub(crate) mod usbmux;
 
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
+mod tests;
 
 use std::io::{Read, Write};
 use std::path::Path;
