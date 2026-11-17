@@ -192,9 +192,11 @@ pub enum DeviceCommands {
 
         /// EXPERIMENTAL: install in-process over usbmuxd/lockdownd/AFC/
         /// `installation_proxy`, without Xcode or libimobiledevice. --device
-        /// must be the UDID of a paired (trusted) device; --run is not
-        /// supported. Signing still uses /usr/bin/codesign.
-        #[arg(long, conflicts_with_all = ["legacy_device", "run"])]
+        /// must be the UDID of a paired (trusted) device. --run launches
+        /// through debugserver on iOS 16 and earlier (the Developer Disk
+        /// Image must be mounted and the app signed with get-task-allow).
+        /// Signing still uses /usr/bin/codesign.
+        #[arg(long, conflicts_with = "legacy_device")]
         native: bool,
     },
 }

@@ -441,7 +441,7 @@ fn decrypt_dump_mac_requires_ipa() {
 }
 
 #[test]
-fn device_install_native_is_opt_in_and_excludes_legacy_and_run() {
+fn device_install_native_is_opt_in_excludes_legacy_and_allows_run() {
     let base = [
         "ipakeep",
         "device",
@@ -473,10 +473,20 @@ fn device_install_native_is_opt_in_and_excludes_legacy_and_run() {
             }
         }
     ));
-    for extra in ["--legacy-device", "--run"] {
-        assert!(
-            Cli::try_parse_from(base.iter().copied().chain(["--native", extra])).is_err(),
-            "--native {extra} must be rejected"
-        );
-    }
+    assert!(
+        Cli::try_parse_from(base.iter().copied().chain(["--native", "--legacy-device"])).is_err(),
+        "--native --legacy-device must be rejected"
+    );
+    let run = Cli::try_parse_from(base.iter().copied().chain(["--native", "--run"]))
+        .expect("native install with launch should parse");
+    assert!(matches!(
+        run.command,
+        Commands::Device {
+            action: DeviceCommands::InstallIpa {
+                native: true,
+                run: true,
+                ..
+            }
+        }
+    ));
 }

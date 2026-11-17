@@ -27,7 +27,7 @@ pub struct InstallRequest<'a> {
     /// Use libimobiledevice for devices not supported by `devicectl` (iOS 16).
     pub legacy_device: bool,
     /// EXPERIMENTAL: install in-process over usbmuxd, lockdownd, AFC and `installation_proxy`.
-    /// `device` must be the UDID; launching is not supported on this path.
+    /// `device` must be the UDID; launching (iOS ≤ 16, mounted DDI) uses debugserver.
     pub native_device: bool,
 }
 
@@ -67,15 +67,7 @@ fn require_install_tools(
     mut require: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     if request.native_device {
-        return if request.launch {
-            Err(
-                "--run is not supported with the experimental --native install yet; \
-                 launch the app from the device"
-                    .to_string(),
-            )
-        } else {
-            Ok(())
-        };
+        return Ok(());
     }
     require(if request.legacy_device {
         "ideviceinstaller"
@@ -95,6 +87,7 @@ fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<()
         signing::sign_bundle,
         run_inherit,
         native_install,
+        native_launch,
     )
 }
 
@@ -108,12 +101,18 @@ fn native_install(app: &Path, device: &str) -> Result<(), String> {
     )
 }
 
+/// Launch through debugserver over the in-process lockdown stack (`--native --run`).
+fn native_launch(bundle_id: &str, device: &str) -> Result<(), String> {
+    native::launch::launch_app(&native::Address::from_env(), device, bundle_id)
+}
+
 fn install_in_workdir_with(
     request: &InstallRequest<'_>,
     workdir: &Path,
     sign: impl FnOnce(&Path, &InstallRequest<'_>, &Path) -> Result<(), String>,
     mut run: impl FnMut(Command) -> Result<(), String>,
     native: impl FnOnce(&Path, &str) -> Result<(), String>,
+    native_run: impl FnOnce(&str, &str) -> Result<(), String>,
 ) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
     let app = find_app_bundle(workdir)?;
@@ -123,7 +122,9 @@ fn install_in_workdir_with(
     } else {
         run(install_command(&app, request.device, request.legacy_device))?;
     }
-    if request.launch {
+    if request.launch && request.native_device {
+        native_run(&bundle_identifier(&app)?, request.device)?;
+    } else if request.launch {
         run(launch_command(
             &bundle_identifier(&app)?,
             request.device,
@@ -249,6 +250,7 @@ mod tests {
                 Ok(())
             },
             native_install,
+            |_, _| Err("native launch must not run".to_string()),
         )
         .expect("install flow");
 
@@ -258,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn native_install_needs_no_external_tools_and_rejects_launch() {
+    fn native_install_and_launch_need_no_external_tools() {
         let dir = tempfile::tempdir().expect("temporary directory");
         let ipa = dir.path().join("app.ipa");
         let request = InstallRequest {
@@ -277,8 +279,8 @@ mod tests {
             launch: true,
             ..request
         };
-        let error = require_install_tools(&launch, |_| Ok(())).unwrap_err();
-        assert!(error.contains("--run is not supported"), "{error}");
+        require_install_tools(&launch, |tool| Err(format!("{tool} must not be required")))
+            .expect("native launch needs no external tools");
     }
 
     #[test]
@@ -303,10 +305,32 @@ mod tests {
                 installed.push((app.join("Info.plist").is_file(), device.to_string()));
                 Ok(())
             },
+            |_, _| Err("launch not requested".to_string()),
         )
         .expect("native install flow");
 
         assert_eq!(installed, [(true, "device-id".to_string())]);
+        let launch = InstallRequest {
+            launch: true,
+            ..request
+        };
+        let mut launched = Vec::new();
+        install_in_workdir_with(
+            &launch,
+            &workdir,
+            |_, _, _| Ok(()),
+            |command| Err(format!("unexpected command {command:?}")),
+            |_, _| Ok(()),
+            |bundle, device| {
+                launched.push((bundle.to_string(), device.to_string()));
+                Ok(())
+            },
+        )
+        .expect("native install and launch flow");
+        assert_eq!(
+            launched,
+            [("com.example.app".to_string(), "device-id".to_string())]
+        );
         assert!(
             install_in_workdir_with(
                 &request,
@@ -314,6 +338,7 @@ mod tests {
                 |_, _, _| Ok(()),
                 |_| Ok(()),
                 |_, _| Err("device gone".to_string()),
+                |_, _| Ok(()),
             )
             .is_err()
         );
@@ -324,6 +349,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         // Whatever usbmuxd this host has (or none), this UDID is never attached.
         assert!(native_install(dir.path(), "ipakeep-test-no-such-udid").is_err());
+        assert!(native_launch("com.example.app", "ipakeep-test-no-such-udid").is_err());
     }
 
     #[test]

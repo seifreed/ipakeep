@@ -363,9 +363,20 @@ ipakeep device install-ipa MyApp-decrypted.ipa \
   --provisioning-profile ./App.mobileprovision
 ```
 
+`--native --run` then launches the app on **iOS 16 and earlier** without
+`idevicedebug`: it looks the app up through installation_proxy, checks with
+`mobile_image_mounter` that the Developer Disk Image is mounted, starts
+`debugserver` over lockdown (`DVTSecureSocketProxy` with TLS on iOS 14+, plain
+`com.apple.debugserver` before) and speaks the GDB remote protocol to launch
+the executable and detach, so the app keeps running. It fails with a clear
+message when the app is not installed, the DDI is not mounted (mount it
+yourself; ipakeep does not), the device is locked, or the app lacks the
+`get-task-allow` entitlement (App Store builds cannot be launched this way).
+
 Limits: the device must already be paired ("Trust This Computer"); `--device`
-must be its UDID; `--run` is not supported (launching on iOS 17+ needs the
-personalized Developer Disk Image and a CoreDevice tunnel); TLS 1.2+ only.
+must be its UDID; `--run` on iOS 17+ is rejected (launching there needs the
+personalized Developer Disk Image and a CoreDevice tunnel; use the default
+`devicectl` route); TLS 1.2+ only.
 Re-signing still uses `/usr/bin/codesign`, so the command as a whole still
 needs macOS even though the install protocols themselves are cross-platform.
 

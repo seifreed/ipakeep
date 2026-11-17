@@ -31,18 +31,15 @@
 //! `services/afc.py`, `services/installation_proxy.py`), plus The iPhone Wiki
 //! pages on usbmux and AFC. They were read as protocol references only.
 //!
-//! # Launch feasibility (`idevicedebug` replacement) — not implemented
+//! # App launch (`idevicedebug --detach run` replacement)
 //!
-//! * **iOS ≤ 16** (the `--legacy-device` audience): mount the Developer Disk
-//!   Image for that iOS version through `com.apple.mobile.mobile_image_mounter`
-//!   (`UploadImage` + `MountImage` with the `.signature`), start
-//!   `com.apple.debugserver` over lockdown (iOS 14+:
-//!   `com.apple.debugserver.DVTSecureSocketProxy`, with service TLS), look up
-//!   the app's install path via `installation_proxy` `Lookup`, and speak the
-//!   GDB remote serial protocol (`QSetMaxPacketSize`, `A<argv>`,
-//!   `qLaunchSuccess`, then `D` to detach). That reuses every layer here and
-//!   is a moderate addition (DDI files must be supplied by the user from an
-//!   Xcode install).
+//! * **iOS ≤ 16**: implemented by [`launch`] and [`debugserver`]:
+//!   `installation_proxy` `Lookup`, `mobile_image_mounter` `LookupImage` (the
+//!   Developer Disk Image must already be mounted; mounting is out of scope),
+//!   `com.apple.debugserver.DVTSecureSocketProxy` (iOS 14+, service TLS) or
+//!   `com.apple.debugserver`, then the GDB remote serial protocol
+//!   (`QSetMaxPacketSize`, `QSetWorkingDir`, `A<argv>`, `qLaunchSuccess`,
+//!   `D` to detach).
 //! * **iOS 17+**: the DDI is *personalized* (a per-device ticket from Apple's
 //!   TSS server signs a `PersonalizationManifest` before `MountImage`), and
 //!   debugserver is no longer offered by lockdown. It is reached only through
@@ -57,13 +54,19 @@
 
 pub(crate) mod afc;
 pub(crate) mod codec;
+pub(crate) mod debugserver;
 pub(crate) mod instproxy;
+pub(crate) mod launch;
 pub(crate) mod lockdown;
 pub(crate) mod tls;
 pub(crate) mod usbmux;
 
 #[cfg(test)]
+mod debugserver_tests;
+#[cfg(test)]
 mod fake;
+#[cfg(test)]
+mod launch_tests;
 #[cfg(test)]
 mod probe;
 #[cfg(test)]
