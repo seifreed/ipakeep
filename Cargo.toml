@@ -14,20 +14,6 @@ path = "src/main.rs"
 name = "ipakeep"
 path = "src/lib.rs"
 
-[features]
-# ARM64 emulation backend that runs the Apple SAP/ADI guest binaries.
-# `native-cpu` (default) is the permissively-licensed native Rust ARM64
-# interpreter (src/infrastructure/apple_sap/emu/native/): no C toolchain, MIT
-# binaries.
-# `unicorn` is DEPRECATED: it links the GPLv2 unicorn-engine (builds need cmake
-# and libclang; distributed binaries become GPL-2.0). It remains only as a
-# legacy backend (`--no-default-features --features unicorn`) and as the oracle
-# of the native differential tests. With both features on, `native-cpu` is the
-# selected backend and Unicorn is compiled alongside as the test oracle.
-default = ["native-cpu"]
-unicorn = ["dep:unicorn-engine"]
-native-cpu = []
-
 [dependencies]
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -90,7 +76,6 @@ lzfse_rust = "0.2"
 p256 = { version = "0.14", features = ["ecdh", "pem", "pkcs8"] }
 ctr = "0.9"
 hkdf = "0.12"
-unicorn-engine = { version = "2.1", default-features = false, features = ["arch_aarch64"], optional = true }
 
 # Developer certificate request (RSA-2048 key + PKCS#10 CSR)
 rsa = { version = "0.10", default-features = false, features = ["std", "encoding", "pkcs1v15"] }

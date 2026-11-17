@@ -1,47 +1,23 @@
 //! Errors raised by the ARM64 emulator layer.
-//!
-//! The error type is backend-neutral: it carries an [`EngineErrorCode`] rather
-//! than a Unicorn `uc_error`, so the same surface serves either the Unicorn
-//! backend or the native interpreter.
 
 use std::time::Duration;
 
 use thiserror::Error;
 
-/// A backend-neutral classification of an engine-level failure.
-///
-/// The Unicorn backend maps its `uc_error` onto these; the native interpreter
-/// raises them directly. [`EngineErrorCode::InvalidInstruction`] and
-/// [`EngineErrorCode::Exception`] are the ones the run loop uses to decide
-/// whether to attempt soft-emulation.
+/// A classification of an engine-level failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineErrorCode {
-    /// A memory-map request was rejected (misaligned, overlapping, unmapped).
-    Map,
-    /// A guest load hit unmapped memory.
+    /// A guest or host memory access hit unmapped memory.
     ReadUnmapped,
-    /// A guest store hit unmapped memory.
-    WriteUnmapped,
-    /// An instruction fetch hit unmapped memory.
-    FetchUnmapped,
-    /// Guest execution raised an exception (e.g. an undefined instruction).
-    Exception,
     /// The engine decoded an instruction it does not implement.
     InvalidInstruction,
-    /// Any other engine-level failure.
-    Other,
 }
 
 impl std::fmt::Display for EngineErrorCode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
-            Self::Map => "memory map rejected",
             Self::ReadUnmapped => "unmapped read",
-            Self::WriteUnmapped => "unmapped write",
-            Self::FetchUnmapped => "unmapped fetch",
-            Self::Exception => "guest exception",
             Self::InvalidInstruction => "invalid instruction",
-            Self::Other => "engine error",
         };
         f.write_str(text)
     }
@@ -55,16 +31,15 @@ pub enum EmuError {
     Engine {
         /// The host operation that failed (for example `emu_start`).
         operation: &'static str,
-        /// The backend-neutral failure classification.
+        /// The failure classification.
         code: EngineErrorCode,
     },
-    /// A memory access hit unmapped memory at a known address. Raised by the
-    /// native interpreter, which (unlike Unicorn) knows where it faulted.
+    /// A memory access hit unmapped memory at a known address.
     #[error("engine {operation} failed: {code} at {address:#x}{}", pc_suffix(*.pc))]
     Unmapped {
         /// The host operation that failed (for example `mem_access`).
         operation: &'static str,
-        /// The backend-neutral failure classification.
+        /// The failure classification.
         code: EngineErrorCode,
         /// The first unmapped byte of the access.
         address: u64,
@@ -78,27 +53,11 @@ pub enum EmuError {
         /// The wall-clock budget that elapsed.
         timeout: Duration,
     },
-    /// A bounded run was requested with a zero timeout.
-    #[error("emulation timeout must be positive")]
-    InvalidTimeout,
     /// A register index outside the architectural range was requested.
     #[error("invalid arm64 register index {index}")]
     InvalidRegister {
         /// The rejected register index.
         index: u32,
-    },
-    /// A memory validator is already installed on this engine.
-    #[error("memory validator is already installed")]
-    GuardAlreadyInstalled,
-    /// The installed memory validator rejected an access.
-    #[error("guest memory access rejected at {address:#x} ({size} bytes): {reason}")]
-    MemoryRejected {
-        /// First byte of the rejected access.
-        address: u64,
-        /// Length of the rejected access in bytes.
-        size: u64,
-        /// Why the validator rejected the access.
-        reason: String,
     },
     /// A hook callback reported a guest-level failure and stopped emulation.
     #[error("{0}")]
@@ -116,7 +75,7 @@ impl EmuError {
         Self::Engine { operation, code }
     }
 
-    /// Returns the backend-neutral failure code, if this error carries one.
+    /// Returns the failure code, if this error carries one.
     pub fn engine_code(&self) -> Option<EngineErrorCode> {
         match self {
             Self::Engine { code, .. } | Self::Unmapped { code, .. } => Some(*code),
@@ -136,10 +95,13 @@ mod tests {
 
     #[test]
     fn engine_errors_expose_their_code() {
-        let error = EmuError::engine("mem_map", EngineErrorCode::Map);
+        let error = EmuError::engine("execute", EngineErrorCode::InvalidInstruction);
 
-        assert_eq!(error.engine_code(), Some(EngineErrorCode::Map));
-        assert!(error.to_string().contains("mem_map"));
+        assert_eq!(
+            error.engine_code(),
+            Some(EngineErrorCode::InvalidInstruction)
+        );
+        assert!(error.to_string().contains("execute"));
         assert_eq!(EmuError::guest("boom").engine_code(), None);
     }
 
@@ -171,13 +133,8 @@ mod tests {
     #[test]
     fn engine_error_codes_display_a_readable_text() {
         for (code, text) in [
-            (EngineErrorCode::Map, "memory map rejected"),
             (EngineErrorCode::ReadUnmapped, "unmapped read"),
-            (EngineErrorCode::WriteUnmapped, "unmapped write"),
-            (EngineErrorCode::FetchUnmapped, "unmapped fetch"),
-            (EngineErrorCode::Exception, "guest exception"),
             (EngineErrorCode::InvalidInstruction, "invalid instruction"),
-            (EngineErrorCode::Other, "engine error"),
         ] {
             assert_eq!(code.to_string(), text);
         }

@@ -101,7 +101,7 @@ impl Shims {
     /// Removes the dispatch hook; the service area stays mapped.
     ///
     /// # Errors
-    /// Returns [`ShimError::Emu`] if Unicorn does not know the hook.
+    /// Returns [`ShimError::Emu`] if the engine does not know the hook.
     pub fn uninstall(self, engine: &mut Engine<'_>) -> Result<(), ShimError> {
         Ok(engine.remove_hook(self.hook)?)
     }

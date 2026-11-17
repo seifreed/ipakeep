@@ -638,7 +638,7 @@ mod engine {
 // ---------------------------------------------------------------------------
 // Whole programs through `NativeEngine` (block cache) against Unicorn (its
 // results frozen in `tests/fixtures/native_oracle/block_tests.oracle`, see
-// `native/frozen.rs`; also run live with the `unicorn` feature).
+// `native/frozen.rs`).
 // ---------------------------------------------------------------------------
 
 mod frozen_diff {
@@ -647,8 +647,6 @@ mod frozen_diff {
     use std::rc::Rc;
     use std::time::Duration;
 
-    #[cfg(feature = "unicorn")]
-    use super::super::super::UnicornEngine;
     use super::super::super::register::Register;
     use super::super::engine::NativeEngine;
     use super::super::frozen;
@@ -797,15 +795,6 @@ mod frozen_diff {
             let native = run!(NativeEngine::new().unwrap(), LOOP, STOP, hook);
             let words: Vec<String> = LOOP.iter().map(|w| format!("{w:08x}")).collect();
             let key = format!("{} | until={STOP:x} hook={hook}", words.join(" "));
-            #[cfg(feature = "unicorn")]
-            {
-                let unicorn = run!(UnicornEngine::new().unwrap(), LOOP, STOP, hook);
-                frozen::record(FIXTURE, &key, &encode(&LOOP, &unicorn));
-                assert_eq!(native, unicorn, "hook: {hook}");
-                if frozen::recording() {
-                    continue;
-                }
-            }
             let Some(expected) = frozen::lookup(FIXTURE, &key) else {
                 frozen::missing(FIXTURE, &key)
             };

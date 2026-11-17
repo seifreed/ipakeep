@@ -148,21 +148,15 @@ cargo build --release
 # binary at target/release/ipakeep
 ```
 
-The default build needs only the Rust toolchain: the Apple guest code runs on
-ipakeep's native Rust ARM64 interpreter (`native-cpu` feature). Apple's signed
+The build needs only the Rust toolchain: the Apple guest code runs on
+ipakeep's own native Rust ARM64 interpreter, with no C toolchain and no
+external emulation engine. Apple's signed
 framework assets are downloaded and verified on the first sign-in.
 
 Optional profile-guided (PGO) build: `scripts/pgo.sh` builds
 `target/pgo/release/ipakeep`. On the current interpreter it is slower than
-the default build (see [Performance](#performance)), so the default build
-does not use it.
-
-The legacy Unicorn backend is still available but **deprecated**:
-`cargo build --release --no-default-features --features unicorn`. It builds
-`unicorn-engine-sys` from source and needs a C toolchain, CMake and libclang:
-`cmake libclang-dev pkg-config` on Debian/Ubuntu, Xcode command line tools plus
-`cmake` on macOS, and MSVC with CMake, Ninja and LLVM (`LIBCLANG_PATH`) on
-Windows. Enabling `unicorn` makes the binary GPL-2.0 (see [License](#license)).
+the plain release build (see [Performance](#performance)), so the default
+build does not use it.
 
 ### Install the binary
 
@@ -626,10 +620,11 @@ The dyld and kext exports are byte-identical to upstream ipatool's.
 ### The interpreter (`src/infrastructure/apple_sap/emu/native/`)
 
 - **What it is:** a fetch / decode / execute A64 interpreter in safe Rust,
-  with no `unsafe`, no JIT and no C dependencies. It implements the same
-  `Engine` API as the old Unicorn wrapper: memory map/read/write, X and V
+  with no `unsafe`, no JIT and no C dependencies. It implements the
+  `Engine` API the machine layer drives: memory map/read/write, X and V
   registers, NZCV, code hooks, stop/fail, and runs bounded by a timeout or
-  an instruction count. The machine layer above it is unchanged.
+  an instruction count. The machine layer above it is unchanged
+  from the earlier Unicorn-based engine, which was removed on 2026-11-17.
 - **Decoding:** it dispatches on the top-level encoding class (`op0`,
   bits\[28:25\]) into one module per ARM ARM group:
 
@@ -672,8 +667,8 @@ The dyld and kext exports are byte-identical to upstream ipatool's.
 - **Host functions (shims):** every emulated symbol gets a `ret` stub, and
   one code hook covers the shim area. The Rust handler runs before the
   `ret`: it reads arguments from `X0`–`X7`, writes `X0`, and the stub
-  returns to `LR`. This is the same model Unicorn used, so all shims carried
-  over unchanged.
+  returns to `LR`. This is the same model the earlier Unicorn engine used,
+  so all shims carried over unchanged.
 - **Hot loop:** the wall-clock deadline is checked every 4096 instructions,
   not on every instruction. A two-compare range check skips hook dispatch
   for addresses no hook covers. Code hooks fire only at block entry, because
@@ -686,14 +681,18 @@ The dyld and kext exports are byte-identical to upstream ipatool's.
   SAP setup and signatures, ADI provisioning (two seeds), Store AMD headers,
   kbsync, persisted provisioning, and the dyld, kext and APFS exports. See
   [Contributing](#contributing) for how to run them.
-- **Differential testing against Unicorn:** with the `unicorn` feature
-  enabled, every instruction group's tests run each encoding on both engines
-  and compare X0–X30, SP, PC, NZCV and V0–V31.
+- **Differential testing against Unicorn:** every instruction group's tests
+  run each encoding natively and compare X0–X30, SP, PC, NZCV and V0–V31 with
+  the state Unicorn 2.1.5 produced for the same case; the block-cache tests
+  also compare guest memory. Unicorn's results were recorded once and are
+  committed under `tests/fixtures/native_oracle/` (1,489 cases, ~254 KB; see
+  `native/frozen.rs`), so these tests run in every build and in CI with no
+  Unicorn.
 - **Decode oracle:** every size, Q and U combination of the
   two-register-misc, across-lanes, EXT and INS (element) groups (1,360
   encodings) is classified with `llvm-mc`. Encodings LLVM rejects or that
   ipakeep doesn't model must be rejected; every modelled one must match
-  Unicorn.
+  the frozen Unicorn results.
 - **100% line coverage** is enforced in CI (`tarpaulin.toml`), including the
   rejection path of every unsupported encoding.
 
@@ -709,17 +708,17 @@ wall times, because the measuring machine was heavily loaded. Each is the
 median of 3 interleaved runs of a release build with `--test-threads=1` on an
 Apple M5 Max, including loading and relocating the guest images:
 
-| Workload | Native interpreter | Unicorn (legacy, being removed) |
-|----------|--------------------|---------------------------------|
+| Workload | Native interpreter | Unicorn 2.1.5 (historical: engine removed 2026-11-17) |
+|----------|--------------------|-------------------------------------------------------|
 | SAP session and signatures (`connect_and_sign_reproduce_golden_signatures`) | 0.44 s | 0.44 s |
 | ADI provisioning (`provisioning_reproduces_golden_vectors`) | 0.99 s | 1.09 s |
 | kbsync, two blobs (`kbsync_reproduces_golden_vectors`) | 3.56 s | 2.59 s |
 
-Unicorn translates guest code to host code with a JIT (QEMU TCG). The
-interpreter stays a pure, safe-Rust interpreter, but the block cache and the
-software TLB remove most of its per-instruction cost: it now matches Unicorn
-on SAP, beats it on ADI provisioning, and is about 1.4× slower on kbsync, the
-longest guest run. kbsync is generated once per account and device and cached
+Unicorn, which ipakeep used before, translates guest code to host code with a
+JIT (QEMU TCG). The interpreter stays a pure, safe-Rust interpreter, but the
+block cache and the software TLB remove most of its per-instruction cost: it
+matched Unicorn on SAP, beat it on ADI provisioning, and was about 1.4× slower
+on kbsync, the longest guest run. kbsync is generated once per account and device and cached
 in `kbsync-v1.json`, so a normal download doesn't pay that cost anyway.
 Earlier optimisation work (page-wise memory, page caches, the hook and
 deadline fast paths) had already made the SAP signing test about 5× faster in
@@ -738,21 +737,11 @@ took 4.12 s of CPU time for kbsync against 3.32 s for the plain release
 build, so PGO is currently not recommended. The default build and CI do not
 use PGO.
 
-### Backends
-
-| Build | Engine | License of the binary |
-|-------|--------|-----------------------|
-| default (`native-cpu`) | native interpreter | MIT |
-| `--features unicorn` / `--all-features` | native interpreter, with Unicorn compiled as the differential oracle | GPL-2.0 |
-| `--no-default-features --features unicorn` | Unicorn (deprecated legacy backend) | GPL-2.0 |
-
 ---
 
 ## Requirements
 
-- Rust toolchain (edition 2024)
-- Only for the deprecated `unicorn` feature: CMake, libclang and a C toolchain
-  (see Installation)
+- Rust toolchain (edition 2024); no C toolchain is needed
 - See [Cargo.toml](Cargo.toml) for dependencies
 
 ## SBOM
@@ -767,11 +756,9 @@ The gate scores the SBOM with the project `sbomqs` profile and `sbom-tools`,
 verifies NTIA minimum elements, and scans it with `osv-scanner` and `grype`.
 
 CI runs the Rust formatting, compile, Clippy, dependency, license and SBOM
-checks, and the test suite on Linux, macOS and Windows, all with the default
-features and no C toolchain. A separate Linux job installs CMake and libclang
-and runs the `unicorn` configurations: Clippy and tests with `--all-features`
-(which run the native interpreter's differential tests against Unicorn), the
-legacy `--no-default-features --features unicorn` backend, and coverage.
+checks, and the test suite (including the interpreter's differential tests
+against the frozen Unicorn results) on Linux, macOS and Windows, with no C
+toolchain. A Linux job enforces 100% line coverage with tarpaulin.
 CodeQL analyzes the Rust crate.
 
 ---
@@ -783,8 +770,8 @@ Contributions are welcome.
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Run the gates: `cargo fmt --all -- --check`, `cargo check --all-targets --all-features`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all`, `cargo machete`, `cargo +nightly udeps --workspace --all-targets`, `cargo audit`, `cargo deny check`, `cargo tarpaulin --all-features --workspace`, `cargo license --json`, `./scripts/sbom.sh`
-   - The `--all-features` gates build the deprecated `unicorn` feature, so they need CMake and libclang (see Installation). With it enabled, `cargo test --all-features` also runs the native interpreter's differential tests against Unicorn. Changes to the emulator should pass them, plus `cargo clippy --all-targets --no-default-features --features unicorn -- -D warnings`.
+4. Run the gates: `cargo fmt --all -- --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all`, `cargo machete`, `cargo +nightly udeps --workspace --all-targets`, `cargo audit`, `cargo deny check`, `cargo tarpaulin --workspace`, `cargo license --json`, `./scripts/sbom.sh`
+   - `cargo test` runs the native interpreter's differential tests against the frozen Unicorn results in `tests/fixtures/native_oracle/`. A new differential case must be added there too (see `src/infrastructure/apple_sap/emu/native/frozen.rs`).
    - The golden tests against Apple's real binaries are `#[ignore]`d because they need the cached Apple assets. Run them by name, for example `cargo test --release --lib -- --ignored --test-threads=1 connect_and_sign_reproduce_golden_signatures`. A bare `--ignored` also runs tests that download the multi-gigabyte macOS restore image.
 5. Open a Pull Request
 
@@ -804,18 +791,12 @@ If this project is useful in your workflows, you can support development:
 
 This project is licensed under the MIT license. See [Cargo.toml](Cargo.toml).
 
-The ipakeep source code is MIT-licensed (see [LICENSE](LICENSE)). Binaries
-built with the default features run the Apple SAP/anisette stack on the native
-Rust ARM64 interpreter and are MIT-licensed as well.
-
-The optional, deprecated `unicorn` feature statically links the
-[Unicorn](https://www.unicorn-engine.org/) emulator through the `unicorn-engine`
-crate, which is licensed under the
-[GPL-2.0](https://github.com/unicorn-engine/unicorn/blob/master/COPYING). A
-binary built with `unicorn` enabled (including `--all-features`) is a combined
-work: distributing it is governed by the GPL-2.0 (including its
-source-availability and license-text requirements), while the MIT terms still
-apply to the ipakeep source on its own. The full dependency license list is in
+The ipakeep source code is MIT-licensed (see [LICENSE](LICENSE)). ipakeep
+runs the Apple SAP/anisette stack on its own native Rust ARM64 interpreter and
+links no copyleft emulator, so its binaries are MIT-licensed as well. The
+differential-test fixtures were recorded with the GPL-2.0
+[Unicorn](https://www.unicorn-engine.org/) emulator, which is not part of
+ipakeep's source or dependency graph. The full dependency license list is in
 the CycloneDX SBOM at [sbom/ipakeep.cdx.json](sbom/ipakeep.cdx.json).
 
 **Attribution**

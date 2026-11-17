@@ -1,4 +1,4 @@
-//! Pure A64 instruction *classifier* — no execution, no `unicorn-engine`.
+//! Pure A64 instruction *classifier* — no execution.
 //!
 //! Decodes a 32-bit little-endian ARM64 (AArch64) instruction word into its
 //! top-level encoding class ([`A64Class`], from the Arm Architecture Reference

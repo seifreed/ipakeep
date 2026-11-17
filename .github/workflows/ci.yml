@@ -25,14 +25,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      # Default features = native ARM64 interpreter: no C toolchain needed.
+      # Pure Rust (native ARM64 interpreter): no C toolchain needed.
       - name: Format
         run: cargo fmt --all -- --check
 
-      - name: Check all targets (default features)
+      - name: Check all targets
         run: cargo check --all-targets --locked
 
-      - name: Clippy (default features)
+      - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Install quality tools
@@ -76,50 +76,26 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v2
 
-      # Default features (native backend): no CMake/libclang/Ninja/LLVM.
+      # Pure Rust: no C toolchain or external engine needed.
       - name: Tests
         run: cargo test --all --locked
 
-  unicorn-oracle:
-    name: Unicorn backend + differential oracle
+  coverage:
+    name: Coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions-rust-lang/setup-rust-toolchain@v2
-        with:
-          components: clippy
-
-      # The deprecated `unicorn` feature builds unicorn-engine-sys from source.
-      - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
-
-      - name: Check all targets and features
-        run: cargo check --all-targets --all-features --locked
-
-      - name: Clippy (all features)
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
-
-      - name: Clippy (legacy Unicorn backend only)
-        run: >-
-          cargo clippy --all-targets --no-default-features --features unicorn
-          --locked -- -D warnings
-
-      # Both backends: the native interpreter is `Engine` and the differential
-      # tests compare it against `UnicornEngine`.
-      - name: Tests (all features, differential oracle)
-        run: cargo test --all --all-features --locked
-
-      - name: Tests (legacy Unicorn backend only)
-        run: cargo test --lib --no-default-features --features unicorn --locked
 
       - name: Install cargo-tarpaulin
         run: cargo install --locked cargo-tarpaulin --version 0.37.6
 
-      # Coverage of the native interpreter comes from the differential tests,
-      # which need the Unicorn oracle, so coverage runs with all features.
+      # The native interpreter's differential tests compare it against
+      # Unicorn results frozen in tests/fixtures/native_oracle/, so coverage
+      # needs no external engine.
       - name: Enforce coverage threshold
-        run: cargo tarpaulin --all-features --workspace --locked --out xml
+        run: cargo tarpaulin --workspace --locked --out xml
 
   unused-dependencies:
     name: cargo-udeps

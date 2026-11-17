@@ -2,7 +2,7 @@
 //! surface the OTP whitebox uses (~0.01% of executed instructions).
 //!
 //! This implements exactly the Advanced-SIMD / scalar-FP / crypto encodings the
-//! Apple ADI whitebox exercises, validated differentially against Unicorn. It is
+//! Apple ADI whitebox exercises, validated differentially against (frozen) Unicorn results. It is
 //! deliberately partial: any encoding outside that set reports
 //! [`NativeError::Unsupported`].
 
