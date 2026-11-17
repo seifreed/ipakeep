@@ -247,3 +247,37 @@ pub(super) fn sysconf(call: &mut ShimCall<'_, '_>) -> Result<(), ShimError> {
 
     call.set_result(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_single_cpu_sysctl_reports_one() {
+        for name in [
+            b"kern.monotonicclock".as_slice(),
+            b"hw.ncpu",
+            b"hw.logicalcpu",
+            b"hw.physicalcpu",
+            b"hw.optional.arm64",
+        ] {
+            assert_eq!(
+                sysctl_value(name),
+                Some(SYSCTL_ONE.to_le_bytes().to_vec()),
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+    }
+
+    #[test]
+    fn pinned_sysctl_values_are_reported() {
+        assert_eq!(
+            sysctl_value(b"hw.memsize"),
+            Some(MEMORY_SIZE.to_le_bytes().to_vec())
+        );
+        assert_eq!(sysctl_value(b"hw.machine"), Some(b"arm64\0".to_vec()));
+        assert_eq!(sysctl_value(b"kern.osversion"), Some(b"16G29\0".to_vec()));
+        assert_eq!(sysctl_value(b"hw.unknown"), None);
+    }
+}

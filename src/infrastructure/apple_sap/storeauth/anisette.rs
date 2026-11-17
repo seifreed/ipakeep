@@ -438,6 +438,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_provisioning_fields_that_are_not_base64() {
+        let values = plist::Dictionary::from_iter([(
+            "spim".to_string(),
+            plist::Value::String("not base64!".to_string()),
+        )]);
+        assert!(matches!(
+            decode_field(&values, "spim"),
+            Err(StoreAuthError::Protocol(message)) if message == "decode anisette spim"
+        ));
+    }
+
+    #[test]
     fn parses_the_recorded_responses() {
         let golden = golden();
         let start =

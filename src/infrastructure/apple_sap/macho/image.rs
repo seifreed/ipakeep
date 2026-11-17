@@ -257,22 +257,32 @@ impl MachImage {
         E: Display,
     {
         let value = match relocation {
-            Relocation::Rebase { offset, target } => {
-                load_base.checked_add(*target).ok_or_else(|| {
-                    MachoError::overflow(
-                        &self.name,
-                        format!("chained rebase at {offset:#x} with target {target:#x}"),
-                    )
-                })?
-            }
-            Relocation::Bind { symbol, addend, .. } => {
-                let address = self.resolve_symbol(symbol, resolve)?;
-                address.checked_add_signed(*addend).ok_or_else(|| {
-                    MachoError::overflow(&self.name, format!("addend for {symbol}"))
-                })?
-            }
+            Relocation::Rebase { offset, target } => self.rebased(load_base, *offset, *target)?,
+            Relocation::Bind { symbol, addend, .. } => self.bound(symbol, *addend, resolve)?,
         };
         self.put_pointer(relocation.offset(), value)
+    }
+
+    /// The value of the chained rebase at `offset`: `load_base + target`.
+    fn rebased(&self, load_base: u64, offset: u64, target: u64) -> MachoResult<u64> {
+        load_base.checked_add(target).ok_or_else(|| {
+            MachoError::overflow(
+                &self.name,
+                format!("chained rebase at {offset:#x} with target {target:#x}"),
+            )
+        })
+    }
+
+    /// The value of a bind: the resolved address of `symbol` plus `addend`.
+    fn bound<R, E>(&self, symbol: &str, addend: i64, resolve: &mut R) -> MachoResult<u64>
+    where
+        R: FnMut(&str) -> Result<u64, E>,
+        E: Display,
+    {
+        let address = self.resolve_symbol(symbol, resolve)?;
+        address
+            .checked_add_signed(addend)
+            .ok_or_else(|| MachoError::overflow(&self.name, format!("addend for {symbol}")))
     }
 
     fn resolve_symbol<R, E>(&self, symbol: &str, resolve: &mut R) -> MachoResult<u64>
@@ -368,9 +378,8 @@ impl MachImage {
         E: Display,
     {
         let external = self.external_symbols();
-        for (start, end) in
-            self.pointer_scan_ranges(&[TEXT, TEXT_EXEC, LINKEDIT], KERNEL_FIXUP_STRIDE)
-        {
+        let ranges = self.pointer_scan_ranges(&[TEXT, TEXT_EXEC, LINKEDIT], KERNEL_FIXUP_STRIDE);
+        for (start, end) in ranges {
             let mut offset = start;
             while offset + POINTER_SIZE <= end {
                 let target = KernelPointer {

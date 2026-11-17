@@ -1506,6 +1506,16 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn open_downloads_the_fcs_key_through_the_http_client() {
+        let http = BlockingHttp::without_runtime();
+        let opened = AeaReader::open(fixture!("synthetic.aea").to_vec(), &http);
+        assert!(matches!(
+            opened,
+            Err(AeaError::Http(HttpRangeError::RuntimeUnavailable))
+        ));
+    }
+
+    #[test]
     fn open_refuses_archives_without_an_fcs_key_url() {
         let http = BlockingHttp::new().unwrap();
         let source = ArchiveSpec::new(16, 1, &pattern(16)).encode();
@@ -1550,6 +1560,36 @@ pub(crate) mod tests {
         assert!(matches!(
             unwrap_symmetric_key(pem, &off_curve),
             Err(AeaError::Hpke("invalid encapsulated key"))
+        ));
+    }
+
+    /// One byte past the longest HKDF-SHA256 output (255 blocks of 32 bytes).
+    const OVERLONG_KEY: usize = 255 * 32 + 1;
+
+    #[test]
+    fn rejects_key_lengths_hkdf_cannot_expand() {
+        assert!(matches!(
+            derive_key(b"key", None, b"info", OVERLONG_KEY),
+            Err(AeaError::KeyDerivation(OVERLONG_KEY))
+        ));
+        assert!(matches!(
+            labeled_expand(b"suite", &[0; 32], b"label", b"info", OVERLONG_KEY),
+            Err(AeaError::KeyDerivation(OVERLONG_KEY))
+        ));
+    }
+
+    #[test]
+    fn short_sources_report_the_read_context() {
+        let source = vec![0_u8; 4];
+        assert!(matches!(
+            read_vec(&source, 2, 4, "segment"),
+            Err(AeaError::Io { context: "segment", source })
+                if source.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(matches!(
+            read_array::<8>(&source, 0, "root header"),
+            Err(AeaError::Io { context: "root header", source })
+                if source.kind() == io::ErrorKind::UnexpectedEof
         ));
     }
 

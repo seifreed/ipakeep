@@ -291,3 +291,37 @@ fn uninstall_removes_the_dispatch_hook() {
     let Guest { mut engine, shims } = Guest::with_config(ShimConfig::default());
     assert!(shims.uninstall(&mut engine).is_ok());
 }
+
+#[test]
+fn dispatch_rejects_reentry_while_the_state_is_borrowed() {
+    let mut guest = Guest::new();
+    let address = guest.address("_sysconf");
+    let state = guest.shims.state();
+    let _held = state.borrow_mut();
+
+    let error = super::super::dispatch(&state, &mut guest.engine, address).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("guest service state is already in use"),
+        "{error}"
+    );
+}
+
+#[test]
+fn dispatch_rejects_unregistered_service_addresses() {
+    // Address zero lies outside the service area, so no shim is registered there.
+    const UNREGISTERED: u64 = 0;
+    let mut guest = Guest::new();
+    let state = guest.shims.state();
+
+    let error = super::super::dispatch(&state, &mut guest.engine, UNREGISTERED).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("guest entered unknown service address 0x0"),
+        "{error}"
+    );
+}

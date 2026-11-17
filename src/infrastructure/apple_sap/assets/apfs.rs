@@ -207,8 +207,11 @@ fn trimmed_name(bytes: &[u8]) -> String {
 }
 
 fn to_usize(value: u64) -> Result<usize> {
-    usize::try_from(value)
-        .map_err(|_| malformed(format!("value {value} exceeds the address space")))
+    usize::try_from(value).map_err(|_| malformed(format!("value {value} exceeds address space")))
+}
+
+fn read_error(context: String, source: io::Error) -> ApfsError {
+    ApfsError::Read { context, source }
 }
 
 /// Fletcher-64 checksum used by every APFS object header.
@@ -523,10 +526,7 @@ impl<R: ReadAt> Container<R> {
         }
         device
             .read_exact_at(&mut header, 0)
-            .map_err(|source| ApfsError::Read {
-                context: "header".into(),
-                source,
-            })?;
+            .map_err(|source| read_error("header".into(), source))?;
         if &header[CONTAINER_MAGIC_OFFSET..] != CONTAINER_MAGIC {
             return Err(ApfsError::Unsupported(
                 "image is not a raw APFS container (disk images are not supported)".into(),
@@ -542,10 +542,7 @@ impl<R: ReadAt> Container<R> {
         let mut block = vec![0u8; BLOCK_SIZE];
         self.device
             .read_exact_at(&mut block, offset)
-            .map_err(|source| ApfsError::Read {
-                context: format!("block {address:#x}"),
-                source,
-            })?;
+            .map_err(|source| read_error(format!("block {address:#x}"), source))?;
         Ok(block)
     }
 
@@ -734,14 +731,7 @@ impl<R: ReadAt> ApfsExtractor<R> {
     fn resolve_path(&self, path: &str) -> Result<Vec<Record>> {
         let mut object_id = ROOT_DIRECTORY_ID;
         for component in path.trim_matches('/').split('/') {
-            object_id = self
-                .records_for(object_id)?
-                .into_iter()
-                .find_map(|record| match record {
-                    Record::DirectoryEntry { name, file_id } if name == component => Some(file_id),
-                    _ => None,
-                })
-                .ok_or_else(|| ApfsError::NotFound(component.to_owned()))?;
+            object_id = child_id(self.records_for(object_id)?, component)?;
         }
         self.records_for(object_id)
     }
@@ -959,6 +949,17 @@ fn write_output(path: &Path, source: &impl ReadAt) -> Result<()> {
         let _ = fs::remove_file(path);
     }
     result
+}
+
+/// The object id of the directory entry `component` among a directory's records.
+fn child_id(records: Vec<Record>, component: &str) -> Result<u64> {
+    records
+        .into_iter()
+        .find_map(|record| match record {
+            Record::DirectoryEntry { name, file_id } if name == component => Some(file_id),
+            _ => None,
+        })
+        .ok_or_else(|| ApfsError::NotFound(component.to_owned()))
 }
 
 fn copy_output(output: &mut File, path: &Path, source: &impl ReadAt) -> Result<()> {
@@ -2510,6 +2511,58 @@ mod tests {
         fn size(&self) -> u64 {
             BLOCK_SIZE_U64
         }
+    }
+
+    fn malformed_message<T>(result: Result<T>) -> String {
+        match result {
+            Err(ApfsError::Malformed(message)) => message,
+            Err(other) => panic!("expected a malformed error, got {other}"),
+            Ok(_) => panic!("expected a malformed error"),
+        }
+    }
+
+    /// A zeroed leaf node whose first table-of-contents entry is `toc`
+    /// (key offset, key length, value offset, value length).
+    fn node_with_entry(toc: [usize; 4]) -> Node {
+        let mut block = vec![0u8; BLOCK_SIZE];
+        put_u16(&mut block, OBJECT_HEADER_SIZE, usize::from(NODE_LEAF));
+        put_u32(&mut block, OBJECT_HEADER_SIZE + 4, 1);
+        for (index, field) in toc.into_iter().enumerate() {
+            put_u16(&mut block, NODE_HEADER_SIZE + index * 2, field);
+        }
+        Node::parse(block).expect("node")
+    }
+
+    #[test]
+    fn malformed_nodes_are_rejected() {
+        let truncated = Node::parse(vec![0u8; OBJECT_HEADER_SIZE]);
+        assert_eq!(
+            malformed_message(truncated),
+            format!("structure truncated at offset {}", OBJECT_HEADER_SIZE + 4)
+        );
+        let key_outside = node_with_entry([BLOCK_SIZE, 16, 0, 0]);
+        assert_eq!(
+            malformed_message(key_outside.entry(0)),
+            "tree entry exceeds its node"
+        );
+        let value_outside = node_with_entry([0, 0, BLOCK_SIZE + 1, 8]);
+        assert_eq!(
+            malformed_message(value_outside.entry(0)),
+            "tree value offset exceeds its node"
+        );
+    }
+
+    #[test]
+    fn extraction_reports_output_write_failures() {
+        let path = scratch_directory("read-only-output");
+        fs::write(&path, b"").expect("seed");
+        let mut read_only = File::open(&path).expect("open");
+        let result = copy_output(&mut read_only, &path, &Endless);
+        assert!(
+            matches!(&result, Err(ApfsError::Output { path: failed, .. }) if *failed == path),
+            "{result:?}"
+        );
+        fs::remove_file(&path).expect("cleanup");
     }
 
     #[test]

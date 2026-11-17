@@ -105,8 +105,7 @@ fn collect(
     if depth > MAXIMUM_TRIE_DEPTH {
         return Err(ExportError::Format("export trie is too deep"));
     }
-    let start = usize::try_from(position)
-        .map_err(|_| ExportError::Format("export trie offset overflows"))?;
+    let start = trie_offset(position)?;
     let mut cursor = Cursor {
         data,
         position: start,
@@ -118,8 +117,7 @@ fn collect(
             name: prefix.clone(),
         });
     }
-    cursor.position = usize::try_from(position.wrapping_add(terminal_size).wrapping_add(1))
-        .map_err(|_| ExportError::Format("export trie offset overflows"))?;
+    cursor.position = trie_offset(position.wrapping_add(terminal_size).wrapping_add(1))?;
     let children = cursor.byte()?;
     for _ in 0..children {
         let edge = cursor.string();
@@ -130,6 +128,11 @@ fn collect(
         prefix.truncate(length);
     }
     Ok(())
+}
+
+/// Convert a trie offset to an index; fails only where `usize` is narrower than 64 bits.
+fn trie_offset(value: u64) -> Result<usize, ExportError> {
+    usize::try_from(value).map_err(|_| ExportError::Format("export trie offset overflows"))
 }
 
 fn read_export(

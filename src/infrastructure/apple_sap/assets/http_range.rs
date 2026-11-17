@@ -258,6 +258,18 @@ impl BlockingHttp {
         })
     }
 
+    /// A client without a runtime, whose every request fails with
+    /// [`HttpRangeError::RuntimeUnavailable`] before reaching the network.
+    #[cfg(test)]
+    pub(crate) fn without_runtime() -> Self {
+        Self {
+            runtime: None,
+            client: crate::infrastructure::http::client_builder()
+                .build()
+                .expect("HTTP client"),
+        }
+    }
+
     /// Downloads `url` with a `200 OK` status, refusing bodies over `limit`.
     ///
     /// # Errors
