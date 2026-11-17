@@ -373,6 +373,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authentication_reports_anisette_resolution_failures() {
+        let result = DeveloperClient::finish_authentication(
+            &account(),
+            AppleHttpClient::new().expect("HTTP client"),
+            "gs-token".into(),
+            |_| async { Err::<AnisetteData, _>("anisette unavailable") },
+        )
+        .await;
+
+        assert_eq!(result.err().as_deref(), Some("anisette unavailable"));
+    }
+
+    #[tokio::test]
     async fn for_account_uses_local_anisette_service_after_app_token() {
         let anisette = AnisetteData {
             headers: HashMap::from([("X-Apple-I-MD".into(), "native-md".into())]),

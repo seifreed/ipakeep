@@ -129,6 +129,26 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_to_result_string_without_user_string() {
+        let resp = json!({"resultCode": 35, "resultString": "missing team"});
+        assert_eq!(
+            check_result(&resp).unwrap_err(),
+            "Apple Developer Services error 35: missing team"
+        );
+    }
+
+    #[test]
+    fn parses_certificate_from_fallback_keys() {
+        let der = BASE64.encode([9, 8, 7]);
+        let cert = parse_certificate(&json!({
+            "certificate": {"serialNumber": "S2", "certificateContent": der}
+        }))
+        .unwrap();
+        assert_eq!(cert.serial, "S2");
+        assert_eq!(cert.der, vec![9, 8, 7]);
+    }
+
+    #[test]
     fn parses_teams_and_devices() {
         let teams = parse_teams(&json!({"resultCode": 0, "teams": [
             {"teamId": "ABC", "name": "Me"}

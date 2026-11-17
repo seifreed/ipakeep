@@ -9,6 +9,7 @@ use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::{EncodePrivateKey, LineEnding};
 use rsa::sha2::Sha256;
 use rsa::signature::{Keypair, SignatureEncoding, Signer};
+use std::fmt::Display;
 use std::time::Instant;
 use x509_cert::der::asn1::{Any, BitString, PrintableStringRef, SetOfVec, Utf8StringRef};
 use x509_cert::der::{Decode, Encode, EncodePem};
@@ -42,12 +43,15 @@ pub struct KeyAndCsr {
 /// Returns an error if `common_name` contains control characters or exceeds
 /// 64 characters, or if key generation or encoding fails.
 pub fn generate_key_and_csr(common_name: &str) -> Result<KeyAndCsr, String> {
+    generate_with_key_bits(common_name, RSA_KEY_BITS)
+}
+
+/// [`generate_key_and_csr`] with a `key_bits` RSA key, logging the outcome.
+fn generate_with_key_bits(common_name: &str, key_bits: usize) -> Result<KeyAndCsr, String> {
     let started = Instant::now();
     let result = validate_common_name(common_name)
         .map_err(|error| ("invalid_common_name", error))
-        .and_then(|()| {
-            build_key_and_csr(common_name).map_err(|error| ("generation_failed", error))
-        });
+        .and_then(|()| build_key_and_csr(common_name, key_bits).map_err(generation_failed));
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     match result {
         Ok(pair) => {
@@ -79,21 +83,32 @@ pub fn generate_key_and_csr(common_name: &str) -> Result<KeyAndCsr, String> {
     }
 }
 
-fn build_key_and_csr(common_name: &str) -> Result<KeyAndCsr, String> {
-    let subject = subject_name(common_name).map_err(|e| format!("CSR subject: {e}"))?;
-    let private_key = PrivateKey::new(&mut rand::rng(), RSA_KEY_BITS)
-        .map_err(|e| format!("RSA key generation failed: {e}"))?;
+/// Tags a key or CSR generation failure for the outcome log.
+fn generation_failed(error: String) -> (&'static str, String) {
+    ("generation_failed", error)
+}
+
+/// Generate a `key_bits` RSA key and a CSR signed by it for `common_name`.
+fn build_key_and_csr(common_name: &str, key_bits: usize) -> Result<KeyAndCsr, String> {
+    let subject = subject_name(common_name).map_err(csr_error("CSR subject"))?;
+    let private_key = PrivateKey::new(&mut rand::rng(), key_bits)
+        .map_err(csr_error("RSA key generation failed"))?;
     let key_pem = private_key
         .to_pkcs8_pem(LineEnding::LF)
-        .map_err(|e| format!("PKCS#8 encoding failed: {e}"))?;
+        .map_err(csr_error("PKCS#8 encoding failed"))?;
     let csr = signed_request(subject, &SigningKey::<Sha256>::new(private_key))?;
     let csr_pem = csr
         .to_pem(LineEnding::LF)
-        .map_err(|e| format!("CSR encoding failed: {e}"))?;
+        .map_err(csr_error("CSR encoding failed"))?;
     Ok(KeyAndCsr {
         key_pem: key_pem.as_bytes().to_vec(),
         csr_pem: csr_pem.into_bytes(),
     })
+}
+
+/// Maps the failure of a CSR generation `stage` to its error message.
+fn csr_error<E: Display>(stage: &'static str) -> impl FnOnce(E) -> String {
+    move |error| format!("{stage}: {error}")
 }
 
 fn validate_common_name(common_name: &str) -> Result<(), String> {
@@ -135,20 +150,20 @@ fn signed_request(subject: Name, signer: &SigningKey<Sha256>) -> Result<CertReq,
         version: Version::V1,
         subject,
         public_key: SubjectPublicKeyInfo::from_key(&signer.verifying_key())
-            .map_err(|e| format!("CSR public key: {e}"))?,
+            .map_err(csr_error("CSR public key"))?,
         attributes: SetOfVec::new(),
     };
-    let tbs = info.to_der().map_err(|e| format!("CSR encoding: {e}"))?;
+    let tbs = info.to_der().map_err(csr_error("CSR encoding"))?;
     let signature = signer
         .try_sign(&tbs)
-        .map_err(|e| format!("CSR signing failed: {e}"))?;
+        .map_err(csr_error("CSR signing failed"))?;
     Ok(CertReq {
         info,
         algorithm: signer
             .signature_algorithm_identifier()
-            .map_err(|e| format!("CSR signature algorithm: {e}"))?,
+            .map_err(csr_error("CSR signature algorithm"))?,
         signature: BitString::from_bytes(&signature.to_bytes())
-            .map_err(|e| format!("CSR signature: {e}"))?,
+            .map_err(csr_error("CSR signature"))?,
     })
 }
 
@@ -193,6 +208,17 @@ mod tests {
         verifier
             .verify(&csr.info.to_der().unwrap(), &signature)
             .expect("CSR self-signature verifies");
+    }
+
+    #[test]
+    fn reports_rsa_key_generation_failure_for_an_undersized_modulus() {
+        // The RSA crate refuses moduli below 1024 bits before generating primes.
+        const UNDERSIZED_KEY_BITS: usize = 512;
+        let error = generate_with_key_bits("ipakeep-test", UNDERSIZED_KEY_BITS).unwrap_err();
+        assert!(
+            error.starts_with("RSA key generation failed:"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
