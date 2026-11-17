@@ -749,6 +749,9 @@ fn unsigned_bundles_have_no_entitlements_but_other_codesign_errors_remain() {
     );
 }
 
+// Runs the real /usr/bin/codesign to read the unsigned bundle (macOS only);
+// the unsigned-to-empty decision itself is covered on every OS above.
+#[cfg(target_os = "macos")]
 #[test]
 fn signs_a_never_signed_bundle_with_profile_entitlements_only() {
     let dir = tempfile::tempdir().unwrap();
