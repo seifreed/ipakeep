@@ -192,7 +192,9 @@ pub enum DeviceCommands {
         #[arg(long)]
         run: bool,
 
-        /// Use libimobiledevice for iOS 16; --device must be a USB UDID.
+        /// iOS 16: install over the native stack and launch through idevicedebug
+        /// (the native launch fallback, until a native DDI launch is validated).
+        /// --device must be a USB UDID.
         #[arg(long)]
         legacy_device: bool,
 

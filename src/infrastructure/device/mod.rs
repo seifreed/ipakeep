@@ -70,17 +70,20 @@ fn require_install_tools(
     request: &InstallRequest<'_>,
     mut require: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
+    // --native and --legacy-device both install over the in-process native
+    // stack, which needs no external binary. --legacy-device still launches
+    // through idevicedebug (iOS 16 fallback); only the devicectl default needs
+    // xcrun for install.
     if request.native_device {
         return Ok(());
     }
-    require(if request.legacy_device {
-        "ideviceinstaller"
-    } else {
-        "xcrun"
-    })?;
-    if request.legacy_device && request.launch {
-        require("idevicedebug")?;
+    if request.legacy_device {
+        if request.launch {
+            require("idevicedebug")?;
+        }
+        return Ok(());
     }
+    require("xcrun")?;
     Ok(())
 }
 
@@ -124,10 +127,15 @@ fn install_in_workdir_with(
         rebrand::rewrite_bundle_ids(&app, new_id)?;
     }
     sign(&app, request, workdir)?;
-    if request.native_device {
+    // Install over the in-process native stack for both --native and
+    // --legacy-device (iOS 16). ideviceinstaller was removed once the native
+    // install was hardware-validated; --legacy-device now only picks the
+    // idevicedebug launch fallback below. Only the devicectl default still
+    // shells out to install.
+    if request.native_device || request.legacy_device {
         native(&app, request.device)?;
     } else {
-        run(install_command(&app, request.device, request.legacy_device))?;
+        run(install_command(&app, request.device))?;
     }
     if request.launch && request.native_device {
         native_run(&bundle_identifier(&app)?, request.device)?;
@@ -141,16 +149,9 @@ fn install_in_workdir_with(
     Ok(())
 }
 
-fn install_command(app: &Path, device: &str, legacy: bool) -> Command {
-    let mut command = if legacy {
-        let mut command = Command::new("ideviceinstaller");
-        command.args(["--udid", device, "install"]);
-        command
-    } else {
-        let mut command = Command::new("/usr/bin/xcrun");
-        command.args(["devicectl", "device", "install", "app", "--device", device]);
-        command
-    };
+fn install_command(app: &Path, device: &str) -> Command {
+    let mut command = Command::new("/usr/bin/xcrun");
+    command.args(["devicectl", "device", "install", "app", "--device", device]);
     command.arg(app);
     command
 }
@@ -211,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn install_tool_requirements_include_legacy_launch_tool() {
+    fn legacy_requires_only_idevicedebug_for_launch_not_an_installer() {
         let dir = tempfile::tempdir().expect("temporary directory");
         let ipa = dir.path().join("app.ipa");
         let request = InstallRequest {
@@ -227,7 +228,18 @@ mod tests {
         })
         .expect("tools present");
 
-        assert_eq!(tools, ["ideviceinstaller", "idevicedebug"]);
+        // Install is native now; only the launch fallback needs an external tool.
+        assert_eq!(tools, ["idevicedebug"]);
+
+        // Without --run, legacy install needs no external tool at all.
+        let install_only = InstallRequest {
+            launch: false,
+            ..request
+        };
+        require_install_tools(&install_only, |tool| {
+            Err(format!("{tool} must not be required"))
+        })
+        .expect("legacy install alone needs no external tools");
     }
 
     #[test]
@@ -391,18 +403,12 @@ mod tests {
     }
 
     #[test]
-    fn install_commands_preserve_device_and_bundle_paths() {
+    fn install_command_preserves_device_and_bundle_paths() {
         let app = Path::new("/tmp/My App.app");
-        let legacy = install_command(app, "USB-UDID", true);
-        assert_eq!(legacy.get_program(), "ideviceinstaller");
+        let command = install_command(app, "iPhone Name");
+        assert_eq!(command.get_program(), "/usr/bin/xcrun");
         assert_eq!(
-            legacy.get_args().collect::<Vec<_>>(),
-            ["--udid", "USB-UDID", "install", "/tmp/My App.app"]
-        );
-        let native = install_command(app, "iPhone Name", false);
-        assert_eq!(native.get_program(), "/usr/bin/xcrun");
-        assert_eq!(
-            native.get_args().collect::<Vec<_>>(),
+            command.get_args().collect::<Vec<_>>(),
             [
                 "devicectl",
                 "device",
