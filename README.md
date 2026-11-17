@@ -348,6 +348,33 @@ requested, `idevicedebug --detach` for launch. Launch requires a compatible
 Developer Disk Image mounted on the device and a debuggable development
 signature. Signing and entitlement checks are the same as the default route.
 
+#### Experimental: `--native` (no Xcode, no libimobiledevice)
+
+> **Experimental.** Implemented against an in-process fake device only; it has
+> not yet been validated on real hardware. The default `devicectl` route and
+> `--legacy-device` are unchanged.
+
+`--native` installs in-process with ipakeep's own Rust implementation of the
+device protocols: it talks to **usbmuxd** (`/var/run/usbmuxd` on macOS/Linux,
+`127.0.0.1:27015` on Windows, or `USBMUXD_SOCKET_ADDRESS`), reads the host's
+pair record, opens a **lockdownd** session upgraded to TLS with that record
+(the device certificate is pinned to the record), uploads the signed bundle to
+`PublicStaging` over **AFC**, and installs it through **installation_proxy**,
+printing its progress:
+
+```bash
+ipakeep device install-ipa MyApp-decrypted.ipa \
+  --native --device <usb-udid> \
+  --identity "Apple Development: Your Name (TEAMID)" \
+  --provisioning-profile ./App.mobileprovision
+```
+
+Limits: the device must already be paired ("Trust This Computer"); `--device`
+must be its UDID; `--run` is not supported (launching on iOS 17+ needs the
+personalized Developer Disk Image and a CoreDevice tunnel); TLS 1.2+ only.
+Re-signing still uses `/usr/bin/codesign`, so the command as a whole still
+needs macOS even though the install protocols themselves are cross-platform.
+
 Repeat `--provisioning-profile` for extensions with different bundle IDs. An
 explicit App ID profile takes priority over a wildcard profile; missing or
 ambiguous matches fail before signing.
@@ -502,7 +529,7 @@ ipakeep auth revoke
 | `ipakeep simulator install-ipa <ipa> [--run] [--udid <id> \| --device <name>] [--entitlements <plist>] [--console]` | Extract, reject encrypted App Store IPAs, prepare, sign, install, and optionally launch a Simulator-compatible IPA. `--console` requires `--run` |
 | `ipakeep simulator unlock-runtime [path]` | Create a read-write overlay for a path inside an iOS `.simruntime`; defaults to the booted Simulator runtime root |
 | `ipakeep decrypt <inspect\|dump\|dump-mac\|patch\|verify\|entitlements\|set-min-os>` | Inspect encryption, dump a running app, patch dumped slices, verify, report entitlements that break after re-signing, lower the minimum OS |
-| `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--legacy-device`, `--run`) |
+| `ipakeep device install-ipa <ipa>` | Verify, re-sign, install, and optionally launch a decrypted IPA on a connected iOS device (`--device`, `--identity`, `--provisioning-profile`, `--entitlements`, `--legacy-device`, experimental `--native`, `--run`) |
 
 ### Global Flags
 
