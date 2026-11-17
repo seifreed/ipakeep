@@ -1,0 +1,12 @@
+# Frozen Unicorn oracle for native/coverage_tests/diff_ldst.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_ldst::exclusive_pairs_load_then_store
+c87f1404 c8230801 887fa007 88268801 | x0=20000 x1=1111222233334444 x2=5555666677778888 x3=9 x6=9 => pc=10010 x3=0 x6=0 x7=33334444 x8=11112222
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_ldst::ldpsw_sign_extends_and_no_allocate_pairs
+a8011003 a8411805 69420801 | x0=20000 x3=180000000 x4=7fffffff => pc=1000c x1=ffffffff80000000 x2=1 x5=180000000 x6=7fffffff
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_ldst::prefetches_are_no_ops
+f9800000 f8a16800 d8000040 | x0=20000 x1=8 => pc=1000c

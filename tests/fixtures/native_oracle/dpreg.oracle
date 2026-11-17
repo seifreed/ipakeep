@@ -1,0 +1,81 @@
+# Frozen Unicorn oracle for native/dpreg.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::adc_sbc_use_carry
+eb0700df 9a020020 da050083 | x1=10 x2=20 x4=100 x5=1 x6=5 x7=3 => pc=1000c nzcv=20000000 x0=31 x3=ff
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::adcs_sbcs_set_flags
+ba020020 fa050083 | x1=ffffffffffffffff x2=1 => pc=10008 nzcv=60000000
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::add_extended_sxtx_and_sp
+8b22ec3f eb244460 | x1=50000 x2=40 x3=10000 x4=80000001 => pc=10008 sp=50200 nzcv=80000000 x0=ffffffff0000fffe
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::add_extended_uxtb_sxth
+8b220820 8b22a023 | x1=1000 x2=ffffff85 => pc=10008 x0=1214 x3=f85
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::add_sub_shifted_basic
+8b020820 cb820423 | x1=10000 x2=fffffffffffffff0 => pc=10008 x0=ffc0 x3=10008
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::adds_subs_shifted_flags_overflow
+ab020020 eb050083 | x1=7fffffffffffffff x2=1 x5=1 => pc=10008 nzcv=80000000 x0=8000000000000000 x3=ffffffffffffffff
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::ands_bics_set_flags
+ea020020 ea250083 | x1=ff x2=f x4=f x5=f => pc=10008 nzcv=40000000 x0=f
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::ccmn_condition_false_uses_imm
+eb02003f ba441067 | x1=5 x2=5 x3=1 x4=1 => pc=10008 nzcv=70000000
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::ccmp_register_and_immediate
+eb02003f fa441060 fa4708af | x1=1 x2=9 x3=5 x4=5 x5=7 => pc=1000c nzcv=60000000
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::cls_32bit_negative
+5ac01420 | - => pc=10004 x0=1f
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::clz_cls_counts
+dac01020 dac01422 dac01083 | x1=ffffffffffff => pc=1000c x0=10 x2=f x3=40
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::csel_csinc_csinv_csneg
+eb02003f 9a840060 9a841465 da84b066 da84a467 | x1=9 x2=1 x3=1234 x4=56789abcdef01234 => pc=10014 nzcv=20000000 x0=56789abcdef01234 x5=1234 x6=a9876543210fedcb x7=1234
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::cset_via_csinc_32bit
+6b02003f 1a9f17e0 | x1=3 x2=3 => pc=10008 nzcv=60000000 x0=1
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::logical_32bit_zero_extends
+0a021020 | x1=ffffffffffffffff x2=12345678 => pc=10004 x0=23456780
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::logical_and_orr_eor_variants
+8a020020 aa021023 ca422024 | x1=123456789abcdef0 x2=f0f0f0f0f0f0f0f => pc=1000c x0=20406080a0c0e00 x3=f2f4f6f8fafcfef0 x4=123b597795b3d1ff
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::logical_bic_orn_eon_and_ror
+8a220020 aaa21023 cae24024 | x1=ffff0000ffff0000 x2=80000000000000ff => pc=1000c x0=7fff0000ffff0000 x3=fffffffffffffff0 x4=ff7fff0000ffff
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::madd_msub
+9b020c20 9b028c24 | x1=100 x2=3 x3=7 => pc=10008 x0=307 x4=fffffffffffffd07
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::rbit_rev_rev16_rev32
+dac00020 dac00c22 dac00423 dac00824 | x1=123456789abcdef => pc=10010 x0=f7b3d591e6a2c480 x2=efcdab8967452301 x3=23016745ab89efcd x4=67452301efcdab89
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::rev_rbit_32bit
+5ac00820 5ac00022 5ac00423 | x1=12345678 => pc=1000c x0=78563412 x2=1e6a2c48 x3=34127856
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::sdiv_int_min_overflow
+9ac20c20 | x1=8000000000000000 x2=ffffffffffffffff => pc=10004 x0=8000000000000000
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::smaddl_umaddl_long_multiply
+9b220c20 9ba20c24 9b228c25 | x1=ffffffff x2=2 x3=1000 => pc=1000c x0=ffe x4=200000ffe x5=1002
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::smulh_umulh_high_product
+9b427c20 9bc27c23 | x1=ffffffffffffffff x2=2 => pc=10008 x0=ffffffffffffffff x3=1
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::subs_32bit_carry
+6b020020 | x1=10 x2=20 => pc=10004 nzcv=80000000 x0=fffffff0
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::udiv_sdiv_including_div_by_zero
+9ac20820 9ac40c23 9adf0825 | x1=fffffffffffffff0 x2=7 x4=fffffffffffffffe => pc=1000c x0=2492492492492490 x3=8
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::variable_shift_32bit
+1ac22020 | x1=1 x2=21 => pc=10004 x0=2
+
+# infrastructure::apple_sap::emu::native::dpreg::tests::variable_shifts_lslv_lsrv_asrv_rorv
+9ac22020 9ac22423 9ac22824 9ac22c25 | x1=80000000000000ff x2=44 => pc=10010 x0=ff0 x3=80000000000000f x4=f80000000000000f x5=f80000000000000f

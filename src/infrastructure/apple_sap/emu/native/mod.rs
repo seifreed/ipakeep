@@ -4,8 +4,9 @@
 //!
 //! It executes the already-PAC-stripped A64 code of the Apple SAP/ADI/kbsync
 //! guest binaries. It is validated **differentially against Unicorn** (see
-//! [`diff`] and `coverage_tests::decode_oracle`, built with the `unicorn`
-//! feature) and end to end against the golden vectors of the real Apple guests.
+//! [`diff`] and `coverage_tests::decode_oracle`; Unicorn's results are frozen
+//! as fixtures by [`frozen`], so these run in the default build) and end to end
+//! against the golden vectors of the real Apple guests.
 //!
 //! Scope (from the OTP opcode histogram): the hot path is ~99.98% integer; the
 //! small NEON/FP + `eor3`/`swpal` surface follows. Anything outside the modelled
@@ -606,8 +607,10 @@ fn class_name(class: A64Class) -> &'static str {
     }
 }
 
-#[cfg(all(test, feature = "unicorn"))]
+#[cfg(test)]
 mod diff;
+#[cfg(test)]
+mod frozen;
 
 /// Coverage-closing tests (differential where an encoding executes, exact
 /// `Unsupported` where it is out of scope), kept apart from the per-group

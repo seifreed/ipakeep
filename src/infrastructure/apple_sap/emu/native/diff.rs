@@ -1,16 +1,21 @@
-//! Differential test harness: runs the same A64 code on the native interpreter
-//! and on the Unicorn backend and asserts identical architectural state.
+//! Differential test harness: runs A64 code on the native interpreter and
+//! asserts the architectural state Unicorn produced for the same case.
 //!
 //! This is the oracle for every instruction group: a group is correct when its
-//! encodings produce byte-identical registers/flags on both engines.
-//!
-//! The oracle is always [`UnicornEngine`], never the selected `Engine` (which is
-//! the native interpreter itself whenever `native-cpu` is on).
+//! encodings produce byte-identical registers/flags to the Unicorn backend.
+//! Unicorn's results are frozen in `tests/fixtures/native_oracle/` (see
+//! [`super::frozen`]), so the comparison needs no Unicorn at test time. With
+//! the `unicorn` feature the live [`UnicornEngine`] (never the selected
+//! `Engine`) is run as well and must agree with both.
 
+use std::fmt::Write as _;
+#[cfg(feature = "unicorn")]
 use std::time::Duration;
 
+#[cfg(feature = "unicorn")]
 use super::super::{Register, UnicornEngine};
 use super::NativeCpu;
+use super::frozen;
 
 const CODE: u64 = 0x1_0000;
 const DATA: u64 = 0x2_0000;
@@ -39,7 +44,7 @@ impl Default for Init {
 }
 
 /// A snapshot of comparable architectural state.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Dump {
     pub x: [u64; 31],
     pub sp: u64,
@@ -48,6 +53,7 @@ pub(super) struct Dump {
     pub v: [u128; 32],
 }
 
+#[cfg(feature = "unicorn")]
 fn run_unicorn(code: &[u32], init: &Init, steps: usize) -> Dump {
     let mut e = UnicornEngine::new().expect("engine");
     e.mem_map(CODE, 0x4000).unwrap();
@@ -120,16 +126,123 @@ fn run_native(code: &[u32], init: &Init, steps: usize) -> Dump {
     }
 }
 
-/// Runs `code` (whose length is the step count) on both engines with `init`
-/// and asserts identical state. Returns the agreed dump for value assertions.
+/// Fixture key of a case: the code words, then the non-default `init` fields.
+fn case_key(code: &[u32], init: &Init) -> String {
+    let mut key = code
+        .iter()
+        .map(|word| format!("{word:08x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    key.push_str(" |");
+    let start = key.len();
+    for (n, value) in init.x.iter().enumerate().filter(|(_, v)| **v != 0) {
+        write!(key, " x{n}={value:x}").unwrap();
+    }
+    if init.sp != STACK {
+        write!(key, " sp={:x}", init.sp).unwrap();
+    }
+    if init.nzcv != 0 {
+        write!(key, " nzcv={:x}", init.nzcv).unwrap();
+    }
+    for (n, value) in init.v.iter().enumerate().filter(|(_, v)| **v != 0) {
+        write!(key, " v{n}={value:x}").unwrap();
+    }
+    if key.len() == start {
+        key.push_str(" -");
+    }
+    key
+}
+
+/// The state a run would end in if it changed nothing but the PC.
+fn baseline(init: &Init) -> Dump {
+    Dump {
+        x: init.x,
+        sp: init.sp,
+        pc: CODE,
+        nzcv: init.nzcv & 0xf000_0000,
+        v: init.v,
+    }
+}
+
+/// Encodes `dump` as its delta from [`baseline`]: `pc` always, then every
+/// other field that changed.
+#[cfg(feature = "unicorn")]
+fn encode_dump(init: &Init, dump: &Dump) -> String {
+    let base = baseline(init);
+    let mut text = format!("pc={:x}", dump.pc);
+    if dump.sp != base.sp {
+        write!(text, " sp={:x}", dump.sp).unwrap();
+    }
+    if dump.nzcv != base.nzcv {
+        write!(text, " nzcv={:x}", dump.nzcv).unwrap();
+    }
+    for (n, (value, old)) in dump.x.iter().zip(base.x).enumerate() {
+        if *value != old {
+            write!(text, " x{n}={value:x}").unwrap();
+        }
+    }
+    for (n, (value, old)) in dump.v.iter().zip(base.v).enumerate() {
+        if *value != old {
+            write!(text, " v{n}={value:x}").unwrap();
+        }
+    }
+    text
+}
+
+/// Rebuilds the full [`Dump`] from `init` and an [`encode_dump`] delta.
+fn decode_dump(init: &Init, text: &str) -> Dump {
+    let mut dump = baseline(init);
+    for field in text.split_whitespace() {
+        let parsed = field.split_once('=').and_then(|(name, hex)| {
+            let value = u128::from_str_radix(hex, 16).ok()?;
+            let index = |prefix: char| name.strip_prefix(prefix)?.parse::<usize>().ok();
+            match name {
+                "pc" => dump.pc = u64::try_from(value).ok()?,
+                "sp" => dump.sp = u64::try_from(value).ok()?,
+                "nzcv" => dump.nzcv = u32::try_from(value).ok()?,
+                _ if name.starts_with('x') => {
+                    *dump.x.get_mut(index('x')?)? = u64::try_from(value).ok()?;
+                }
+                _ => *dump.v.get_mut(index('v')?)? = value,
+            }
+            Some(())
+        });
+        assert!(
+            parsed.is_some(),
+            "malformed oracle field `{field}` in `{text}`"
+        );
+    }
+    dump
+}
+
+/// Runs `code` (whose length is the step count) natively with `init` and
+/// asserts the state Unicorn produced for it (frozen; also live with the
+/// `unicorn` feature). Returns that state for value assertions.
 #[track_caller]
 pub(super) fn check(code: &[u32], init: Init) -> Dump {
     let steps = code.len();
+    let fixture = frozen::fixture_name(std::panic::Location::caller().file());
+    let key = case_key(code, &init);
     let native = run_native(code, &init, steps);
-    let unicorn = run_unicorn(code, &init, steps);
+    #[cfg(feature = "unicorn")]
+    {
+        let unicorn = run_unicorn(code, &init, steps);
+        frozen::record(&fixture, &key, &encode_dump(&init, &unicorn));
+        assert_eq!(
+            native, unicorn,
+            "native vs unicorn divergence for code {code:08x?}"
+        );
+        if frozen::recording() {
+            return native;
+        }
+    }
+    let Some(expected) = frozen::lookup(&fixture, &key) else {
+        frozen::missing(&fixture, &key)
+    };
     assert_eq!(
-        native, unicorn,
-        "native vs unicorn divergence for code {code:08x?}"
+        native,
+        decode_dump(&init, &expected),
+        "native vs frozen Unicorn divergence for code {code:08x?}"
     );
     native
 }

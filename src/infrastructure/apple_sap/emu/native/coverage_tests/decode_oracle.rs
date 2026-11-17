@@ -1,7 +1,7 @@
 //! Decode oracle: every size/Q/U combination of the two-register-misc,
 //! across-lanes, EXT and INS (element) groups, classified by llvm-mc
 //! (`decode_oracle_data`). Invalid and unmodelled encodings must be rejected
-//! as `Unsupported`; modelled ones must match Unicorn. This is the guard
+//! as `Unsupported`; modelled ones must match (frozen) Unicorn. This is the guard
 //! against a reserved or unmodelled encoding silently running as a neighbour.
 
 #[path = "decode_oracle_data.rs"]
@@ -31,7 +31,6 @@ fn invalid_and_unmodelled_encodings_are_rejected() {
     }
 }
 
-#[cfg(feature = "unicorn")]
 #[test]
 fn modelled_encodings_match_unicorn() {
     use super::super::diff::{Init, check};

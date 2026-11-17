@@ -353,7 +353,7 @@ fn atomic(cpu: &mut NativeCpu, word: u32, size: u32) -> Result<Step, NativeError
     Ok(Step::Next)
 }
 
-#[cfg(all(test, feature = "unicorn"))]
+#[cfg(test)]
 mod tests {
     use super::super::diff::{check, init_x};
 

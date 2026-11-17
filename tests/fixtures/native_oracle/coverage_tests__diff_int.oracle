@@ -1,0 +1,39 @@
+# Frozen Unicorn oracle for native/coverage_tests/diff_int.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::ccmn_with_condition_true_and_csneg_with_condition_false
+ba420020 da821420 | x1=1 x2=ffffffffffffffff nzcv=40000000 => pc=10008 nzcv=60000000 x0=1
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::division_corner_cases
+1ac20820 9adf0c23 1ac20c24 1adf0c25 | x1=fffffffffffffff0 x2=ffffffff00000003 => pc=10010 x0=55555550 x4=fffffffb
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::every_condition_code_under_every_flag_combination
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | - => pc=10040 x0=1 x2=1 x4=1 x6=1 x8=1 x11=1 x13=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=10000000 => pc=10040 x0=1 x2=1 x4=1 x7=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=20000000 => pc=10040 x0=1 x3=1 x4=1 x6=1 x9=1 x11=1 x13=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=30000000 => pc=10040 x0=1 x3=1 x4=1 x7=1 x9=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=40000000 => pc=10040 x1=1 x2=1 x4=1 x6=1 x8=1 x11=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=50000000 => pc=10040 x1=1 x2=1 x4=1 x7=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=60000000 => pc=10040 x1=1 x3=1 x4=1 x6=1 x8=1 x11=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=70000000 => pc=10040 x1=1 x3=1 x4=1 x7=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=80000000 => pc=10040 x0=1 x2=1 x5=1 x6=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=90000000 => pc=10040 x0=1 x2=1 x5=1 x7=1 x8=1 x11=1 x13=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=a0000000 => pc=10040 x0=1 x3=1 x5=1 x6=1 x9=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=b0000000 => pc=10040 x0=1 x3=1 x5=1 x7=1 x9=1 x11=1 x13=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=c0000000 => pc=10040 x1=1 x2=1 x5=1 x6=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=d0000000 => pc=10040 x1=1 x2=1 x5=1 x7=1 x8=1 x11=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=e0000000 => pc=10040 x1=1 x3=1 x5=1 x6=1 x8=1 x10=1 x12=1
+9a9f07e0 9a9f17e1 9a9f27e2 9a9f37e3 9a9f47e4 9a9f57e5 9a9f67e6 9a9f77e7 9a9f87e8 9a9f97e9 9a9fa7ea 9a9fb7eb 9a9fc7ec 9a9fd7ed 9a9fe7ee 9a9ff7ef | nzcv=f0000000 => pc=10040 x1=1 x3=1 x5=1 x7=1 x8=1 x11=1 x12=1
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::extended_register_options
+8b222020 8b226023 8b228024 8b22c025 0b220026 0b22003f | x1=100000000 x2=ffffffff80018081 => pc=10018 sp=81 x0=100008081 x3=80018081 x4=ffffff81 x5=80018081 x6=81
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::thirty_two_bit_immediate_forms
+31000420 72010062 93401ca4 53042ce6 138a2128 | x1=ffffffff7fffffff x3=180000001 x5=ffffff7f x7=ffffffffffffabcd x9=11223344 x10=aabbccdd => pc=10014 nzcv=80000000 x0=80000000 x2=80000000 x4=7f x6=bc x8=44aabbcc
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::thirty_two_bit_register_forms_and_ror_by_zero
+6a020020 0b820c23 1ac22824 9ac62c25 | x1=800000f0 x2=80000004 x6=40 => pc=10010 nzcv=80000000 x0=80000000 x3=700000f0 x4=f800000f x5=800000f0
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_int::umsubl_and_clz_32
+9ba28c26 5ac01027 | x1=ffffffff00001000 x2=10 x3=20000 => pc=10008 x6=10000 x7=13

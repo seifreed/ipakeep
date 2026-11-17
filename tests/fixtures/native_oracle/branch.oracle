@@ -1,0 +1,45 @@
+# Frozen Unicorn oracle for native/branch.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::branch::tests::b_taken_forward_and_backward
+14000002 d28175a9 d28159c2 17ffffff | - => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::bcond_not_taken_falls_through
+54000040 d2800220 d2800441 d503201f | - => pc=10010 x0=11 x1=22
+
+# infrastructure::apple_sap::emu::native::branch::tests::bcond_taken_when_condition_holds
+54000040 d28175a9 d28159c2 17ffffff | nzcv=40000000 => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::bl_sets_x30_and_ret_returns
+94000002 d2801540 d2801761 d65f03c0 | - => pc=10008 x0=aa x1=bb x30=10004
+
+# infrastructure::apple_sap::emu::native::branch::tests::blr_links_and_ret_returns
+10000066 d63f00c0 d2801540 d2801761 d65f03c0 | - => pc=1000c x0=aa x1=bb x6=1000c x30=10008
+
+# infrastructure::apple_sap::emu::native::branch::tests::br_to_computed_address
+10000045 d61f00a0 d2801761 17ffffff | - => pc=10008 x1=bb x5=10008
+
+# infrastructure::apple_sap::emu::native::branch::tests::cbnz_taken_when_nonzero
+b5000040 d28175a9 d28159c2 17ffffff | x0=7 => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::cbz_not_taken_falls_through
+b4000040 d2800661 d2800882 d503201f | x0=5 => pc=10010 x1=33 x2=44
+
+# infrastructure::apple_sap::emu::native::branch::tests::cbz_taken_when_zero
+b4000040 d28175a9 d28159c2 17ffffff | - => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::cbz_w_form_compares_low_32_bits
+34000040 d28175a9 d28159c2 17ffffff | x0=ffffffff00000000 => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::hints_and_barriers_are_noops
+d503201f d5033bbf d5033fdf d2800ee0 | - => pc=10010 x0=77
+
+# infrastructure::apple_sap::emu::native::branch::tests::tbnz_taken_on_high_bit
+b7400040 d28175a9 d28159c2 17ffffff | x0=10000000000 => pc=1000c x2=ace
+
+# infrastructure::apple_sap::emu::native::branch::tests::tbz_not_taken_when_bit_set
+36180040 d2800aa1 d2800cc2 d503201f | x0=8 => pc=10010 x1=55 x2=66
+
+# infrastructure::apple_sap::emu::native::branch::tests::tbz_taken_when_bit_clear
+36000040 d28175a9 d28159c2 17ffffff | - => pc=1000c x2=ace
