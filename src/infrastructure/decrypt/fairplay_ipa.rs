@@ -10,7 +10,7 @@
 //! [`assemble`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::Path;
 use zip::write::SimpleFileOptions;
 
@@ -220,12 +220,8 @@ pub fn assemble(
 
     let mut names = Vec::with_capacity(archive.len());
     for i in 0..archive.len() {
-        let name = archive
-            .by_index_raw(i)
-            .map_err(|e| e.to_string())?
-            .name()
-            .map_err(|e| e.to_string())?
-            .into_owned();
+        let entry = archive.by_index_raw(i).map_err(|e| e.to_string())?;
+        let name = entry.name().map_err(|e| e.to_string())?.into_owned();
         names.push(name);
     }
 
@@ -243,8 +239,8 @@ pub fn assemble(
     Ok(cursor.into_inner())
 }
 
-fn write_replacements(
-    writer: &mut zip::ZipWriter<Cursor<Vec<u8>>>,
+fn write_replacements<W: Write + Seek>(
+    writer: &mut zip::ZipWriter<W>,
     replacements: &BTreeMap<String, Vec<u8>>,
     keep_watch: bool,
 ) -> Result<BTreeSet<String>, String> {
@@ -402,6 +398,19 @@ mod tests {
     }
 
     #[test]
+    fn enclosing_app_sinf_falls_back_to_the_first_v4_sinf() {
+        let names = set(&[
+            "Payload/App.app/SC_Info/Other.v4.sinf",
+            "Payload/App.app/SC_Info/Zed.v4.sinf",
+        ]);
+        let found = enclosing_app_sinf(&names, "Payload/App.app/PlugIns/Ext.appex");
+        assert_eq!(
+            found.as_deref(),
+            Some("Payload/App.app/SC_Info/Other.v4.sinf")
+        );
+    }
+
+    #[test]
     fn enclosing_app_sinf_none_without_app() {
         let names = set(&["Payload/App.app/SC_Info/App.sinf"]);
         assert!(enclosing_app_sinf(&names, "Payload/Loose/Dir").is_none());
@@ -545,5 +554,169 @@ mod tests {
         assert!(!members.contains_key("Payload/App.app/SC_Info/App.v5.supf"));
         assert!(!members.contains_key("Payload/App.app/SC_Info/Replacement.sinf"));
         assert!(!members.contains_key("iTunesMetadata.plist"));
+    }
+
+    fn write_temp_zip(tag: &str, zip: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(format!("{tag}.ipa"));
+        std::fs::write(&path, zip).unwrap();
+        (directory, path)
+    }
+
+    #[test]
+    fn read_members_reports_corrupt_member_data() {
+        let zip = super::super::tests::corrupt_stored_data(
+            super::super::tests::zip_members(&[("Payload/App.app/App", b"binary-bytes")]),
+            b"binary-bytes",
+        );
+        let (_directory, path) = write_temp_zip("crc", &zip);
+
+        let error = read_members(&path).unwrap_err();
+        assert!(error.starts_with("read Payload/App.app/App: "), "{error}");
+    }
+
+    #[test]
+    fn assemble_reports_unreadable_member_headers() {
+        let zip = super::super::tests::corrupt_local_header(
+            super::super::tests::zip_members(&[("Payload/App.app/App", b"binary")]),
+            0,
+        );
+        let (_directory, path) = write_temp_zip("header", &zip);
+
+        let error = assemble(&path, &BTreeMap::new(), false).unwrap_err();
+        assert!(error.contains("Invalid local file header"), "{error}");
+    }
+
+    /// A name the source zip can hold (its length is a `u16`) but too long for
+    /// a copied local header, which must also fit the 30 fixed bytes in 64 KiB.
+    const UNCOPYABLE_NAME_LENGTH: u16 = 65_520;
+    const LOCAL_HEADER_SIGNATURE: u32 = 0x0403_4b50;
+    const CENTRAL_HEADER_SIGNATURE: u32 = 0x0201_4b50;
+    const END_OF_CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0605_4b50;
+    const ZIP_VERSION: u16 = 20;
+    /// 1980-01-01, the first valid DOS date.
+    const DOS_DATE: u16 = 0x21;
+
+    fn push_u16(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Version, flags, method, time, date, CRC and sizes of an empty stored
+    /// entry, then the name length and an empty extra field.
+    fn push_entry_fields(out: &mut Vec<u8>, name: &[u8]) {
+        for value in [ZIP_VERSION, 0, 0, 0, DOS_DATE] {
+            push_u16(out, value);
+        }
+        for _ in 0..3 {
+            push_u32(out, 0);
+        }
+        push_u16(out, u16::try_from(name.len()).unwrap());
+        push_u16(out, 0);
+    }
+
+    /// Hand-built single-entry zip (an empty stored member named `name`):
+    /// `ZipWriter` itself refuses names this long.
+    fn single_entry_zip(name: &[u8]) -> Vec<u8> {
+        let mut zip = Vec::new();
+        push_u32(&mut zip, LOCAL_HEADER_SIGNATURE);
+        push_entry_fields(&mut zip, name);
+        zip.extend_from_slice(name);
+        let central_start = zip.len();
+        push_u32(&mut zip, CENTRAL_HEADER_SIGNATURE);
+        push_u16(&mut zip, ZIP_VERSION);
+        push_entry_fields(&mut zip, name);
+        for value in [0, 0, 0] {
+            push_u16(&mut zip, value);
+        }
+        push_u32(&mut zip, 0);
+        push_u32(&mut zip, 0);
+        zip.extend_from_slice(name);
+        let central_size = zip.len() - central_start;
+        push_u32(&mut zip, END_OF_CENTRAL_DIRECTORY_SIGNATURE);
+        for value in [0, 0, 1, 1] {
+            push_u16(&mut zip, value);
+        }
+        push_u32(&mut zip, u32::try_from(central_size).unwrap());
+        push_u32(&mut zip, u32::try_from(central_start).unwrap());
+        push_u16(&mut zip, 0);
+        zip
+    }
+
+    #[test]
+    fn assemble_reports_members_that_cannot_be_copied() {
+        let name = "a".repeat(usize::from(UNCOPYABLE_NAME_LENGTH));
+        let (_directory, path) = write_temp_zip("long-name", &single_entry_zip(name.as_bytes()));
+
+        let error = assemble(&path, &BTreeMap::new(), false).unwrap_err();
+        assert!(error.starts_with(&format!("copy {name}: ")), "{error}");
+    }
+
+    /// Longer than the 64 KiB a zip local header can hold.
+    const OVERSIZED_NAME_LENGTH: usize = 70_000;
+
+    #[test]
+    fn write_replacements_reports_entries_that_cannot_be_created() {
+        let name = "a".repeat(OVERSIZED_NAME_LENGTH);
+        let replacements = BTreeMap::from([(name.clone(), b"data".to_vec())]);
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+
+        let error = write_replacements(&mut writer, &replacements, false).unwrap_err();
+        assert!(error.starts_with(&format!("create {name}: ")), "{error}");
+    }
+
+    /// Bytes the failing writer accepts: room for a local header, not the data.
+    const WRITABLE_PREFIX: u64 = 128;
+    /// Enough incompressible data to force the deflater to flush.
+    const INCOMPRESSIBLE_LENGTH: usize = 1 << 20;
+
+    /// Seekable writer that fails once its position passes `WRITABLE_PREFIX`.
+    struct FailingWriter(Cursor<Vec<u8>>);
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.0.position() + bytes.len() as u64 > WRITABLE_PREFIX {
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.0.write(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for FailingWriter {
+        fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(position)
+        }
+    }
+
+    fn incompressible(length: usize) -> Vec<u8> {
+        let mut state: u32 = 0x1234_5678;
+        (0..length)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state.to_le_bytes()[0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn write_replacements_reports_entries_that_cannot_be_written() {
+        let name = "Payload/App.app/App".to_string();
+        let replacements = BTreeMap::from([(name, incompressible(INCOMPRESSIBLE_LENGTH))]);
+        let mut writer = zip::ZipWriter::new(FailingWriter(Cursor::new(Vec::new())));
+
+        let error = write_replacements(&mut writer, &replacements, false).unwrap_err();
+        assert!(
+            error.starts_with("write Payload/App.app/App: ") && error.contains("disk full"),
+            "{error}"
+        );
     }
 }

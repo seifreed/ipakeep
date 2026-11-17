@@ -100,15 +100,34 @@ pub(super) fn find_info_plist_name<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
 ) -> Result<Option<String>, String> {
     for index in 0..archive.len() {
-        let name = archive
-            .by_index(index)
-            .map_err(|error| error.to_string())?
-            .name()
-            .map_err(|error| error.to_string())?
-            .to_string();
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let name = entry.name().map_err(|error| error.to_string())?.to_string();
         if name.starts_with("Payload/") && name.ends_with(".app/Info.plist") {
             return Ok(Some(name));
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{CP437_TWIN_NAME, corrupt_local_header, cp437_twin_zip};
+    use super::*;
+
+    #[test]
+    fn info_plist_patch_reports_entries_that_cannot_be_opened() {
+        // The lookup returns the CP437 entry's decoded name; opening that name
+        // resolves to the UTF-8 twin, whose local header is broken.
+        let ipa = corrupt_local_header(cp437_twin_zip(b"<plist/>", b"x"), 1);
+        let mut archive = open_archive(&ipa).expect("archive");
+        assert_eq!(
+            find_info_plist_name(&mut archive)
+                .expect("lookup")
+                .as_deref(),
+            Some(CP437_TWIN_NAME)
+        );
+
+        let error = patched_info_plist(&mut archive, "12.0").expect_err("unopenable");
+        assert!(error.contains("Invalid local file header"), "{error}");
+    }
 }

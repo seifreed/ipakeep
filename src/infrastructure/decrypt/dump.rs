@@ -897,6 +897,15 @@ mod tests {
     }
 
     #[test]
+    fn reports_unwritable_fouldecrypt_runner_path() {
+        let work = tempfile::tempdir().expect("temporary directory");
+        let missing = work.path().join("missing");
+        let error = write_fouldecrypt_script(&missing).expect_err("missing work directory");
+        let expected = format!("{}: ", missing.join("run.sh").display());
+        assert!(error.starts_with(&expected), "{error}");
+    }
+
+    #[test]
     fn writes_fouldecrypt_runner_into_work_directory() {
         let work = tempfile::tempdir().expect("temporary directory");
         let script = PathBuf::from(write_fouldecrypt_script(work.path()).unwrap());

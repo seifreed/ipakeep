@@ -101,7 +101,7 @@ fn build_ipa(executable: &[u8]) -> Vec<u8> {
     ])
 }
 
-fn zip_members(members: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn zip_members(members: &[(&str, &[u8])]) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let opts =
         zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -1040,4 +1040,109 @@ fn macho_parser_handles_fat64_and_malformed_or_unknown_slices() {
     assert!(!macho::is_macho(&[]));
     assert!(macho::parse(b"bad!").is_err());
     assert!(macho::retain_slices(&slices[0].2, |_| true).is_err());
+}
+
+/// Name both entries of [`cp437_twin_zip`] decode to.
+pub(super) const CP437_TWIN_NAME: &str = "Payload/\u{c7}.app/Info.plist";
+/// ASCII stand-in, as long as the CP437 spelling of [`CP437_TWIN_NAME`].
+const CP437_PLACEHOLDER: &str = "Payload/X.app/Info.plist";
+const CP437_PLACEHOLDER_BYTE: u8 = b'X';
+/// `Ç` in code page 437.
+const CP437_C_CEDILLA: u8 = 0x80;
+const LOCAL_HEADER_SIGNATURE: &[u8] = b"PK\x03\x04";
+
+/// Positions of every occurrence of `needle` in `haystack`.
+fn occurrences(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
+    haystack
+        .windows(needle.len())
+        .enumerate()
+        .filter_map(|(index, window)| (window == needle).then_some(index))
+        .collect()
+}
+
+/// Stored zip with two entries whose raw names differ but both decode to
+/// [`CP437_TWIN_NAME`]: `first` under a CP437 name (no UTF-8 flag), then
+/// `second` under the UTF-8 name.
+pub(super) fn cp437_twin_zip(first: &[u8], second: &[u8]) -> Vec<u8> {
+    let mut zip = zip_members(&[(CP437_PLACEHOLDER, first), (CP437_TWIN_NAME, second)]);
+    let marker = CP437_PLACEHOLDER
+        .bytes()
+        .position(|byte| byte == CP437_PLACEHOLDER_BYTE)
+        .unwrap();
+    for at in occurrences(&zip, CP437_PLACEHOLDER.as_bytes()) {
+        zip[at + marker] = CP437_C_CEDILLA;
+    }
+    zip
+}
+
+/// Break the signature of the `index`-th local file header.
+pub(super) fn corrupt_local_header(mut zip: Vec<u8>, index: usize) -> Vec<u8> {
+    let at = occurrences(&zip, LOCAL_HEADER_SIGNATURE)[index];
+    zip[at] = 0;
+    zip
+}
+
+/// Flip the first byte of the stored `payload` so its CRC no longer matches.
+pub(super) fn corrupt_stored_data(mut zip: Vec<u8>, payload: &[u8]) -> Vec<u8> {
+    let at = occurrences(&zip, payload)[0];
+    zip[at] ^= 0xff;
+    zip
+}
+
+#[test]
+fn removing_slices_from_a_thin_binary_names_the_entry() {
+    let mut bytes = thin_macho(CPU_TYPE_ARM64, 0, MINOS_16, 0);
+    let missing = [(0, "arm64".to_string())];
+    let error =
+        remove_missing_slices("Payload/Test.app/TestExec", &mut bytes, &[], &missing).unwrap_err();
+    assert_eq!(
+        error,
+        "Payload/Test.app/TestExec: only fat Mach-Os can be thinned"
+    );
+}
+
+#[test]
+fn repack_reports_entries_that_cannot_be_rewritten() {
+    let ipa = cp437_twin_zip(INFO_PLIST.as_bytes(), INFO_PLIST.as_bytes());
+    let patched = BTreeMap::from([(CP437_TWIN_NAME.to_string(), b"patched".to_vec())]);
+    let error = repack(&ipa, &patched, &BTreeSet::new()).unwrap_err();
+    assert!(error.contains("Duplicate filename"), "{error}");
+}
+
+#[test]
+fn app_info_reports_unopenable_and_corrupt_info_plists() {
+    let unopenable = corrupt_local_header(cp437_twin_zip(INFO_PLIST.as_bytes(), b"x"), 1);
+    let mut archive = open_archive(&unopenable).unwrap();
+    let error = read_app_info(&mut archive).unwrap_err();
+    assert!(error.contains("Invalid local file header"), "{error}");
+
+    let corrupt = corrupt_stored_data(build_ipa(b"exec"), INFO_PLIST.as_bytes());
+    let mut archive = open_archive(&corrupt).unwrap();
+    let error = read_app_info(&mut archive).unwrap_err();
+    assert!(error.contains("checksum"), "{error}");
+}
+
+#[test]
+fn info_plist_lookup_reports_unopenable_entries() {
+    let ipa = corrupt_local_header(build_ipa(b"exec"), 0);
+    let mut archive = open_archive(&ipa).unwrap();
+    let error = min_os::find_info_plist_name(&mut archive).unwrap_err();
+    assert!(error.contains("Invalid local file header"), "{error}");
+}
+
+#[test]
+fn set_min_os_reports_corrupt_and_unencodable_info_plists() {
+    let corrupt = corrupt_stored_data(build_ipa(b"exec"), INFO_PLIST.as_bytes());
+    let error = set_min_os(&corrupt, "12.0").unwrap_err();
+    assert!(error.contains("checksum"), "{error}");
+
+    let mut info = plist::Dictionary::new();
+    info.insert("archived".into(), plist::Value::Uid(plist::Uid::new(1)));
+    let mut binary = Vec::new();
+    plist::Value::Dictionary(info)
+        .to_writer_binary(&mut binary)
+        .unwrap();
+    let ipa = zip_members(&[("Payload/Test.app/Info.plist", &binary)]);
+    let error = set_min_os(&ipa, "12.0").unwrap_err();
+    assert!(error.starts_with("re-encoding Info.plist: "), "{error}");
 }

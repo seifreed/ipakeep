@@ -96,6 +96,12 @@ fn be_u64(data: &[u8], off: usize) -> Result<u64, String> {
         .ok_or_else(|| "unexpected end of data".to_string())
 }
 
+/// A big-endian `u64` at `off` as `usize`; `overflow` names the field when it
+/// does not fit (only possible on hosts with a pointer narrower than 64 bits).
+fn be_u64_usize(data: &[u8], off: usize, overflow: &str) -> Result<usize, String> {
+    usize::try_from(be_u64(data, off)?).map_err(|_| overflow.to_string())
+}
+
 fn le_u32(data: &[u8], off: usize) -> Result<u32, String> {
     data.get(off..off + 4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
@@ -151,10 +157,8 @@ fn parse_fat_slice(
     let offset = FAT_HEADER_SIZE + index * entry_size;
     let (base, size) = if is_64_bit {
         (
-            usize::try_from(be_u64(data, offset + 8)?)
-                .map_err(|_| "Mach-O slice offset too large".to_string())?,
-            usize::try_from(be_u64(data, offset + 16)?)
-                .map_err(|_| "Mach-O slice size too large".to_string())?,
+            be_u64_usize(data, offset + 8, "Mach-O slice offset too large")?,
+            be_u64_usize(data, offset + 16, "Mach-O slice size too large")?,
         )
     } else {
         (
@@ -822,6 +826,56 @@ fn page_key_record<'a>(supf: &'a [u8], offset: &mut usize) -> Result<&'a [u8], S
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    #[test]
+    fn integer_readers_report_truncated_data() {
+        let short = [0u8; 3];
+        for result in [be_u32(&short, 0), le_u32(&short, 0)] {
+            assert_eq!(result.unwrap_err(), "unexpected end of data");
+        }
+        assert_eq!(be_u64(&[0u8; 7], 0).unwrap_err(), "unexpected end of data");
+        assert_eq!(be_u32(&[0, 0, 0, 7], 0), Ok(7));
+        assert_eq!(le_u32(&[7, 0, 0, 0], 0), Ok(7));
+        assert_eq!(be_u64(&[0, 0, 0, 0, 0, 0, 0, 7], 0), Ok(7));
+    }
+
+    #[test]
+    fn cbc_decryption_rejects_bad_keys_and_partial_blocks() {
+        const BLOCK: usize = 16;
+        let key = [0u8; BLOCK];
+        let short_key = cbc_error(aes128_cbc_decrypt_no_pad(&key[..4], &key, &[0u8; BLOCK]));
+        assert!(short_key.starts_with("invalid AES key/IV: "), "{short_key}");
+        let partial = cbc_error(aes128_cbc_decrypt_no_pad(&key, &key, &[0u8; BLOCK - 1]));
+        assert!(partial.starts_with("CBC decryption failed: "), "{partial}");
+        let plain = aes128_cbc_decrypt_no_pad(&key, &key, &[0u8; BLOCK]).expect("one block");
+        assert_eq!(plain.len(), BLOCK);
+    }
+
+    fn cbc_error(result: Result<Vec<u8>, String>) -> String {
+        result.expect_err("CBC decryption must fail")
+    }
+
+    #[test]
+    fn page_key_records_reject_truncated_or_overflowing_offsets() {
+        const RECORD: usize = 32;
+        let supf = [0u8; RECORD + 1];
+        let mut offset = 1;
+        assert_eq!(
+            page_key_record(&supf, &mut offset).map(<[u8]>::len),
+            Ok(RECORD)
+        );
+        assert_eq!(offset, RECORD + 1);
+        assert_eq!(
+            page_key_record(&supf, &mut offset).unwrap_err(),
+            "truncated SUPF/SUPP page record"
+        );
+        let mut overflowing = usize::MAX - 1;
+        assert_eq!(
+            page_key_record(&supf, &mut overflowing).unwrap_err(),
+            "truncated SUPF/SUPP page record"
+        );
+        assert_eq!(overflowing, usize::MAX - 1);
+    }
 
     /// Build an MP4-style atom: 4-byte big-endian size, 4-byte tag, payload.
     fn atom(tag: [u8; 4], payload: &[u8]) -> Vec<u8> {
