@@ -56,13 +56,21 @@ impl AnisetteFields {
     }
 }
 
+/// Locale reported when `LANG` does not provide one.
+const DEFAULT_LOCALE: &str = "en_US";
+
 /// Resolve the request locale from the `LANG` environment variable.
 fn current_locale() -> String {
-    std::env::var("LANG")
-        .unwrap_or_else(|_| "en_US".into())
+    locale_from_lang(std::env::var("LANG"))
+}
+
+/// Strip the encoding suffix from a `LANG` value, falling back to
+/// [`DEFAULT_LOCALE`] when the variable is unset or not valid Unicode.
+fn locale_from_lang(lang: Result<String, std::env::VarError>) -> String {
+    lang.unwrap_or_else(|_| DEFAULT_LOCALE.into())
         .split('.')
         .next()
-        .unwrap_or("en_US")
+        .unwrap_or(DEFAULT_LOCALE)
         .to_string()
 }
 
@@ -157,6 +165,19 @@ mod tests {
             panic!("headers without an OTP must be rejected");
         };
         assert!(error.to_string().contains("X-Apple-I-MD"), "{error}");
+    }
+
+    #[test]
+    fn unset_lang_falls_back_to_default_locale() {
+        assert_eq!(
+            locale_from_lang(Err(std::env::VarError::NotPresent)),
+            DEFAULT_LOCALE
+        );
+    }
+
+    #[test]
+    fn lang_encoding_suffix_is_stripped() {
+        assert_eq!(locale_from_lang(Ok("es_ES.UTF-8".to_string())), "es_ES");
     }
 
     #[test]
