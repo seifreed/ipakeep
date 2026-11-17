@@ -13,6 +13,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 
+/// Prefixes a local file system error with the `path` it concerns.
+fn path_error(path: &Path) -> impl FnOnce(std::io::Error) -> String + '_ {
+    move |error| format!("{}: {error}", path.display())
+}
+
 /// lockdownd service name.
 pub(crate) const SERVICE: &str = "com.apple.afc";
 pub(super) const MAGIC: &[u8; 8] = b"CFA6LPAA";
@@ -204,8 +209,7 @@ impl Afc {
     }
 
     fn write_file(&mut self, local: &Path, remote: &str) -> Result<(), String> {
-        let mut file =
-            fs::File::open(local).map_err(|error| format!("{}: {error}", local.display()))?;
+        let mut file = fs::File::open(local).map_err(path_error(local))?;
         let mut data = OPEN_WRITE_ONLY.to_le_bytes().to_vec();
         data.extend(c_path(remote));
         let what = format!("open {remote}");
@@ -221,9 +225,7 @@ impl Afc {
         };
         let mut buffer = vec![0; CHUNK];
         loop {
-            let read = file
-                .read(&mut buffer)
-                .map_err(|error| format!("{}: {error}", local.display()))?;
+            let read = file.read(&mut buffer).map_err(path_error(local))?;
             if read == 0 {
                 break;
             }
@@ -242,17 +244,14 @@ impl Afc {
         self.make_dir(remote)?;
         let mut entries = fs::read_dir(local)
             .and_then(Iterator::collect::<Result<Vec<_>, _>>)
-            .map_err(|error| format!("{}: {error}", local.display()))?;
+            .map_err(path_error(local))?;
         entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
             let path = entry.path();
             let target = format!("{remote}/{}", entry.file_name().to_string_lossy());
-            let kind = entry
-                .file_type()
-                .map_err(|error| format!("{}: {error}", path.display()))?;
+            let kind = entry.file_type().map_err(path_error(&path))?;
             if kind.is_symlink() {
-                let link =
-                    fs::read_link(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+                let link = fs::read_link(&path).map_err(path_error(&path))?;
                 self.symlink(&link.to_string_lossy(), &target)?;
             } else if kind.is_dir() {
                 self.upload_dir(&path, &target)?;
@@ -267,7 +266,79 @@ impl Afc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{self, Cursor};
+
+    /// A device stream that rejects every write.
+    struct UnwritableStream;
+
+    impl Read for UnwritableStream {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl Write for UnwritableStream {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("broken pipe"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A device stream that accepts writes and replays canned replies.
+    struct ScriptedStream {
+        replies: Cursor<Vec<u8>>,
+    }
+
+    impl Read for ScriptedStream {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.replies.read(buffer)
+        }
+    }
+
+    impl Write for ScriptedStream {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn request_write_failures_are_reported() {
+        let mut afc = Afc::new(Box::new(UnwritableStream));
+        assert_eq!(
+            afc.make_dir("PublicStaging").unwrap_err(),
+            "I/O error while sending an AFC request: broken pipe"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_read_failures_name_the_local_path() {
+        // Opening a directory succeeds on Unix, but reading it fails.
+        let local = tempfile::tempdir().unwrap();
+        let opened = Packet {
+            number: 0,
+            operation: op::FILE_OPEN_RESULT,
+            data: 1_u64.to_le_bytes().to_vec(),
+            payload: Vec::new(),
+        };
+        let mut afc = Afc::new(Box::new(ScriptedStream {
+            replies: Cursor::new(opened.encode()),
+        }));
+
+        let error = afc.write_file(local.path(), "PublicStaging/x").unwrap_err();
+
+        assert!(
+            error.starts_with(&format!("{}: ", local.path().display())),
+            "{error}"
+        );
+    }
 
     #[test]
     fn packets_round_trip_with_header_data_and_payload() {

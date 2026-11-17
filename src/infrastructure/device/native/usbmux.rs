@@ -153,7 +153,15 @@ fn request(
     message_type: &str,
     extra: Dictionary,
 ) -> Result<(BoxStream, Dictionary), String> {
-    let mut stream = address.connect()?;
+    exchange(address.connect()?, message_type, extra)
+}
+
+/// Send one request on the connected `stream` and read its tagged reply.
+fn exchange(
+    mut stream: BoxStream,
+    message_type: &str,
+    extra: Dictionary,
+) -> Result<(BoxStream, Dictionary), String> {
     let mut message = dict([
         ("MessageType", message_type.into()),
         ("ClientVersionString", "ipakeep".into()),
@@ -271,7 +279,38 @@ pub(crate) fn connect(address: &Address, device_id: u64, port: u16) -> Result<Bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Read, Write};
+
+    /// A usbmuxd socket that rejects every write.
+    struct UnwritableStream;
+
+    impl Read for UnwritableStream {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl Write for UnwritableStream {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("broken pipe"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn request_write_failures_are_reported() {
+        let Err(error) = exchange(Box::new(UnwritableStream), "ListDevices", Dictionary::new())
+        else {
+            panic!("an unwritable socket must fail the request");
+        };
+        assert_eq!(
+            error,
+            "I/O error while sending a usbmuxd request: broken pipe"
+        );
+    }
 
     fn device(id: u64, serial: &str, connection: &str) -> Device {
         Device {

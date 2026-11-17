@@ -663,3 +663,69 @@ fn signed_app_without_entitlements(root: &Path) -> PathBuf {
     assert!(status.success());
     app
 }
+
+/// Write `entitlements` as an override plist under `dir`.
+fn entitlement_override(dir: &Path, entitlements: Dictionary) -> PathBuf {
+    let path = dir.join("override.plist");
+    Value::Dictionary(entitlements).to_file_xml(&path).unwrap();
+    path
+}
+
+#[test]
+fn prepare_target_prefixes_unauthorized_entitlements_with_the_bundle_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let requested = Dictionary::from_iter([(
+        "com.apple.developer.healthkit".to_string(),
+        Value::Boolean(true),
+    )]);
+    let override_path = entitlement_override(dir.path(), requested);
+    let profiles = [profile("PREFIX.com.example.test")];
+
+    let error = prepare_target(&app, &profiles, Some(&override_path), dir.path(), 0).unwrap_err();
+
+    assert!(
+        error.starts_with("com.example.test: entitlement \"com.apple.developer.healthkit\""),
+        "{error}"
+    );
+}
+
+#[test]
+fn prepare_target_reports_unwritable_entitlement_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let override_path = entitlement_override(dir.path(), Dictionary::new());
+    let workdir = dir.path().join("missing-workdir");
+    let profiles = [profile("PREFIX.com.example.test")];
+
+    let error = prepare_target(&app, &profiles, Some(&override_path), &workdir, 0).unwrap_err();
+
+    let expected = workdir.join("entitlements-0.plist");
+    assert!(
+        error.starts_with(&format!("{}: ", expected.display())),
+        "{error}"
+    );
+}
+
+#[test]
+fn prepare_target_reports_profiles_that_cannot_be_embedded() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let override_path = entitlement_override(dir.path(), Dictionary::new());
+    let mut missing_profile = profile("PREFIX.com.example.test");
+    missing_profile.path = dir.path().join("missing.mobileprovision");
+
+    let error = prepare_target(
+        &app,
+        &[missing_profile],
+        Some(&override_path),
+        dir.path(),
+        0,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.starts_with(&format!("embedding profile in {}: ", app.display())),
+        "{error}"
+    );
+}
