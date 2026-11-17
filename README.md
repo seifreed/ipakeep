@@ -768,7 +768,7 @@ use PGO.
 
 ## Requirements
 
-- Rust toolchain (edition 2024); no C toolchain is needed
+- Rust 1.100 or newer (edition 2024; the exact toolchain is pinned in `rust-toolchain.toml`); no C toolchain is needed
 - See [Cargo.toml](Cargo.toml) for dependencies
 
 ## SBOM

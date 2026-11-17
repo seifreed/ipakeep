@@ -18,8 +18,7 @@ pub(super) fn ipa_filename(metadata: &DownloadMetadata, app_id: i64, index: usiz
         .unwrap_or_else(|| format!("app_{app_id}"));
     let bundle = sanitize_segment(&bundle);
     let version = metadata_string(metadata, "bundleShortVersionString")
-        .map(|version| sanitize_segment(&version))
-        .unwrap_or_default();
+        .map_or_default(|version| sanitize_segment(&version));
     if version.is_empty() {
         format!("{bundle}_{index}.ipa")
     } else {

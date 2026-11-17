@@ -86,7 +86,7 @@ impl EmuError {
 
 /// Formats the optional faulting PC of [`EmuError::Unmapped`].
 fn pc_suffix(pc: Option<u64>) -> String {
-    pc.map(|pc| format!(" (pc {pc:#x})")).unwrap_or_default()
+    pc.map_or_default(|pc| format!(" (pc {pc:#x})"))
 }
 
 #[cfg(test)]

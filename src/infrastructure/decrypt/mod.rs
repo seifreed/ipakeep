@@ -134,18 +134,15 @@ fn slice_report(slice: &Slice, entry: &str) -> SliceReport {
     let encryption = slice.encryption;
     let encrypted = encryption.is_some_and(|e| e.cryptid != 0);
     let minimum_os = slice.build_version.map(|b| format_version(b.minos));
-    let dumpable_on = slice
-        .build_version
-        .map(|b| {
-            ios::SUPPORTED_IOS_MAJORS
-                .iter()
-                .map(|&ios_major| DumpTarget {
-                    ios_major,
-                    dumpable: ios::dumpable_on(b.minos, ios_major),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let dumpable_on = slice.build_version.map_or_default(|b| {
+        ios::SUPPORTED_IOS_MAJORS
+            .iter()
+            .map(|&ios_major| DumpTarget {
+                ios_major,
+                dumpable: ios::dumpable_on(b.minos, ios_major),
+            })
+            .collect()
+    });
 
     SliceReport {
         arch: slice.arch.clone(),

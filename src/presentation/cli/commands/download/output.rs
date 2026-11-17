@@ -62,8 +62,7 @@ pub(super) fn derive_ipa_filename(
         .unwrap_or_else(|| format!("app_{app_id}"));
     let bundle_id = safe_filename_segment(&bundle_id);
     let version = metadata_string(metadata, "bundleShortVersionString")
-        .map(|version| safe_filename_segment(&version))
-        .unwrap_or_default();
+        .map_or_default(|version| safe_filename_segment(&version));
     if version.is_empty() {
         format!("{bundle_id}_{index}.ipa")
     } else {

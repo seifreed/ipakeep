@@ -667,8 +667,7 @@ pub fn read_symbols(
             let nlist = Nlist::parse(entry)?;
             let name = strings
                 .get(to_usize(nlist.string_index)?..)
-                .map(go_symbol_name)
-                .unwrap_or_default();
+                .map_or_default(go_symbol_name);
             Ok(nlist.into_symbol(name))
         })
         .collect()

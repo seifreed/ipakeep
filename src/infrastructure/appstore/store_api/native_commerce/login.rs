@@ -334,11 +334,7 @@ fn dialog_error(body: &plist::Dictionary) -> Option<String> {
     let action = dialog
         .get("okButtonAction")
         .and_then(plist::Value::as_dictionary);
-    let action_field = |key: &str| {
-        action
-            .map(|a| text(a, key).trim().to_string())
-            .unwrap_or_default()
-    };
+    let action_field = |key: &str| action.map_or_default(|a| text(a, key).trim().to_string());
     let any = [
         "message",
         "explanation",
@@ -448,9 +444,8 @@ fn account_identity(body: &plist::Dictionary) -> (Option<String>, String) {
     let address = info
         .and_then(|info| info.get("address"))
         .and_then(plist::Value::as_dictionary);
-    let part = |dict: Option<&plist::Dictionary>, key: &str| {
-        dict.map(|dict| text(dict, key)).unwrap_or_default()
-    };
+    let part =
+        |dict: Option<&plist::Dictionary>, key: &str| dict.map_or_default(|dict| text(dict, key));
     let email = Some(part(info, "appleId")).filter(|value| !value.is_empty());
     let name = format!(
         "{} {}",

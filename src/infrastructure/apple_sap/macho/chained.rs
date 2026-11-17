@@ -318,7 +318,7 @@ impl ChainedFixups {
         let import = usize::try_from(ordinal)
             .ok()
             .and_then(|index| self.imports.get(index));
-        let symbol = import.map(|import| import.name.clone()).unwrap_or_default();
+        let symbol = import.map_or_default(|import| import.name.clone());
         let addend = pointer_addend.wrapping_add(import.map_or(0, |import| import.addend));
         Relocation::Bind {
             offset,

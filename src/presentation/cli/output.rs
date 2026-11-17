@@ -82,8 +82,7 @@ pub fn format_owned_app(app: &crate::domain::entity::OwnedApp) -> String {
     let purchased = app
         .purchase_date
         .as_deref()
-        .map(|date| format!(" - purchased {date}"))
-        .unwrap_or_default();
+        .map_or_default(|date| format!(" - purchased {date}"));
     format!(
         "{} ({}) - {} [{}]{}{}",
         app.name, app.bundle_id, app.version, app.id, platforms, purchased

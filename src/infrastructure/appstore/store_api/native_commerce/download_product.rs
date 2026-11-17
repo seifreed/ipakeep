@@ -455,9 +455,7 @@ where
                 Err(error) => last_error = Some(error),
             }
         }
-        let missing = last_error
-            .map(|error| error.to_string())
-            .unwrap_or_default();
+        let missing = last_error.map_or_default(|error| error.to_string());
         let context = format!("app {} in storefront {country}: {missing}", ticket.app_id);
         match self.ios_catalog_lookup(ticket.app_id, &country).await {
             Ok(version) => Ok(version),
@@ -622,10 +620,7 @@ fn rerouted_url(origin: &str, url: &str) -> String {
     Url::parse(url).map_or_else(
         |_| url.to_string(),
         |parsed| {
-            let query = parsed
-                .query()
-                .map(|query| format!("?{query}"))
-                .unwrap_or_default();
+            let query = parsed.query().map_or_default(|query| format!("?{query}"));
             format!("{origin}{}{query}", parsed.path())
         },
     )
@@ -733,8 +728,7 @@ fn resolve_delisted(unpinned: Attempt, ent: Attempt, app_id: i64) -> Attempt {
     }
     let unpinned_error = unpinned
         .err()
-        .map(|failure| failure.error.to_string())
-        .unwrap_or_default();
+        .map_or_default(|failure| failure.error.to_string());
     Err(failure(
         ent_failure.response,
         AppStoreError::DownloadFailed(format!(
