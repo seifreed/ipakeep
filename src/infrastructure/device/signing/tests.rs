@@ -729,3 +729,46 @@ fn prepare_target_reports_profiles_that_cannot_be_embedded() {
         "{error}"
     );
 }
+
+#[test]
+fn unsigned_bundles_have_no_entitlements_but_other_codesign_errors_remain() {
+    let capture = LogCapture::default();
+    let _guard = capture.install();
+    let unsigned = Err(format!("/tmp/Test.app: {UNSIGNED_CODE}"));
+    assert_eq!(unsigned_as_empty(unsigned), Ok(String::new()));
+    let logs = capture.contents();
+    assert!(logs.contains("entitlements.unsigned_bundle"), "{logs}");
+    assert!(!logs.contains("/tmp/Test.app"), "{logs}");
+    assert_eq!(
+        unsigned_as_empty(Err("invalid signature".into())),
+        Err("invalid signature".to_string())
+    );
+    assert_eq!(
+        unsigned_as_empty(Ok("<plist/>".into())),
+        Ok("<plist/>".into())
+    );
+}
+
+#[test]
+fn signs_a_never_signed_bundle_with_profile_entitlements_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = unsigned_test_app(dir.path());
+    let mut signing_profile = profile("PREFIX.com.example.test");
+    signing_profile.path = dir.path().join("profile.mobileprovision");
+    fs::write(&signing_profile.path, b"profile").unwrap();
+    let request = test_request(&[], None);
+    let mut commands = 0;
+
+    sign_bundle_with_profiles(&app, &request, &[signing_profile], dir.path(), &mut |_| {
+        commands += 1;
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(commands, 2);
+    let written = Value::from_file(dir.path().join("entitlements-1.plist")).unwrap();
+    assert_eq!(
+        written.as_dictionary().unwrap()["application-identifier"],
+        Value::String("PREFIX.com.example.test".into())
+    );
+}

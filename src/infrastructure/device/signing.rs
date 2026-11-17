@@ -203,7 +203,28 @@ fn select_profile(profiles: &[Profile], bundle_id: &str) -> Result<usize, String
 fn read_entitlements(target: &Path, override_path: Option<&Path>) -> Result<Dictionary, String> {
     match override_path {
         Some(path) => read_entitlements_file(path),
-        None => parse_entitlements_xml(&extract_entitlements(target)?),
+        None => parse_entitlements_xml(&unsigned_as_empty(extract_entitlements(target))?),
+    }
+}
+
+/// `codesign -d` reports for a bundle that has never been signed (for example a
+/// freshly built one). It requests no capabilities, so signing it is valid.
+const UNSIGNED_CODE: &str = "code object is not signed at all";
+
+/// Treat an unsigned bundle as one with no entitlements; keep other failures.
+fn unsigned_as_empty(extracted: Result<String, String>) -> Result<String, String> {
+    match extracted {
+        Err(error) if error.contains(UNSIGNED_CODE) => {
+            tracing::debug!(
+                service = "ipakeep",
+                component = "device_signing",
+                event_name = "entitlements.unsigned_bundle",
+                outcome = "success",
+                "bundle is unsigned; signing it without original entitlements"
+            );
+            Ok(String::new())
+        }
+        other => other,
     }
 }
 
