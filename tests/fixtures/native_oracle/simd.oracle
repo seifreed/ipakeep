@@ -1,0 +1,180 @@
+# Frozen Unicorn oracle for native/simd.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::simd::tests::across_lanes_add_maxmin
+4eb1b820 4e31b822 4eb0a823 6e30a824 4e71a825 6eb1a826 | v1=800000017ffffffe00000003fffffffc => pc=10018 v0=fffffffe v2=f8 v3=7ffffffe v4=ff v5=8000 v6=3
+
+# infrastructure::apple_sap::emu::native::simd::tests::across_lanes_addlv
+4e303820 2e703822 | v1=808080807f7f7f7f01020304fffefdfc => pc=10008 v0=fffc v2=20200
+
+# infrastructure::apple_sap::emu::native::simd::tests::add_2d_and_16b
+4ee28420 4e228423 | v1=deadbeefcafef00d0123456789abcdef v2=11111111111111110101010101010101 => pc=10008 v0=efbed000dc10011e022446688aaccef0 v3=efbecf00db0f011e022446688aaccef0
+
+# infrastructure::apple_sap::emu::native::simd::tests::add_sub_4s
+4ea28420 6ea28423 | v1=5000000040000000300000002 v2=1000000010000000100000001 => pc=10008 v0=6000000050000000400000003 v3=4000000030000000200000001
+
+# infrastructure::apple_sap::emu::native::simd::tests::cls_clz
+4ea04820 6ea04822 | v1=fffffff0000000ff8000000000000001 => pc=10008 v0=1b00000017000000000000001e v2=18000000000000001f
+
+# infrastructure::apple_sap::emu::native::simd::tests::cmp_three_same
+4ea2342a 6ea2342b 4ea23c2c 6ea23c2d 6ea28c2e 4ea28c2f | v1=8000000000000005ffffffff0000000f v2=1000000057fffffff000000f0 => pc=10018 v11=ffffffff00000000ffffffff00000000 v12=ffffffff0000000000000000 v13=ffffffffffffffffffffffff00000000 v14=ffffffff0000000000000000 v15=ffffffffffffffff00000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::cnt_not_rbit
+4e205820 6e205822 6e605820 | v1=102040810204080ff00f00fa5c31248 => pc=1000c v0=8040201008040201ff000ff0a5c34812 v2=fefdfbf7efdfbf7f00ff0ff05a3cedb7
+
+# infrastructure::apple_sap::emu::native::simd::tests::compare_zero_forms
+4ea09820 6ea08822 4ea08823 6ea09824 4ea0a825 | v1=7fffffff80000000ffffffff => pc=10014 v0=ffffffff000000000000000000000000 v2=ffffffffffffffff0000000000000000 v3=ffffffff0000000000000000 v4=ffffffff00000000ffffffffffffffff v5=ffffffffffffffff
+
+# infrastructure::apple_sap::emu::native::simd::tests::dup_element_4s_and_16b
+4e0c0420 4e070423 | v1=aabbccdd112233445566778899aabbcc => pc=10008 v0=55667788556677885566778855667788 v3=99999999999999999999999999999999
+
+# infrastructure::apple_sap::emu::native::simd::tests::dup_general_4s_8h_2d
+4e040c20 4e020c22 4e080c23 | x1=123456789abcdef0 => pc=1000c v0=9abcdef09abcdef09abcdef09abcdef0 v2=def0def0def0def0def0def0def0def0 v3=123456789abcdef0123456789abcdef0
+
+# infrastructure::apple_sap::emu::native::simd::tests::eor3_xors_three_registers
+ce020c20 | v1=11111111222222223333333344444444 v2=f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f v3=ff00ff00ff00ff00ff00ff00ff00ff => pc=10004 v0=1ee11ee12dd22dd23cc33cc34bb44bb4
+
+# infrastructure::apple_sap::emu::native::simd::tests::fcmp_double_and_zero
+1e622020 1e602008 | v1=401e000000000000 v2=401e000000000000 => pc=10008 nzcv=60000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fcmp_single_orders
+1e212000 1e222000 1e202068 | v0=3f800000 v1=40000000 v2=3f800000 v3=40a00000 => pc=1000c nzcv=20000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fcmp_zero_vector
+4ea0d820 4ea0c822 4ea0e823 | v1=40e00000bf8000004020000000000000 => pc=1000c v0=ffffffff v2=ffffffff00000000ffffffff00000000 v3=ffffffff0000000000000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fcvtl_fcvtn_vector
+0e617820 0e616822 | v1=402000003fc00000 v3=4013000000000000400a000000000000 => pc=10008 v0=40040000000000003ff8000000000000 v2=41000002
+
+# infrastructure::apple_sap::emu::native::simd::tests::fmov_high_half
+9eae0001 9eaf0062 | x3=cafebabe0badf00d v0=11223344556677880000000000000000 v2=ddddeeeeffff0000 => pc=10008 x1=1122334455667788 v2=cafebabe0badf00dddddeeeeffff0000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fmov_immediate_scalar
+1e2e1000 1e609001 1e3e1002 | - => pc=1000c v0=3f800000 v1=4004000000000000 v2=bf800000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fmov_reg_and_gpr
+1e204020 1e604062 1e270024 1e2600a2 9e670066 9e6600e4 | x1=aaaabbbb12345678 x3=fedcba987654321 v1=1111222233334444 v3=5555666677778888 v5=deadbeef v7=9999aaaabbbbcccc => pc=10018 x2=deadbeef x4=9999aaaabbbbcccc v0=33334444 v2=5555666677778888 v4=12345678 v6=fedcba987654321
+
+# infrastructure::apple_sap::emu::native::simd::tests::fmov_vector_immediate
+4f03f600 | - => pc=10004 v0=3f8000003f8000003f8000003f800000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fmul_single_and_double
+1e220820 1e650883 | v1=40400000 v2=3fc00000 v4=4004000000000000 v5=4010000000000000 => pc=10008 v0=40900000 v3=4024000000000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fneg_fabs_vector
+6ea0f820 4ee0f822 | v1=8000000040000000bfc0000040600000 v3=4020000000000000c019000000000000 => pc=10008 v0=c00000003fc00000c0600000 v2=400000003fc0000040600000
+
+# infrastructure::apple_sap::emu::native::simd::tests::fneg_single_and_double
+1e214020 1e614062 | v1=40600000 v3=4019000000000000 => pc=10008 v0=c0600000 v2=c019000000000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::ldr_literal_s_and_d
+1c000040 5c000021 9100039c 9100037b | - => pc=10010 v0=9100039c v1=9100037b9100039c
+
+# infrastructure::apple_sap::emu::native::simd::tests::ldr_literal_vector
+9c000040 9100039c 9100037b 9100035a 91000339 | - => pc=10014 v0=910003399100035a9100037b
+
+# infrastructure::apple_sap::emu::native::simd::tests::logical_and_orr_eor_16b
+4e221c20 4ea21c23 6e221c24 | v1=f0f0f0f0ffff0000aaaa555512345678 v2=ff00ff00f0ff0f05555aaaa87654321 => pc=1000c v0=f000f00f0f00000000000002244220 v3=fff0fff0fffff0f0ffffffff97755779 v4=ff00ff00f0f0f0f0ffffffff95511559
+
+# infrastructure::apple_sap::emu::native::simd::tests::logical_bic_orn_bsl_bit_bif
+4e621c20 4ee21c23 6e621c24 6ea21c25 6ee21c26 | v0=f0f0f0ff0f0f0f0aaaa555512345678 v1=ffff0000ffff0000f0f0f0f00f0f0f0f v2=ff00ff0123456785555aaaa87654321 v3=11112222333344445555666677778888 v4=9999aaaabbbbccccddddeeeeffff0000 v5=123456789abcdeffedcba9876543210 v6=cafebabedeadbeef0badf00d8badf00d => pc=10014 v0=f00f0000edcb0000a0a05050080a0c0e v3=fffff00fffffa987fafaf5f57f9fbfdf v4=9ff90550bbbf1230d0d0e0e00f0f4321 v5=ff340079bbf8987fad8b0b077153311 v6=faff0ab0ffef1668a1a5f0588b2f4c0f
+
+# infrastructure::apple_sap::emu::native::simd::tests::maxmin_abd_three_same
+4ea2642a 6e22642b 4e626c2c 6ea26c2d 4ea2742e 6e22742f | v1=80000000fffffff0000000107fffffff v2=8000000500000020ffffffff7ffffff0 => pc=10018 v10=8000000500000020000000107fffffff v11=80000005fffffff0ffffffff7fffffff v12=80000000fffffff0ffffffff7ffffff0 v13=8000000000000020000000107ffffff0 v14=500000030000000110000000f v15=5ffffffd0ffffffef0000000f
+
+# infrastructure::apple_sap::emu::native::simd::tests::mla_mls_4s
+4ea29420 6ea29423 | v0=100000001000000010000000100 v1=2000000030000000400000005 v2=3000000030000000300000003 v3=1000000010000000100000001000 => pc=10008 v0=106000001090000010c0000010f v3=ffa00000ff700000ff400000ff1
+
+# infrastructure::apple_sap::emu::native::simd::tests::mov_is_orr_same_reg_8b
+4ea11c23 | v1=112233445566778899aabbccddeeff00 => pc=10004 v3=112233445566778899aabbccddeeff00
+
+# infrastructure::apple_sap::emu::native::simd::tests::movi_32bit_lanes_shifts
+4f000420 4f002621 4f014442 4f016663 | - => pc=10010 v0=1000000010000000100000001 v1=1100000011000000110000001100 v2=220000002200000022000000220000 v3=33000000330000003300000033000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::movi_byte_and_msl_and_2d
+4f05e540 4f00c621 6f05e542 | - => pc=1000c v0=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa v1=11ff000011ff000011ff000011ff v2=ff00ff00ff00ff00ff00ff00ff00ff00
+
+# infrastructure::apple_sap::emu::native::simd::tests::mul_8h
+4e629c20 | v1=70006000500040003000200010009 v2=20002000200020002000200020003 => pc=10004 v0=e000c000a0008000600040002001b
+
+# infrastructure::apple_sap::emu::native::simd::tests::neg_abs
+6ea0b820 4e60b822 | v1=80000000ffffffff80007fff0001fffe => pc=10008 v0=80000000000000017fff8001fffe0002 v2=800000000001000180007fff00010002
+
+# infrastructure::apple_sap::emu::native::simd::tests::permute_uzp_trn_zip_all_sizes
+0e001863 4e025824 4e422825 4e826826 4ec23827 0e427828 0e821829 | v0=b6c7f4403f0b9078 v1=f0e0d0c0b0a09080706050403020100 v2=1f1e1d1c1b1a19181716151413121110 v3=67dc02a7e6f20e8 => pc=1001c v3=c7400b787d2a6fe8 v4=1f1d1b19171513110f0d0b0907050301 v5=1d1c0d0c191809081514050411100100 v6=1f1e1d1c0f0e0d0c1716151407060504 v7=17161514131211100706050403020100 v8=1716070615140504 v9=1312111003020100
+
+# infrastructure::apple_sap::emu::native::simd::tests::pre_and_post_index_writeback
+3c810c20 3dc00022 3c810460 3cdf0064 | x1=20000 x3=20100 v0=11112222333344445555666677778888 => pc=10010 x1=20010 x3=20110 v2=11112222333344445555666677778888 v4=11112222333344445555666677778888
+
+# infrastructure::apple_sap::emu::native::simd::tests::rev_vectors
+4ea00820 2e200822 4e201823 0e200824 | v1=112233445566778899aabbccddeeff => pc=10010 v0=4455667700112233ccddeeff8899aabb v2=bbaa9988ffeeddcc v3=11003322554477669988bbaaddccffee v4=ffeeddccbbaa9988
+
+# infrastructure::apple_sap::emu::native::simd::tests::saddlp_uaddlp
+0e202820 2e602822 | v1=111122223333444480ff017ffe027f80 => pc=10008 v0=ff7f00800000ffff v2=827e00017d82
+
+# infrastructure::apple_sap::emu::native::simd::tests::saturating_narrow_variants
+0e214820 2e614822 2e212824 4e214825 | v1=80ff807fff80000001fffe123400aa v3=10000800000007fffffffffff0001 v5=11112222333344445555666677778888 => pc=10010 v0=7f807f8001fe7f7f v2=ffffffffffffffff v4=8000ff000100ffaa v5=7f807f8001fe7f7f5555666677778888
+
+# infrastructure::apple_sap::emu::native::simd::tests::scvtf_ucvtf_vector
+4e21d820 6e61d822 | v1=7fffffff00000002ffffff9c00000064 v3=10000000000000000000007b => pc=10008 v0=4f00000040000000c2c8000042c80000 v2=43dfffffffc0000043effffff3800000
+
+# infrastructure::apple_sap::emu::native::simd::tests::shl_sli_sri
+4f255420 4f0b5422 6f255423 6f3b4424 | v1=8000000112345678ffffffff0f0f0f0f v3=aaaaaaaabbbbbbbbccccccccdddddddd v4=11111111222222223333333344444444 => pc=10010 v0=20468acf00ffffffe0e1e1e1e0 v2=890a0b0c0f8f8f8f878787878 v3=2a468acf1bffffffece1e1e1fd v4=140000002091a2b337ffffff40787878
+
+# infrastructure::apple_sap::emu::native::simd::tests::shll_and_shll2
+2e213820 6e613820 | v1=8090a0b0c0d0e0f00102030405060708 => pc=10008 v0=80900000a0b00000c0d00000e0f00000
+
+# infrastructure::apple_sap::emu::native::simd::tests::shrn_and_shrn2
+0f0d8420 4f0d8420 | v1=f801f002e803e0777788889999aaaa => pc=10008 v0=1f3e5d7cee1133551f3e5d7cee113355
+
+# infrastructure::apple_sap::emu::native::simd::tests::sshl_addp_three_same
+4ea24420 4ea2bc23 | v1=80000001000000ffffffffff00000010 v2=4fffffffc0000001fffffffd8 => pc=10008 v0=100000000f8000000000000000 v3=fffffff7800001000000000f
+
+# infrastructure::apple_sap::emu::native::simd::tests::sshll_signed_widen
+0f0ba420 4f13a422 | v1=80017ffff0f0123480ff017ffe028090 => pc=10008 v0=fc00fff8000803f8fff00010fc00fc80 v2=fffc00080003fff8ffff8780000091a0
+
+# infrastructure::apple_sap::emu::native::simd::tests::sshr_variants
+4f3b0420 4f580422 | v1=800000007ffffffffffffff000000100 => pc=10008 v0=fc00000003ffffffffffffff00000008 v2=ffffffffff800000ffffffffffffffff
+
+# infrastructure::apple_sap::emu::native::simd::tests::ssra_usra
+4f3d1420 6f3d1422 | v0=1000000010000000100000001000 v1=80000000ffffffff0000004012345678 v2=2000000020000000200000002000 => pc=10008 v0=f000100000000fff0000100802469acf v2=1000200020001fff000020080246aacf
+
+# infrastructure::apple_sap::emu::native::simd::tests::stp_ldp_pre_post_index
+ad810440 ad401043 ac8104a0 ad7f1ca6 | x2=20000 x5=20200 v0=aaaaaaaabbbbbbbbccccccccdddddddd v1=123456789abcdef00f1e2d3c4b5a6978 => pc=10010 x2=20020 x5=20220 v3=aaaaaaaabbbbbbbbccccccccdddddddd v4=123456789abcdef00f1e2d3c4b5a6978 v6=aaaaaaaabbbbbbbbccccccccdddddddd v7=123456789abcdef00f1e2d3c4b5a6978
+
+# infrastructure::apple_sap::emu::native::simd::tests::stp_ldp_q_and_d_and_s
+ad000440 ad401043 6d040440 6d441845 | x2=20000 v0=102030405060708090a0b0c0d0e0f10 v1=1112131415161718191a1b1c1d1e1f20 => pc=10010 v3=102030405060708090a0b0c0d0e0f10 v4=1112131415161718191a1b1c1d1e1f20 v5=90a0b0c0d0e0f10 v6=191a1b1c1d1e1f20
+
+# infrastructure::apple_sap::emu::native::simd::tests::str_ldr_q_roundtrip
+3d800020 3dc00022 | x1=20000 v0=112233445566778899aabbccddeeff => pc=10008 v2=112233445566778899aabbccddeeff
+
+# infrastructure::apple_sap::emu::native::simd::tests::str_ldr_scalar_widths
+fd000020 fd400022 bd001020 bd401023 3d008020 3d408024 7d005020 7d405025 | x1=20000 v0=112233445566778899aabbccddeeff00 => pc=10020 v2=99aabbccddeeff00 v3=ddeeff00 v5=ff00
+
+# infrastructure::apple_sap::emu::native::simd::tests::tbl_single_register
+4e020020 | v1=f0e0d0c0b0a09080706050403020100 v2=ff0010100e0c0a08070605030201000f => pc=10004 v0=e0c0a08070605030201000f
+
+# infrastructure::apple_sap::emu::native::simd::tests::ucvtf_word_and_doubleword
+1e230020 9e630062 9e2300a4 1e6300e6 | x1=7b x3=10000000 x5=ffffffffffffffff x7=ee6b2800 => pc=10010 v0=42f60000 v2=41b0000000000000 v4=5f800000 v6=41edcd6500000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::umull_4s_from_4h
+2e62c025 | v1=1111222233334444 v2=2000300040005 => pc=10004 v5=2222000066660000cccc00015554
+
+# infrastructure::apple_sap::emu::native::simd::tests::umull_umull2_8h
+2e22c020 6e22c023 | v1=10203040506070800102030405060708 v2=2030405060708090a0b0c0d0e0f1011 => pc=10008 v0=a0016002400340046005a00700088 v3=20006000c0014001e002a003800480
+
+# infrastructure::apple_sap::emu::native::simd::tests::unscaled_and_pre_post_index
+3c805020 3cc05022 | x1=20000 v0=fedcba98765432100f1e2d3c4b5a6978 => pc=10008 v2=fedcba98765432100f1e2d3c4b5a6978
+
+# infrastructure::apple_sap::emu::native::simd::tests::ushl_register_4s_and_2d
+6ea24420 6ee24423 | v1=ff8000000100000001ffffffff v2=4000000fc00000008000000d8 => pc=10008 v0=ff0080000000000010000000000 v3=ff80000000000000000000000
+
+# infrastructure::apple_sap::emu::native::simd::tests::ushll_and_ushll2
+2f0ba420 6f0ba422 | v1=8090a0b0c0d0e0f00102030405060708 => pc=10008 v0=80010001800200028003000380040 v2=4000480050005800600068007000780
+
+# infrastructure::apple_sap::emu::native::simd::tests::ushr_4s_16b_2d
+6f3b0420 6f0e0422 6f760423 | v1=ffffffff80000001123456789abcdef0 => pc=1000c v0=7ffffff040000000091a2b304d5e6f7 v2=3f3f3f3f20000000040d151e262f373c v3=3fffffffe0000000048d159e26af37
+
+# infrastructure::apple_sap::emu::native::simd::tests::xtn_and_xtn2
+0e212820 4e212820 0e612862 | v1=123456789abcdef00011223344556677 v3=deadbeefcafef00d1111222233334444 => pc=1000c v0=3478bcf0113355773478bcf011335577 v2=beeff00d22224444

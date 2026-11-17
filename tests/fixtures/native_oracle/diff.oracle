@@ -1,0 +1,39 @@
+# Frozen Unicorn oracle for native/diff.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::diff::add_immediate_shifted
+91400400 | - => pc=10004 x0=1000
+
+# infrastructure::apple_sap::emu::native::diff::add_sub_immediate_with_and_without_flags
+91000400 f1000801 | x0=a => pc=10008 nzcv=20000000 x0=b x1=9
+
+# infrastructure::apple_sap::emu::native::diff::adr_and_adrp_are_pc_relative
+10000000 90000001 | - => pc=10008 x0=10000 x1=10000
+
+# infrastructure::apple_sap::emu::native::diff::ands_immediate_sets_flags
+f2400c20 f2400c62 | x1=ff x3=10 => pc=10008 nzcv=40000000 x0=f
+
+# infrastructure::apple_sap::emu::native::diff::bfm_insert_keeps_other_bits
+b3781c20 | x0=ffffffffffffffff x1=ab => pc=10004 x0=ffffffffffffabff
+
+# infrastructure::apple_sap::emu::native::diff::extr_concatenates_and_rotates
+93c24020 | x1=1111222233334444 x2=aaaabbbbccccdddd => pc=10004 x0=4444aaaabbbbcccc
+
+# infrastructure::apple_sap::emu::native::diff::logical_immediate_and_orr_eor
+92401c20 b2780c22 d2403c23 | x1=12345678 => pc=1000c x0=78 x2=12345f78 x3=1234a987
+
+# infrastructure::apple_sap::emu::native::diff::movn_inverts
+92800001 | - => pc=10004 x1=ffffffffffffffff
+
+# infrastructure::apple_sap::emu::native::diff::movz_movk_build_a_64bit_constant
+d2824680 f2aacf00 | - => pc=10008 x0=56781234
+
+# infrastructure::apple_sap::emu::native::diff::sbfm_asr_and_sign_extend
+9344fc20 93401c22 | x1=ffffffffffffff80 => pc=10008 x0=fffffffffffffff8 x2=ffffffffffffff80
+
+# infrastructure::apple_sap::emu::native::diff::thirtytwo_bit_ops_zero_extend
+11000400 52bfffe1 | x0=ffffffff00000000 => pc=10008 x0=1 x1=ffff0000
+
+# infrastructure::apple_sap::emu::native::diff::ubfm_lsr_and_lsl_forms
+d344fc20 d378dc22 d3483c23 | x1=123456789abcdef0 => pc=1000c x0=123456789abcdef x2=3456789abcdef000 x3=de

@@ -1,0 +1,60 @@
+# Frozen Unicorn oracle for native/coverage_tests/diff_simd.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::add_8b_clears_the_upper_half
+0e228420 | v0=ffffffffffffffffffffffffffffffff v1=f0e0d0c0b0a09080706050403020100 v2=8899aabbccddeeff1122334455667788 => pc=10004 v0=1828384858687888
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::dup_general_byte_replicates_the_low_byte
+4e010c20 | x1=123456ab => pc=10004 v0=abababababababababababababababab
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::fabs_2s_clears_the_upper_half
+0ea0f820 | v0=ffffffffffffffffffffffffffffffff v1=c0800000c040000040000000bfc00000 => pc=10004 v0=400000003fc00000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::fcmp_single_nan_and_double_orderings
+1e212000 | v0=7fc00000 => pc=10004 nzcv=30000000
+1e612000 | v0=7ff8000000000000 v1=3ff0000000000000 => pc=10004 nzcv=30000000
+1e612000 | v0=3ff0000000000000 v1=4000000000000000 => pc=10004 nzcv=80000000
+1e612000 | v0=4000000000000000 v1=3ff0000000000000 => pc=10004 nzcv=20000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::fp_compare_against_zero_single_and_double
+6ea0c820 6ea0d822 | v1=800000004020000000000000bf800000 => pc=10008 v0=ffffffffffffffffffffffff00000000 v2=ffffffff00000000ffffffffffffffff
+4ee0c820 6ee0c822 4ee0d823 6ee0d824 4ee0e825 | v1=c000000000000000 => pc=10014 v2=ffffffffffffffff0000000000000000 v3=ffffffffffffffff0000000000000000 v4=ffffffffffffffffffffffffffffffff v5=ffffffffffffffff
+4ee0c820 6ee0c822 4ee0d823 6ee0d824 4ee0e825 | v1=80000000000000004008000000000000 => pc=10014 v0=ffffffffffffffff v2=ffffffffffffffffffffffffffffffff v3=ffffffffffffffff0000000000000000 v4=ffffffffffffffff0000000000000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::ins_general_inserts_one_lane_of_each_width
+4e071c20 4e161c22 4e141c23 4e181c24 | x1=1122334455667788 v0=8899aabbccddeeff1122334455667788 v2=8899aabbccddeeff1122334455667788 v3=8899aabbccddeeff1122334455667788 v4=8899aabbccddeeff1122334455667788 => pc=10010 v0=8899aabbccddeeff1122334488667788 v2=8899aabb7788eeff1122334455667788 v3=8899aabb556677881122334455667788 v4=11223344556677881122334455667788
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::movi_mvni_shifted_and_msl_forms
+6f002640 4f01a682 2f0286c1 4f00d643 2f00d644 6f03f705 0f000426 | v1=ffffffffffffffffffffffffffffffff v4=ffffffffffffffffffffffffffffffff v6=ffffffffffffffffffffffffffffffff => pc=1001c v0=ffffedffffffedffffffedffffffedff v1=ffa9ffa9ffa9ffa9 v2=34003400340034003400340034003400 v3=12ffff0012ffff0012ffff0012ffff v4=ffed0000ffed0000 v5=3ff80000000000003ff8000000000000 v6=100000001
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::register_offset_vector_loads_and_stores
+3ce17800 fc25d802 bc664803 3c616804 | x0=20100 x1=2 x5=fffffffe x6=dead0000000000f0 v2=8899aabbccddeeff1122334455667788 => pc=10010
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::saddlv_4s_accumulates_into_a_doubleword
+4eb03820 | v1=80000000800000007fffffffffffffff => pc=10004 v0=ffffffff7ffffffe
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::sshl_2d_and_4s_saturating_shift_amounts
+4ee24420 | v1=80000000000000018000000000000001 v2=c00000000000000040 => pc=10004 v0=ffffffffffffffff0000000000000000
+4ea24420 | v1=80000001800000017fffffff00000011 v2=4000000df0000002100000020 => pc=10004 v0=10ffffffff0000000000000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::tbx_keeps_the_old_byte_for_out_of_range_indices
+4e021020 | v0=8899aabbccddeeff1122334455667788 v1=f0e0d0c0b0a09080706050403020100 v2=ff1020300f0e0d0c0b0a090807060100 => pc=10004 v0=8899aabb0f0e0d0c0b0a090807060100
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::ucvtf_scalar_zero_and_rounding_paths
+1e230020 9e630020 9e630041 9e630062 | x2=1000000000000081 x3=ffffffffffffffff => pc=10010 v1=43b0000000000001 v2=43f0000000000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::ucvtf_vector_treats_lanes_as_unsigned
+6e21d820 | v1=ffffffff800000000000000100000000 => pc=10004 v0=4f8000004f0000003f80000000000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::umov_and_smov_move_one_lane_to_a_gpr
+0e073c20 0e163c22 0e143c23 4e183c24 0e132c25 4e1a2c26 4e0c2c27 | x0=ffffffffffffffff x5=ffffffffffffffff v1=80007fff80ff8002ff00000080706050 => pc=1001c x0=80 x2=80ff x3=80ff8002 x4=80007fff80ff8002 x5=ffffff80 x6=7fff x7=ffffffffff000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::ushl_by_esize_or_more_is_zero
+6ea24420 | v1=ffffffffffffffffffffffffffffffff v2=1000000e00000002800000020 => pc=10004 v0=fffffffe000000000000000000000000
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::ushr_and_sri_by_the_full_element_width
+6f200420 6f204422 | v0=8899aabbccddeeff1122334455667788 v1=f0e0d0c0b0a09080706050403020100 v2=8899aabbccddeeff1122334455667788 => pc=10008 v0=0
+
+# infrastructure::apple_sap::emu::native::coverage_tests::diff_simd::vector_pairs_single_and_no_allocate
+2dbf0c02 2d410400 6c010c02 ac401404 | x0=20040 v2=f0e0d0c0b0a09080706050403020100 v3=8899aabbccddeeff1122334455667788 => pc=10010 x0=20038 v4=5566778803020100 v5=11223344556677880706050403020100

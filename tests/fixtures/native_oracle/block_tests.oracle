@@ -1,0 +1,7 @@
+# Frozen Unicorn oracle for native/block_tests.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::block_tests::frozen_diff::programs_through_the_block_cache_match_unicorn
+aa0003f0 f9400528 ca481dad 9ba539ae f9000928 f86c796a 91000400 f10004a5 9a9f05ef 54ffff01 94000004 b4000046 91001400 d4200000 37180047 91001400 d65f03c0 | until=10034 hook=false => run0: pc=10034 nzcv=60000000 x0=32 x7=8 x8=c8bbaea194877a6d x9=20100 x10=988b7e7164574a3d x11=20200 x12=3 x13=123456789abcdef0 x14=3a23d7e721f x15=1 x30=1002c data+110=6d7a8794a1aebbc8 ; run1: pc=10034 nzcv=60000000 x0=32 x7=8 x8=c8bbaea194877a6d x9=20100 x10=988b7e7164574a3d x11=20200 x12=3 x13=123456789abcdef0 x14=3a23d7e721f x15=1 x30=1002c data+110=6d7a8794a1aebbc8 ; hits=0
+aa0003f0 f9400528 ca481dad 9ba539ae f9000928 f86c796a 91000400 f10004a5 9a9f05ef 54ffff01 94000004 b4000046 91001400 d4200000 37180047 91001400 d65f03c0 | until=10034 hook=true => run0: pc=10034 nzcv=60000000 x0=32 x7=8 x8=c8bbaea194877a6d x9=20100 x10=988b7e7164574a3d x11=20200 x12=3 x13=123456789abcdef0 x14=3a23d7e721f x15=1 x20=4c9 x30=1002c data+110=6d7a8794a1aebbc8 ; run1: pc=10034 nzcv=60000000 x0=32 x7=8 x8=c8bbaea194877a6d x9=20100 x10=988b7e7164574a3d x11=20200 x12=3 x13=123456789abcdef0 x14=3a23d7e721f x15=1 x20=4c9 x30=1002c data+110=6d7a8794a1aebbc8 ; hits=100

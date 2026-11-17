@@ -11,11 +11,10 @@ output-dir = "target/tarpaulin"
 # `[report]`, and its Linux default is Ptrace (see the note above).
 engine = "Llvm"
 fail-under = 100
-all-features = true
 workspace = true
 
 # Boundary adapters depend on Apple services, the pinned Apple assets, the
-# Unicorn-emulated Apple guest, Keychain, Xcode simctl, Apple codesign, or
+# emulated Apple guest, Keychain, Xcode simctl, Apple codesign, or
 # process-level CLI dispatch. They are covered by integration/smoke tests where
 # practical; line coverage here is measured for deterministic core code.
 exclude-files = [

@@ -1,11 +1,10 @@
-//! Native Rust ARM64 (A64) interpreter — ipakeep's default emulation engine
-//! (`native-cpu` feature), a permissively-licensed replacement for the
-//! deprecated `unicorn-engine` backend.
+//! Native Rust ARM64 (A64) interpreter — ipakeep's emulation engine.
 //!
 //! It executes the already-PAC-stripped A64 code of the Apple SAP/ADI/kbsync
 //! guest binaries. It is validated **differentially against Unicorn** (see
-//! [`diff`] and `coverage_tests::decode_oracle`, built with the `unicorn`
-//! feature) and end to end against the golden vectors of the real Apple guests.
+//! [`diff`] and `coverage_tests::decode_oracle`; Unicorn's results were frozen
+//! as fixtures, see [`frozen`], so no Unicorn is needed) and end to end
+//! against the golden vectors of the real Apple guests.
 //!
 //! Scope (from the OTP opcode histogram): the hot path is ~99.98% integer; the
 //! small NEON/FP + `eor3`/`swpal` surface follows. Anything outside the modelled
@@ -606,8 +605,10 @@ fn class_name(class: A64Class) -> &'static str {
     }
 }
 
-#[cfg(all(test, feature = "unicorn"))]
+#[cfg(test)]
 mod diff;
+#[cfg(test)]
+mod frozen;
 
 /// Coverage-closing tests (differential where an encoding executes, exact
 /// `Unsupported` where it is out of scope), kept apart from the per-group

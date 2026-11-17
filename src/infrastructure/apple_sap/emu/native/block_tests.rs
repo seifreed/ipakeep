@@ -636,19 +636,28 @@ mod engine {
 }
 
 // ---------------------------------------------------------------------------
-// Whole programs through `NativeEngine` (block cache) against Unicorn.
+// Whole programs through `NativeEngine` (block cache) against Unicorn (its
+// results frozen in `tests/fixtures/native_oracle/block_tests.oracle`, see
+// `native/frozen.rs`).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "unicorn")]
-mod unicorn_diff {
+mod frozen_diff {
     use std::cell::Cell;
+    use std::fmt::Write as _;
     use std::rc::Rc;
     use std::time::Duration;
 
-    use super::super::super::UnicornEngine;
     use super::super::super::register::Register;
     use super::super::engine::NativeEngine;
+    use super::super::frozen;
     use super::{CODE, DATA, DATA_SIZE};
+
+    /// One run's state: X0..X30, PC, NZCV, the DATA area and the first 0x100
+    /// bytes of CODE.
+    type RunDump = (Vec<u64>, u64, u64, Vec<u8>, Vec<u8>);
+
+    /// Fixture of the frozen cases.
+    const FIXTURE: &str = "block_tests.oracle";
 
     /// A loop over loads/stores and the hot ALU forms, a call (`bl`/`ret`),
     /// `cbz`/`tbnz`, ending at `CODE + 0x34`.
@@ -732,18 +741,68 @@ mod unicorn_diff {
                 let mut data = vec![0u8; DATA_SIZE as usize];
                 e.mem_read_into(DATA, &mut data).unwrap();
                 let code = e.mem_read(CODE, 0x100).unwrap();
-                dumps.push((regs, pc, nzcv, data, code));
+                let dump: RunDump = (regs, pc, nzcv, data, code);
+                dumps.push(dump);
             }
             (dumps, hits.get())
         }};
+    }
+
+    /// The byte runs where `actual` differs from `base`, as ` <tag>+<offset>=<hex>`.
+    fn byte_delta(text: &mut String, tag: &str, base: &[u8], actual: &[u8]) {
+        assert_eq!(base.len(), actual.len());
+        let mut i = 0;
+        while i < actual.len() {
+            if actual[i] == base[i] {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < actual.len() && actual[i] != base[i] {
+                i += 1;
+            }
+            write!(text, " {tag}+{start:x}=").unwrap();
+            for byte in &actual[start..i] {
+                write!(text, "{byte:02x}").unwrap();
+            }
+        }
+    }
+
+    /// Encodes a `run!` result for the fixture: per run the PC, NZCV, the
+    /// nonzero X registers and the DATA/CODE bytes that differ from what was
+    /// written before the run; then the hook hit count.
+    fn encode(code: &[u32], (dumps, hits): &(Vec<RunDump>, u64)) -> String {
+        let fill: Vec<u8> = (0..DATA_SIZE).map(|i| (i * 13 + 5) as u8).collect();
+        let mut written: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
+        written.resize(0x100, 0);
+        let mut text = String::new();
+        for (n, (regs, pc, nzcv, data, code)) in dumps.iter().enumerate() {
+            write!(text, "run{n}: pc={pc:x} nzcv={nzcv:x}").unwrap();
+            for (r, value) in regs.iter().enumerate().filter(|(_, v)| **v != 0) {
+                write!(text, " x{r}={value:x}").unwrap();
+            }
+            byte_delta(&mut text, "data", &fill, data);
+            byte_delta(&mut text, "code", &written, code);
+            text.push_str(" ; ");
+        }
+        write!(text, "hits={hits}").unwrap();
+        text
     }
 
     #[test]
     fn programs_through_the_block_cache_match_unicorn() {
         for hook in [false, true] {
             let native = run!(NativeEngine::new().unwrap(), LOOP, STOP, hook);
-            let unicorn = run!(UnicornEngine::new().unwrap(), LOOP, STOP, hook);
-            assert_eq!(native, unicorn, "hook: {hook}");
+            let words: Vec<String> = LOOP.iter().map(|w| format!("{w:08x}")).collect();
+            let key = format!("{} | until={STOP:x} hook={hook}", words.join(" "));
+            let Some(expected) = frozen::lookup(FIXTURE, &key) else {
+                frozen::missing(FIXTURE, &key)
+            };
+            assert_eq!(
+                encode(&LOOP, &native),
+                expected,
+                "native vs frozen Unicorn, hook: {hook}"
+            );
         }
         let (dumps, hits) = run!(NativeEngine::new().unwrap(), LOOP, STOP, true);
         assert_eq!(

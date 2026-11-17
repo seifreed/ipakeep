@@ -1,17 +1,9 @@
 //! ARM64 emulator layer that runs the Apple SAP/ADI guest code.
 //!
-//! Two backends implement the same [`Engine`] API:
-//!
-//! - `native-cpu` (default, MIT): the native Rust A64 interpreter in `native`.
-//! - `unicorn` (deprecated, GPLv2): a port of ipatool's `internal/sap/unicorn`
-//!   engine wrapper (CPU model, memory, registers, bounded execution,
-//!   code/memory hooks, memory guard) and of `internal/sap/machine/arm64.go`
-//!   (software emulation of `CASAL`, `SWPAL` and `EOR3`) over the
-//!   `unicorn-engine` crate, compiled from source (needs cmake and libclang).
-//!   Kept as a legacy backend and as the oracle of the differential tests.
-//!
-//! `native-cpu` wins when both features are on; the Unicorn engine then stays
-//! reachable as `UnicornEngine`. Nothing is downloaded or loaded at runtime.
+//! [`Engine`] is ipakeep's own native Rust A64 interpreter (`native`): no C
+//! toolchain, no external engine, nothing downloaded or loaded at runtime. It
+//! is checked differentially against Unicorn results frozen as test fixtures
+//! (see `native/frozen.rs`) and end to end against golden Apple vectors.
 //!
 //! # Host-implemented functions (shims)
 //!
@@ -26,45 +18,16 @@ mod consts;
 mod error;
 mod register;
 
-// Deprecated Unicorn backend (GPLv2): compiled whenever `unicorn` is on. It is
-// the selected `Engine` only without `native-cpu`; with both features it stays
-// reachable as [`UnicornEngine`], the oracle of the native differential tests.
-#[cfg(feature = "unicorn")]
-mod arm64;
-#[cfg(feature = "unicorn")]
-mod engine;
-#[cfg(feature = "unicorn")]
-mod guard;
-#[cfg(feature = "unicorn")]
-mod hook;
-
-/// Backend-neutral A64 instruction classifier (decode-only, no execution).
-/// Foundation for the native interpreter and the opcode-histogram probe.
-#[cfg(any(test, feature = "native-cpu"))]
+/// A64 instruction classifier (decode-only, no execution). Foundation for the
+/// native interpreter and the opcode-histogram probe.
 pub(crate) mod decode;
-/// Native Rust A64 interpreter (permissively licensed replacement for Unicorn).
-#[cfg(any(test, feature = "native-cpu"))]
+/// Native Rust A64 interpreter.
 mod native;
 
 pub use consts::{INSTRUCTION_SIZE, RET_INSTRUCTION};
 pub use error::EmuError;
+pub use native::engine::{HookId, NativeEngine as Engine};
 pub use register::{
     ARGUMENT_REGISTER_COUNT, FRAME_POINTER_INDEX, LINK_REGISTER_INDEX, Register,
     VECTOR_REGISTER_COUNT,
 };
-
-// Backend selection — `native-cpu` takes priority when both features are on.
-/// The deprecated Unicorn engine under an explicit name, whichever backend is
-/// selected as [`Engine`].
-#[cfg(feature = "unicorn")]
-pub use engine::Engine as UnicornEngine;
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
-pub use engine::{Engine, UNLIMITED_INSTRUCTIONS, VECTOR_REGISTER_SIZE};
-#[cfg(all(feature = "unicorn", not(feature = "native-cpu")))]
-pub use hook::{ALL_ADDRESSES_BEGIN, ALL_ADDRESSES_END, HookId, MemoryAccess};
-#[cfg(feature = "native-cpu")]
-pub use native::engine::{HookId, NativeEngine as Engine};
-
-// Unicorn-backend tests: they exercise APIs only the Unicorn engine exposes.
-#[cfg(all(test, feature = "unicorn"))]
-mod tests;

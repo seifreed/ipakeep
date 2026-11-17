@@ -5,7 +5,7 @@ use std::rc::Rc;
 use super::super::{FAKE_HANDLE, FairPlayReply, HEAP_BASE, SHIM_AREA_SIZE, ShimConfig};
 use super::harness::{DATA, Guest};
 
-/// Size of the unicorn pages the tests unmap.
+/// Size of the guest pages the tests unmap.
 const UNMAP_SIZE: u64 = 0x4000;
 
 #[test]

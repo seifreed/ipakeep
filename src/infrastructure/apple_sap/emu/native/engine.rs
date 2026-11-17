@@ -1,5 +1,5 @@
-//! `NativeEngine` — the Engine-API surface over [`NativeCpu`], so the native
-//! interpreter is a drop-in for the Unicorn backend.
+//! `NativeEngine` — the Engine-API surface over [`NativeCpu`] that the machine
+//! layer drives (re-exported as `emu::Engine`).
 //!
 //! The load-bearing piece is the **code-hook model** the machine layer's shims
 //! rely on: one hook is registered over the shim area; when the guest reaches a
@@ -63,8 +63,7 @@ impl CodeHookEntry<'_> {
     }
 }
 
-/// A native ARM64 engine exposing the same surface the machine layer calls on
-/// the Unicorn `Engine`.
+/// The native ARM64 engine: the surface the machine layer calls (`emu::Engine`).
 pub struct NativeEngine<'a> {
     cpu: NativeCpu,
     /// Pre-decoded basic blocks (see [`super::block`]).

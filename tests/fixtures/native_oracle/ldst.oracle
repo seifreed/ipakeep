@@ -1,0 +1,78 @@
+# Frozen Unicorn oracle for native/ldst.rs; format: native/frozen.rs.
+# Recorded from unicorn-engine 2.1.5 by
+# cargo test --lib --all-features --locked -- --ignored --exact infrastructure::apple_sap::emu::native::frozen::freeze_native_oracle
+
+# infrastructure::apple_sap::emu::native::ldst::tests::byte_store_load_and_sign_extend
+39000001 39400002 39800003 39c00004 | x0=20000 x1=80 => pc=10010 x2=80 x3=ffffffffffffff80 x4=ffffff80
+
+# infrastructure::apple_sap::emu::native::ldst::tests::cas_mismatch_and_byte_halfword_doubleword_forms
+f9000001 88a27c03 08a57c06 48a77c08 c8e9fc0a f9400004 | x0=20000 x1=8877665544332211 x2=1234 x3=dead x5=11 x6=ab x7=9999 x8=cdef x9=42 x10=4343 => pc=10018 x2=44332211 x4=88776655443322ab x7=22ab x9=88776655443322ab
+
+# infrastructure::apple_sap::emu::native::ldst::tests::casal_word_leaves_rt_untouched
+f9000001 88effc0b f9400004 | x0=20000 x1=1111222200005d96 x11=a94ef x15=ffffffff00005d96 => pc=1000c x4=11112222000a94ef x15=5d96
+
+# infrastructure::apple_sap::emu::native::ldst::tests::exclusive_ldaxr_stlxr_roundtrip
+c85ffc02 c805fc01 f9400003 | x0=20000 x1=4343 => pc=1000c x3=4343
+
+# infrastructure::apple_sap::emu::native::ldst::tests::exclusive_ldxr_stxr_roundtrip
+c85f7c02 c8057c01 f9400003 | x0=20000 x1=4242 => pc=1000c x3=4242
+
+# infrastructure::apple_sap::emu::native::ldst::tests::halfword_store_load_and_sign_extend
+79000001 79400002 79800003 79c00004 | x0=20000 x1=8000 => pc=10010 x2=8000 x3=ffffffffffff8000 x4=ffff8000
+
+# infrastructure::apple_sap::emu::native::ldst::tests::ldrsw_sign_extends_word
+b9000001 b9800002 | x0=20000 x1=80000000 => pc=10008 x2=ffffffff80000000
+
+# infrastructure::apple_sap::emu::native::ldst::tests::load_literal_doubleword
+58000020 9100039c 9100037b | - => pc=1000c x0=9100037b9100039c
+
+# infrastructure::apple_sap::emu::native::ldst::tests::load_literal_signed_word
+98000020 9100039c | - => pc=10008 x0=ffffffff9100039c
+
+# infrastructure::apple_sap::emu::native::ldst::tests::load_literal_word
+18000020 9100039c | - => pc=10008 x0=9100039c
+
+# infrastructure::apple_sap::emu::native::ldst::tests::ordered_stlr_ldar_roundtrip
+c89ffc01 c8dffc02 | x0=20000 x1=4444 => pc=10008 x2=4444
+
+# infrastructure::apple_sap::emu::native::ldst::tests::post_indexed_writeback
+f8008401 f85f8002 | x0=20000 x1=beef => pc=10008 x0=20008 x2=beef
+
+# infrastructure::apple_sap::emu::native::ldst::tests::pre_indexed_writeback
+f8008c01 f9400002 | x0=20000 x1=cafe => pc=10008 x0=20008 x2=cafe
+
+# infrastructure::apple_sap::emu::native::ldst::tests::register_offset_lsl
+f8227801 f8627803 | x0=20000 x1=7777 x2=2 => pc=10008 x3=7777
+
+# infrastructure::apple_sap::emu::native::ldst::tests::register_offset_sxtw_negative_index
+f9000001 f862c8a3 | x0=20000 x1=5555 x2=fffffff8 x5=20008 => pc=10008 x3=5555
+
+# infrastructure::apple_sap::emu::native::ldst::tests::register_offset_uxtw_zero_extends_index
+f8224801 f8624803 | x0=20000 x1=9999 x2=ffffffff00000010 => pc=10008 x3=9999
+
+# infrastructure::apple_sap::emu::native::ldst::tests::store_load_pair_doubleword
+a9000801 a9401003 | x0=20000 x1=1111111111111111 x2=2222222222222222 => pc=10008 x3=1111111111111111 x4=2222222222222222
+
+# infrastructure::apple_sap::emu::native::ldst::tests::store_load_pair_post_indexed
+a8810801 a97f1003 | x0=20000 x1=c3 x2=d4 => pc=10008 x0=20010 x3=c3 x4=d4
+
+# infrastructure::apple_sap::emu::native::ldst::tests::store_load_pair_pre_indexed
+a9810801 a9401003 | x0=20000 x1=a1 x2=b2 => pc=10008 x0=20010 x3=a1 x4=b2
+
+# infrastructure::apple_sap::emu::native::ldst::tests::store_load_pair_word
+29000801 29401003 | x0=20000 x1=aaaabbbb x2=ccccdddd => pc=10008 x3=aaaabbbb x4=ccccdddd
+
+# infrastructure::apple_sap::emu::native::ldst::tests::str_ldr_doubleword_roundtrip
+f9000001 f9400002 | x0=20000 x1=deadbeefcafef00d => pc=10008 x2=deadbeefcafef00d
+
+# infrastructure::apple_sap::emu::native::ldst::tests::str_ldr_word_truncates_and_zero_extends
+b9000001 b9400002 | x0=20000 x1=1122334455667788 => pc=10008 x2=55667788
+
+# infrastructure::apple_sap::emu::native::ldst::tests::swpal_swaps_memory_and_register
+f9000001 f8e28003 f9400004 | x0=20000 x1=1000 x2=2000 => pc=1000c x3=1000 x4=2000
+
+# infrastructure::apple_sap::emu::native::ldst::tests::unscaled_ldur_stur
+f8005001 f8405002 | x0=20000 x1=123456789abcdef => pc=10008 x2=123456789abcdef
+
+# infrastructure::apple_sap::emu::native::ldst::tests::unsigned_scaled_offset
+f9000801 f9400802 | x0=20000 x1=aabbccddeeff0011 => pc=10008 x2=aabbccddeeff0011

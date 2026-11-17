@@ -4,23 +4,19 @@
 //!   scope must stop with the exact [`NativeError::Unsupported`] (native only).
 //! * `engine` / `cpu` — the `NativeEngine` run loop and `NativeCpu`/`Memory`
 //!   helpers (native only).
-//! * `diff_*` — executable encodings checked differentially against Unicorn.
+//! * `diff_*` — executable encodings checked differentially against the
+//!   (frozen) Unicorn oracle.
 
 use super::{NativeCpu, NativeError, Step};
 
 mod cpu;
 mod decode_oracle;
+mod diff_bugs;
+mod diff_int;
+mod diff_ldst;
+mod diff_simd;
 mod engine;
 mod unsupported;
-
-#[cfg(feature = "unicorn")]
-mod diff_bugs;
-#[cfg(feature = "unicorn")]
-mod diff_int;
-#[cfg(feature = "unicorn")]
-mod diff_ldst;
-#[cfg(feature = "unicorn")]
-mod diff_simd;
 
 /// Code base used for single-instruction native runs (same as the diff harness).
 const CODE: u64 = 0x1_0000;

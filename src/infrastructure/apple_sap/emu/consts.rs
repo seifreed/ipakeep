@@ -1,4 +1,4 @@
-//! Backend-neutral constants shared by the Unicorn and native engines.
+//! Constants of the engine API.
 
 /// Size in bytes of an ARM64 instruction and of a `ret` stub.
 pub const INSTRUCTION_SIZE: u64 = 4;
