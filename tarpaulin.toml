@@ -10,6 +10,16 @@ output-dir = "target/tarpaulin"
 # The engine must also be set here: tarpaulin traces each named table except
 # `[report]`, and its Linux default is Ptrace (see the note above).
 engine = "Llvm"
+# Rust 1.100 / tarpaulin 0.37.6: tarpaulin reports every line of an
+# `#[inline]` or generic function (including methods of a generic or
+# lifetime-generic `impl`) and counts lines with no LLVM region as misses, but
+# since Rust 1.100 LLVM gives no region to a binding match-arm pattern before a
+# block body (`Op::X { a } => {`), nor to some continuation lines of multi-line
+# chains (`.into_iter()`, `.collect())`, `.map(|x| Struct {`). In such
+# functions, start the arm's code on the pattern line (an expression body, or
+# a helper call), or move the chain into a small non-generic helper. Never
+# exclude these lines: they run, the tool just cannot see it. See `run_op` in
+# src/infrastructure/apple_sap/emu/native/predecode.rs.
 fail-under = 100
 workspace = true
 
