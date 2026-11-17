@@ -34,6 +34,7 @@ mod tests {
             launch: false,
             legacy_device: false,
             native_device: false,
+            bundle_id: None,
         };
 
         assert!(handle_install(&request).is_err());

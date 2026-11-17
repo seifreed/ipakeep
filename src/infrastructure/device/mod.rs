@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod native;
+mod rebrand;
 mod signing;
 
 /// Inputs for installing a decrypted IPA on a physical device.
@@ -22,6 +23,9 @@ pub struct InstallRequest<'a> {
     pub provisioning_profiles: &'a [PathBuf],
     /// Main-app entitlements override. Otherwise preserve the original capabilities.
     pub entitlements: Option<&'a Path>,
+    /// Reinstall under a new bundle id (app + extensions) instead of replacing
+    /// the installed copy. `None` keeps the IPA's own identifiers.
+    pub bundle_id: Option<&'a str>,
     /// Launch the app after installation.
     pub launch: bool,
     /// Use libimobiledevice for devices not supported by `devicectl` (iOS 16).
@@ -116,6 +120,9 @@ fn install_in_workdir_with(
 ) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
     let app = find_app_bundle(workdir)?;
+    if let Some(new_id) = request.bundle_id {
+        rebrand::rewrite_bundle_ids(&app, new_id)?;
+    }
     sign(&app, request, workdir)?;
     if request.native_device {
         native(&app, request.device)?;
@@ -184,6 +191,7 @@ mod tests {
             launch,
             legacy_device: false,
             native_device: false,
+            bundle_id: None,
         }
     }
 
@@ -265,6 +273,7 @@ mod tests {
         let ipa = dir.path().join("app.ipa");
         let request = InstallRequest {
             native_device: true,
+            bundle_id: None,
             ..install_request(&ipa, false)
         };
         let mut tools = Vec::new();
@@ -292,6 +301,7 @@ mod tests {
         fs::create_dir(&workdir).expect("work directory");
         let request = InstallRequest {
             native_device: true,
+            bundle_id: None,
             ..install_request(&ipa, false)
         };
         let mut installed = Vec::new();
@@ -459,6 +469,7 @@ mod tests {
             launch: false,
             legacy_device: false,
             native_device: false,
+            bundle_id: None,
         };
 
         assert!(
@@ -484,6 +495,7 @@ mod tests {
             launch: false,
             legacy_device: false,
             native_device: false,
+            bundle_id: None,
         };
         assert!(install_in_workdir(&request, &workdir).is_err());
 
@@ -521,6 +533,7 @@ mod tests {
             launch: false,
             legacy_device: false,
             native_device: false,
+            bundle_id: None,
         };
 
         assert!(install_ipa(&request).is_err());

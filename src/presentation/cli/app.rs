@@ -182,6 +182,12 @@ pub enum DeviceCommands {
         #[arg(long)]
         entitlements: Option<PathBuf>,
 
+        /// Reinstall under a new bundle id instead of replacing the installed
+        /// copy. Rewrites `CFBundleIdentifier` for the app and its extensions;
+        /// the matching --provisioning-profile must cover the new id.
+        #[arg(long, value_parser = parse_non_empty)]
+        bundle_id: Option<String>,
+
         /// Launch the app after installation.
         #[arg(long)]
         run: bool,

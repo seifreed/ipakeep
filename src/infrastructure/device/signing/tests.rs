@@ -354,6 +354,7 @@ fn test_request<'a>(
         launch: false,
         legacy_device: false,
         native_device: false,
+        bundle_id: None,
     }
 }
 
@@ -569,6 +570,7 @@ fn signs_nested_code_and_app_using_matching_profiles() {
         launch: false,
         legacy_device: false,
         native_device: false,
+        bundle_id: None,
     };
 
     sign_bundle_with_profiles(&app, &request, &profiles, dir.path(), &mut run_inherit).unwrap();
