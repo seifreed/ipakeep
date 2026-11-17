@@ -23,6 +23,7 @@ from ipakeep_dump import (
     extension_bundles,
     extension_process_names,
     is_extension_process,
+    launch_failure_event,
     launch_extensions,
     load_agent,
     main,
@@ -300,6 +301,15 @@ class AttachTargetTests(unittest.TestCase):
                     ),
                 )
             self.assertEqual(extension_bundles(str(ipa_path)), [("com.x.Notify", "Notify")])
+
+    def test_attach_failure_is_not_reported_as_a_spawn_failure(self):
+        event, hint = launch_failure_event(False)
+        self.assertEqual(event, "frida.attach.failed")
+        self.assertIn("foreground", hint)
+        self.assertIn("--spawn", hint)
+        event, hint = launch_failure_event(True)
+        self.assertEqual(event, "frida.spawn.failed")
+        self.assertIn("unlock", hint)
 
     def test_only_extensions_not_seen_running_are_launched(self):
         bundles = [("com.x.Notify", "Notify"), ("com.x.Widget", "Widget"), ("", "Nameless")]

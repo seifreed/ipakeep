@@ -405,6 +405,16 @@ def main() -> int:
     return status
 
 
+def launch_failure_event(spawned: bool) -> tuple[str, str]:
+    """Event name and hint for a NotSupportedError while spawning or attaching."""
+    if spawned:
+        return "frida.spawn.failed", "unlock the device and keep the screen on while dumping"
+    return (
+        "frida.attach.failed",
+        "unlock the device and bring the app to the foreground, or pass --spawn",
+    )
+
+
 def run_dump(args) -> int:
     try:
         bundles = extension_bundles(args.ipa)
@@ -435,10 +445,13 @@ def run_dump(args) -> int:
             kill_process(device, pid)
         return 2
     except frida.NotSupportedError as error:
-        # FrontBoard refuses to launch apps while the device is locked.
+        # FrontBoard refuses to launch apps while the device is locked, and a
+        # backgrounded (suspended) app cannot be resumed for attach either.
+        event, hint = launch_failure_event(args.spawn)
         LOGGER.error(
-            "service=ipakeep component=frida event_name=frida.spawn.failed hint=%r error=%r",
-            "unlock the device and keep the screen on while dumping",
+            "service=ipakeep component=frida event_name=%s hint=%r error=%r",
+            event,
+            hint,
             str(error),
         )
         if pid is not None:
