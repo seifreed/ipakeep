@@ -106,7 +106,12 @@ pub fn store_client<C: reqwest::cookie::CookieStore + 'static>(
         .cookie_provider(cookies)
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| AppStoreError::NetworkError(format!("build Store client: {error}")))
+        .map_err(network_error("build Store client"))
+}
+
+/// Maps a failed Store HTTP step, named by `context`, to a network error.
+fn network_error(context: &'static str) -> impl FnOnce(reqwest::Error) -> AppStoreError {
+    move |error| AppStoreError::NetworkError(format!("{context}: {error}"))
 }
 
 /// `GET {bag_url}?ix=6&guid=GUID` and parse the bag.
@@ -126,7 +131,7 @@ pub async fn fetch_bag(
         .header("User-Agent", STORE_USER_AGENT);
     let response = send_with_observability(client, request)
         .await
-        .map_err(|error| AppStoreError::NetworkError(format!("bag request failed: {error}")))?;
+        .map_err(network_error("bag request failed"))?;
     let status = response.status();
     if status != reqwest::StatusCode::OK {
         return Err(AppStoreError::NetworkError(format!(
@@ -136,7 +141,7 @@ pub async fn fetch_bag(
     }
     let body = read_response_bytes(response)
         .await
-        .map_err(|error| AppStoreError::NetworkError(format!("read bag: {error}")))?;
+        .map_err(network_error("read bag"))?;
     StoreBag::from_dictionary(&decode_store_plist(&body)?)
 }
 
@@ -426,11 +431,36 @@ fn find_ci(haystack: &[u8], needle: &[u8], last: bool) -> Option<usize> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use reqwest::cookie::Jar;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// URL that refuses connections (port 1 is never listening locally).
+    pub(in super::super) const CLOSED_PORT_URL: &str = "http://127.0.0.1:1";
+
+    /// Headers of an HTTP 200 that promise more body bytes than are sent.
+    const TRUNCATED_REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nabc";
+    const REQUEST_BUFFER_SIZE: usize = 64 * 1024;
+
+    /// Base URL of a local server that answers every request with a 200 whose
+    /// body is cut short, so reading the response body fails.
+    pub(in super::super) async fn truncated_body_server() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![0; REQUEST_BUFFER_SIZE];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(TRUNCATED_REPLY).await;
+            }
+        });
+        format!("http://{address}")
+    }
 
     const AUTH: &str = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate";
     const SETUP: &str = "https://fpinit.example.com/v1/signSapSetup/legacy";
@@ -494,6 +524,43 @@ mod tests {
             .await
             .expect_err("403");
         assert!(error.to_string().contains("unexpected status code: 403"));
+    }
+
+    #[tokio::test]
+    async fn reports_unreachable_and_truncated_bags() {
+        let client = store_client(Arc::new(Jar::default())).expect("client");
+        let refused = fetch_bag(&client, CLOSED_PORT_URL, "00")
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&refused, AppStoreError::NetworkError(m) if m.starts_with("bag request failed: ")),
+            "{refused}"
+        );
+        let truncated = fetch_bag(&client, &truncated_body_server().await, "00")
+            .await
+            .expect_err("truncated");
+        assert!(
+            matches!(&truncated, AppStoreError::NetworkError(m) if m.starts_with("read bag: ")),
+            "{truncated}"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_non_dictionary_plists() {
+        let malformed =
+            decode_store_plist(b"<dict><key>a</key><string>1</dict>").expect_err("malformed");
+        assert!(
+            matches!(&malformed, AppStoreError::Unexpected(m) if m.starts_with("malformed Store plist: ")),
+            "{malformed}"
+        );
+        let mut binary = Vec::new();
+        let array = plist::Value::Array(vec![plist::Value::from("text")]);
+        plist::to_writer_binary(&mut binary, &array).expect("binary plist");
+        let scalar = decode_store_plist(&binary).expect_err("not a dictionary");
+        assert!(
+            matches!(&scalar, AppStoreError::Unexpected(m) if m == "Store plist is not a dictionary"),
+            "{scalar}"
+        );
     }
 
     #[test]

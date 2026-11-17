@@ -298,6 +298,18 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_persist_to_a_path_without_a_parent() {
+        let entry = KbsyncCacheEntry {
+            dsid: 7,
+            guid: GUID.into(),
+            data: BLOB.into(),
+        };
+        let error = write_private_json(Path::new(""), &entry).expect_err("no parent");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "kbsync cache path has no parent");
+    }
+
+    #[test]
     fn lives_in_the_ipakeep_config_directory() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let cache = KbsyncCache::in_directory(Some(directory.path().to_path_buf())).expect("cache");

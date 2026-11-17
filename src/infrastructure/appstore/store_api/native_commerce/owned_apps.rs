@@ -666,6 +666,14 @@ mod tests {
         signed: &Arc<Mutex<Vec<Vec<u8>>>>,
         limit: u32,
     ) -> Result<Vec<OwnedApp>, AppStoreError> {
+        run_at(&server.uri(), signed, limit).await
+    }
+
+    async fn run_at(
+        base_url: &str,
+        signed: &Arc<Mutex<Vec<Vec<u8>>>>,
+        limit: u32,
+    ) -> Result<Vec<OwnedApp>, AppStoreError> {
         let client = crate::infrastructure::http::client_builder()
             .build()
             .expect("HTTP client");
@@ -676,7 +684,7 @@ mod tests {
         };
         let mut context = OwnedAppsContext {
             client: &client,
-            base_url: &server.uri(),
+            base_url,
             guid: GUID,
             sign: &mut sign,
             clock: clock(),
@@ -905,6 +913,23 @@ mod tests {
             .expect_err("500");
         assert!(
             matches!(error, AppStoreError::Unexpected(message) if message.ends_with("request returned HTTP 500"))
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_unreachable_and_truncated_daap_steps() {
+        let signed = Arc::new(Mutex::new(Vec::new()));
+        let closed = super::super::bag::tests::CLOSED_PORT_URL;
+        let refused = run_at(closed, &signed, 0).await.expect_err("refused");
+        assert!(
+            matches!(&refused, AppStoreError::NetworkError(m) if m.starts_with("purchase history login request failed: ")),
+            "{refused}"
+        );
+        let truncated = super::super::bag::tests::truncated_body_server().await;
+        let error = run_at(&truncated, &signed, 0).await.expect_err("truncated");
+        assert!(
+            matches!(&error, AppStoreError::NetworkError(m) if m.starts_with("read purchase history login response: ")),
+            "{error}"
         );
     }
 

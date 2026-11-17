@@ -415,10 +415,11 @@ fn find_event<'a>(
     name: &str,
     operation: &str,
 ) -> &'a serde_json::Value {
-    events
+    let found = events
         .iter()
-        .find(|event| event["event_name"] == name && event["span"]["operation"] == operation)
-        .unwrap_or_else(|| panic!("missing {name} for {operation}"))
+        .find(|event| event["event_name"] == name && event["span"]["operation"] == operation);
+    assert!(found.is_some(), "missing {name} for {operation}");
+    found.expect("presence asserted above")
 }
 
 fn assert_no_secrets(logs: &str) {

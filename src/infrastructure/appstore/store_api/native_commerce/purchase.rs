@@ -543,6 +543,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn reports_truncated_purchase_responses() {
+        let client = crate::infrastructure::http::client_builder()
+            .build()
+            .expect("HTTP client");
+        let url = super::super::bag::tests::truncated_body_server().await;
+        let context = PurchaseContext {
+            client: &client,
+            url: &url,
+            guid: GUID,
+        };
+        let result = purchase(&context, &account(), APP, || async { Ok(()) }).await;
+        assert!(
+            matches!(&result, Err(AppStoreError::NetworkError(m)) if m.starts_with("read purchase response: ")),
+            "{result:?}"
+        );
+    }
+
     #[test]
     fn reads_integer_and_string_statuses() {
         let status = |value: plist::Value| {

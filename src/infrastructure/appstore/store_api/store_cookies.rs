@@ -48,11 +48,16 @@ impl PersistentCookies {
         let mut encoded = Vec::new();
         {
             let store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-            cookie_store::serde::json::save_incl_expired_and_nonpersistent(&store, &mut encoded)
-                .map_err(|error| save_error(&error.to_string()))?;
+            encode_store(&store, &mut encoded)?;
         }
         write_private(&self.path, &encoded).map_err(|error| save_error(&error.to_string()))
     }
+}
+
+/// Serialize every cookie, expired and session ones included, as JSON.
+fn encode_store(store: &CookieStore, writer: &mut impl Write) -> Result<(), AppStoreError> {
+    cookie_store::serde::json::save_incl_expired_and_nonpersistent(store, writer)
+        .map_err(|error| save_error(&error.to_string()))
 }
 
 fn save_error(detail: &str) -> AppStoreError {
@@ -166,6 +171,28 @@ mod tests {
     fn set(cookies: &PersistentCookies, header: &str) {
         let value = HeaderValue::from_str(header).expect("header");
         cookies.set_cookies(&mut std::iter::once(&value), &apple_url());
+    }
+
+    /// Writer whose every write fails, as a full disk or closed pipe would.
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn reports_cookie_serialization_write_failures() {
+        let error = encode_store(&CookieStore::default(), &mut FailingWriter).expect_err("write");
+        assert!(
+            matches!(&error, AppStoreError::Unexpected(m) if m.starts_with("save Store cookies: ") && m.contains("disk full")),
+            "{error}"
+        );
     }
 
     #[test]

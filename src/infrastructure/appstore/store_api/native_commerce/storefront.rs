@@ -107,12 +107,11 @@ impl StorefrontResolver {
         &self,
         cache: &'a mut Option<HashMap<String, String>>,
     ) -> Result<&'a mut HashMap<String, String>, AppStoreError> {
-        if cache.is_none() {
-            *cache = Some(self.fetch_available().await?);
-        }
-        cache
-            .as_mut()
-            .ok_or_else(|| AppStoreError::Unexpected("storefront table is unavailable".into()))
+        let codes = match cache.take() {
+            Some(codes) => codes,
+            None => self.fetch_available().await?,
+        };
+        Ok(cache.insert(codes))
     }
 
     async fn fetch_available(&self) -> Result<HashMap<String, String>, AppStoreError> {
@@ -541,6 +540,75 @@ pub(super) mod tests {
             resolver.country_code("143441").await,
             Err(AppStoreError::NetworkError(m)) if m.starts_with("available storefronts request failed:")
         ));
+    }
+
+    #[tokio::test]
+    async fn reports_truncated_available_tables() {
+        let base = super::super::bag::tests::truncated_body_server().await;
+        let resolver = StorefrontResolver::with_urls(
+            reqwest::Client::new(),
+            &format!("{base}/available"),
+            &format!("{base}/genre"),
+        );
+        let error = resolver
+            .country_code("143441")
+            .await
+            .expect_err("truncated");
+        assert!(
+            matches!(&error, AppStoreError::NetworkError(m) if m.starts_with("read available storefronts: ")),
+            "{error}"
+        );
+    }
+
+    fn resolver_with_genre(server: &MockServer, genre_url: &str) -> StorefrontResolver {
+        StorefrontResolver::with_urls(
+            reqwest::Client::new(),
+            &format!("{}{AVAILABLE_PATH}", server.uri()),
+            genre_url,
+        )
+    }
+
+    #[tokio::test]
+    async fn reports_unreachable_and_truncated_genre_pages() {
+        let server = MockServer::start().await;
+        mount_available(&server, &[(143_441, "US")]).await;
+        let closed = format!("{}/genre", super::super::bag::tests::CLOSED_PORT_URL);
+        let refused = resolver_with_genre(&server, &closed)
+            .country_code("143442")
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&refused, AppStoreError::NetworkError(m) if m.starts_with("storefront country code request failed: ")),
+            "{refused}"
+        );
+        let truncated = super::super::bag::tests::truncated_body_server().await;
+        let error = resolver_with_genre(&server, &truncated)
+            .country_code("143442")
+            .await
+            .expect_err("truncated");
+        assert!(
+            matches!(&error, AppStoreError::NetworkError(m) if m.starts_with("read storefront country code: ")),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_the_cached_table_after_a_lookup() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(AVAILABLE_PATH))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(available_plist(&[(143_441, "US")])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let resolver = resolver(&server);
+        assert_eq!(resolver.country_code("143441").await.expect("first"), "US");
+        assert_eq!(
+            resolver.storefront_id("us").await.expect("cached"),
+            "143441"
+        );
     }
 
     #[tokio::test]

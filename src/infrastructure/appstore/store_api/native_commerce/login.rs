@@ -105,21 +105,20 @@ where
     let mut provision = Some(provision_store);
     let mut reset_done = false;
     loop {
-        match sign_in(context, credentials).await {
-            Err(LoginFailure::MachineAction { action, data }) => {
-                log_machine_action(&action);
-                let store_provisioning = action == ACTION_STORE_PROVISIONING;
-                if action == ACTION_RESET_PROVISIONING && !reset_done {
-                    reset_done = true;
-                    strip_machine_identity(&mut context.machine_headers);
-                } else if let Some(provision) = provision.take_if(|_| store_provisioning) {
-                    context.machine_headers = provision(data).await?;
-                } else {
-                    return Err(machine_action_error(&action));
-                }
-            }
+        let (action, data) = match sign_in(context, credentials).await {
+            Err(LoginFailure::MachineAction { action, data }) => (action, data),
             Err(LoginFailure::Store(error)) => return Err(error),
             Ok(account) => return Ok(account),
+        };
+        log_machine_action(&action);
+        let store_provisioning = action == ACTION_STORE_PROVISIONING;
+        if action == ACTION_RESET_PROVISIONING && !reset_done {
+            reset_done = true;
+            strip_machine_identity(&mut context.machine_headers);
+        } else if let Some(provision) = provision.take_if(|_| store_provisioning) {
+            context.machine_headers = provision(data).await?;
+        } else {
+            return Err(machine_action_error(&action));
         }
     }
 }

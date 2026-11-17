@@ -95,6 +95,17 @@ enum VersionLookupError {
     Failed(AppStoreError),
 }
 
+impl VersionLookupError {
+    /// The same kind of error, reported as the failed iOS catalog fallback of
+    /// the lookup described by `context`.
+    fn after_fallback(self, context: &str) -> Self {
+        match self {
+            Self::CatalogNotFound(error) => Self::CatalogNotFound(lookup_error(context, &error)),
+            Self::Failed(error) => Self::Failed(lookup_error(context, &error)),
+        }
+    }
+}
+
 /// Request identity shared by every step of one download.
 struct Ticket<'a> {
     account: &'a Account,
@@ -208,13 +219,7 @@ where
             .catalog_version(account, app_id)
             .await
             .unwrap_or_default();
-        Ok(identifiers
-            .into_iter()
-            .map(|external_version_id| AppVersion {
-                external_version_id,
-                version_string: label.clone(),
-            })
-            .collect())
+        Ok(labelled_versions(identifiers, &label))
     }
 
     async fn send_download_product(&self, ticket: &Ticket<'_>, version: Option<String>) -> Attempt {
@@ -424,21 +429,8 @@ where
                 "store AMD proof endpoint is not allowlisted".into(),
             ));
         }
-        let (amd, machine_id) = (self.amd)()?;
-        let dsid = account.directory_services_id.clone();
-        Ok([
-            ("Content-Type", content_type.to_string()),
-            ("User-Agent", STORE_USER_AGENT.to_string()),
-            ("iCloud-DSID", dsid.clone()),
-            ("X-Apple-Store-Front", account.store_front.clone()),
-            ("X-Dsid", dsid),
-            ("X-Token", account.password_token.clone()),
-            ("X-Apple-AMD", amd),
-            ("X-Apple-AMD-M", machine_id),
-        ]
-        .into_iter()
-        .chain(AMS_SESSION_HEADERS.map(|(name, value)| (name, value.to_string())))
-        .collect())
+        let amd = (self.amd)()?;
+        Ok(commerce_header_list(account, content_type, amd))
     }
 
     async fn latest_version_id(&self, ticket: &Ticket<'_>) -> Result<String, VersionLookupError> {
@@ -457,15 +449,9 @@ where
         }
         let missing = last_error.map_or_default(|error| error.to_string());
         let context = format!("app {} in storefront {country}: {missing}", ticket.app_id);
-        match self.ios_catalog_lookup(ticket.app_id, &country).await {
-            Ok(version) => Ok(version),
-            Err(VersionLookupError::CatalogNotFound(error)) => Err(
-                VersionLookupError::CatalogNotFound(lookup_error(&context, &error)),
-            ),
-            Err(VersionLookupError::Failed(error)) => {
-                Err(VersionLookupError::Failed(lookup_error(&context, &error)))
-            }
-        }
+        self.ios_catalog_lookup(ticket.app_id, &country)
+            .await
+            .map_err(|error| error.after_fallback(&context))
     }
 
     /// `Ok(Err(_))` means this catalog lacks the app; try the next one.
@@ -848,6 +834,40 @@ fn ent_body(ticket: &Ticket<'_>, version: Option<&str>, blob: &str) -> plist::Di
         fields.insert(VERSION_KEY_VOLUME_STORE, plist::Value::from(version));
     }
     sorted_dictionary(fields)
+}
+
+/// One [`AppVersion`] per external identifier, all labelled `label`.
+fn labelled_versions(identifiers: Vec<String>, label: &str) -> Vec<AppVersion> {
+    identifiers
+        .into_iter()
+        .map(|external_version_id| AppVersion {
+            external_version_id,
+            version_string: label.to_string(),
+        })
+        .collect()
+}
+
+/// Headers of a commerce request for `account`, carrying the AMD proof
+/// `(amd, machine_id)`.
+fn commerce_header_list(
+    account: &Account,
+    content_type: &str,
+    (amd, machine_id): (String, String),
+) -> Vec<(&'static str, String)> {
+    let dsid = account.directory_services_id.clone();
+    [
+        ("Content-Type", content_type.to_string()),
+        ("User-Agent", STORE_USER_AGENT.to_string()),
+        ("iCloud-DSID", dsid.clone()),
+        ("X-Apple-Store-Front", account.store_front.clone()),
+        ("X-Dsid", dsid),
+        ("X-Token", account.password_token.clone()),
+        ("X-Apple-AMD", amd),
+        ("X-Apple-AMD-M", machine_id),
+    ]
+    .into_iter()
+    .chain(AMS_SESSION_HEADERS.map(|(name, value)| (name, value.to_string())))
+    .collect()
 }
 
 fn sorted_dictionary(fields: BTreeMap<&str, plist::Value>) -> plist::Dictionary {
@@ -2062,6 +2082,116 @@ mod tests {
         assert!(
             matches!(error, AppStoreError::NetworkError(m) if m.starts_with("send Store commerce request:"))
         );
+    }
+
+    /// An HTTP 200 head promising a longer body than is sent before the
+    /// connection closes.
+    const TRUNCATED_REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\n{}";
+
+    /// The origin of a local server answering every request with `reply`.
+    async fn raw_origin(reply: &'static [u8]) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = vec![0; 64 * 1024];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(reply).await;
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn reports_items_without_a_package_url() {
+        let harness = Harness::new(false).await;
+        harness.mount(VOLUME_STORE_PATH, item_without_url()).await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::DownloadFailed(m) if m == "download item has no URL"
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_an_invalid_redownload_endpoint() {
+        let mut harness = Harness::new(false).await;
+        harness.bag.redownload_product = Some("https://evil.example/r/redownload".into());
+        harness.mount(VOLUME_STORE_PATH, plist_body("")).await;
+        assert!(matches!(
+            download_error(&harness, Some(VERSION)).await,
+            AppStoreError::Unexpected(m) if m == "invalid download endpoint in bag"
+        ));
+    }
+
+    #[tokio::test]
+    async fn version_listing_reports_unreachable_stores() {
+        let harness = Harness::new(false).await;
+        let error = harness
+            .downloader()
+            .with_origin("http://127.0.0.1:1".into())
+            .list_versions(&account(), APP_ID, GUID)
+            .await
+            .expect_err("unreachable");
+        assert!(
+            matches!(&error, AppStoreError::NetworkError(m) if m.starts_with("send Store commerce request:")),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_truncated_commerce_responses() {
+        let harness = Harness::new(false).await;
+        let error = harness
+            .downloader()
+            .with_origin(raw_origin(TRUNCATED_REPLY).await)
+            .download(&account(), APP_ID, GUID, Some(VERSION))
+            .await
+            .expect_err("truncated");
+        assert!(
+            matches!(&error, AppStoreError::NetworkError(m) if m.starts_with("read Store commerce response:")),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_lookups_report_unreachable_and_truncated_responses() {
+        let harness = Harness::new(false).await;
+        let lookup = itunes_lookup_url(APP_ID, "us");
+        let unreachable = harness
+            .downloader()
+            .with_origin("http://127.0.0.1:1".into())
+            .get_json(&lookup)
+            .await;
+        assert!(
+            matches!(&unreachable, Err(AppStoreError::NetworkError(m)) if m.starts_with("Store lookup request failed:")),
+            "{unreachable:?}"
+        );
+        let truncated = harness
+            .downloader()
+            .with_origin(raw_origin(TRUNCATED_REPLY).await)
+            .get_json(&lookup)
+            .await;
+        assert!(
+            matches!(&truncated, Err(AppStoreError::NetworkError(m)) if m.starts_with("read Store lookup response:")),
+            "{truncated:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_store_plists_that_cannot_be_re_encoded_as_xml() {
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert("archived".into(), plist::Value::Uid(plist::Uid::new(1)));
+        let mut binary = Vec::new();
+        plist::Value::Dictionary(dictionary)
+            .to_writer_binary(&mut binary)
+            .expect("binary plist");
+        assert!(matches!(
+            decode_body(&binary),
+            Err(AppStoreError::Unexpected(m)) if m.starts_with("re-encode Store plist:")
+        ));
     }
 
     #[tokio::test]
