@@ -29,19 +29,18 @@ if ! command -v zip >/dev/null 2>&1; then
     exit 5
 fi
 
-# Locate the installed .app whose Info.plist CFBundleIdentifier matches.
-read_bundle_id() {
-    plist="$1/Info.plist"
-    [ -f "$plist" ] || return 1
-    plutil -extract CFBundleIdentifier raw -o - "$plist" 2>/dev/null && return 0
-    plutil -p "$plist" 2>/dev/null |
-        sed -n 's/.*"CFBundleIdentifier"[^"]*"\([^"]*\)".*/\1/p'
-}
-
+# Locate the installed .app declaring this bundle id. Match by scanning the
+# Info.plist for the id itself: this works for both XML and binary plists and
+# needs no plutil. The rootless-jailbreak `plutil` package is a minimal clone
+# that lacks Apple's -extract/-p, so parsing the key out is not portable; the
+# id is the argument we already know, so a literal match is enough.
+# ponytail: a reverse-DNS id is effectively unique across distinct apps, and
+# extensions are *.appex nested inside the .app (never matched here), so the
+# first *.app whose plist contains the id is the right bundle.
 app="$(
     find /var/containers/Bundle/Application -maxdepth 3 -name '*.app' 2>/dev/null |
         while IFS= read -r candidate; do
-            if [ "$(read_bundle_id "$candidate")" = "$bundle_id" ]; then
+            if grep -qaF "$bundle_id" "$candidate/Info.plist" 2>/dev/null; then
                 printf '%s\n' "$candidate"
                 break
             fi
