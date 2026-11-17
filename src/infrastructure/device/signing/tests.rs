@@ -353,6 +353,7 @@ fn test_request<'a>(
         entitlements,
         launch: false,
         legacy_device: false,
+        native_device: false,
     }
 }
 
@@ -567,6 +568,7 @@ fn signs_nested_code_and_app_using_matching_profiles() {
         entitlements: None,
         launch: false,
         legacy_device: false,
+        native_device: false,
     };
 
     sign_bundle_with_profiles(&app, &request, &profiles, dir.path(), &mut run_inherit).unwrap();

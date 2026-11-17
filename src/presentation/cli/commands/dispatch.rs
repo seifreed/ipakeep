@@ -204,6 +204,7 @@ fn dispatch_device(action: DeviceCommands) -> Result<(), String> {
             entitlements,
             run,
             legacy_device,
+            native,
         } => handlers::device::handle_install(&InstallRequest {
             ipa: &ipa,
             device: &device_id,
@@ -212,6 +213,7 @@ fn dispatch_device(action: DeviceCommands) -> Result<(), String> {
             entitlements: entitlements.as_deref(),
             launch: run,
             legacy_device,
+            native_device: native,
         }),
     }
 }
@@ -804,6 +806,7 @@ mod tests {
                 entitlements: None,
                 run: false,
                 legacy_device: true,
+                native: false,
             },
         });
         assert!(

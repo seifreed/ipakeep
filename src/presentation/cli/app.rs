@@ -189,6 +189,13 @@ pub enum DeviceCommands {
         /// Use libimobiledevice for iOS 16; --device must be a USB UDID.
         #[arg(long)]
         legacy_device: bool,
+
+        /// EXPERIMENTAL: install in-process over usbmuxd/lockdownd/AFC/
+        /// `installation_proxy`, without Xcode or libimobiledevice. --device
+        /// must be the UDID of a paired (trusted) device; --run is not
+        /// supported. Signing still uses /usr/bin/codesign.
+        #[arg(long, conflicts_with_all = ["legacy_device", "run"])]
+        native: bool,
     },
 }
 

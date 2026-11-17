@@ -439,3 +439,44 @@ fn decrypt_dump_mac_requires_ipa() {
         } if bundle_id == "com.example.App"
     ));
 }
+
+#[test]
+fn device_install_native_is_opt_in_and_excludes_legacy_and_run() {
+    let base = [
+        "ipakeep",
+        "device",
+        "install-ipa",
+        "/tmp/app.ipa",
+        "--device",
+        "UDID-1",
+        "--identity",
+        "Apple Development: Test",
+        "--provisioning-profile",
+        "/tmp/app.mobileprovision",
+    ];
+    let default = Cli::try_parse_from(base).expect("default install should parse");
+    assert!(matches!(
+        default.command,
+        Commands::Device {
+            action: DeviceCommands::InstallIpa { native: false, .. }
+        }
+    ));
+    let native = Cli::try_parse_from(base.iter().copied().chain(["--native"]))
+        .expect("native install should parse");
+    assert!(matches!(
+        native.command,
+        Commands::Device {
+            action: DeviceCommands::InstallIpa {
+                native: true,
+                legacy_device: false,
+                ..
+            }
+        }
+    ));
+    for extra in ["--legacy-device", "--run"] {
+        assert!(
+            Cli::try_parse_from(base.iter().copied().chain(["--native", extra])).is_err(),
+            "--native {extra} must be rejected"
+        );
+    }
+}

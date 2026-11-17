@@ -33,6 +33,7 @@ mod tests {
             entitlements: None,
             launch: false,
             legacy_device: false,
+            native_device: false,
         };
 
         assert!(handle_install(&request).is_err());

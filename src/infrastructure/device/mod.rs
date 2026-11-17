@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod native;
 mod signing;
 
 /// Inputs for installing a decrypted IPA on a physical device.
@@ -25,6 +26,9 @@ pub struct InstallRequest<'a> {
     pub launch: bool,
     /// Use libimobiledevice for devices not supported by `devicectl` (iOS 16).
     pub legacy_device: bool,
+    /// EXPERIMENTAL: install in-process over usbmuxd, lockdownd, AFC and `installation_proxy`.
+    /// `device` must be the UDID; launching is not supported on this path.
+    pub native_device: bool,
 }
 
 /// Re-sign and install a decrypted IPA through the selected device tools.
@@ -62,6 +66,17 @@ fn require_install_tools(
     request: &InstallRequest<'_>,
     mut require: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<(), String> {
+    if request.native_device {
+        return if request.launch {
+            Err(
+                "--run is not supported with the experimental --native install yet; \
+                 launch the app from the device"
+                    .to_string(),
+            )
+        } else {
+            Ok(())
+        };
+    }
     require(if request.legacy_device {
         "ideviceinstaller"
     } else {
@@ -74,7 +89,23 @@ fn require_install_tools(
 }
 
 fn install_in_workdir(request: &InstallRequest<'_>, workdir: &Path) -> Result<(), String> {
-    install_in_workdir_with(request, workdir, signing::sign_bundle, run_inherit)
+    install_in_workdir_with(
+        request,
+        workdir,
+        signing::sign_bundle,
+        run_inherit,
+        native_install,
+    )
+}
+
+/// Install through the in-process usbmuxd/lockdownd stack (`--native`).
+fn native_install(app: &Path, device: &str) -> Result<(), String> {
+    native::install_app(
+        &native::Address::from_env(),
+        device,
+        app,
+        &mut native::print_progress,
+    )
 }
 
 fn install_in_workdir_with(
@@ -82,11 +113,16 @@ fn install_in_workdir_with(
     workdir: &Path,
     sign: impl FnOnce(&Path, &InstallRequest<'_>, &Path) -> Result<(), String>,
     mut run: impl FnMut(Command) -> Result<(), String>,
+    native: impl FnOnce(&Path, &str) -> Result<(), String>,
 ) -> Result<(), String> {
     extract_ipa(request.ipa, workdir)?;
     let app = find_app_bundle(workdir)?;
     sign(&app, request, workdir)?;
-    run(install_command(&app, request.device, request.legacy_device))?;
+    if request.native_device {
+        native(&app, request.device)?;
+    } else {
+        run(install_command(&app, request.device, request.legacy_device))?;
+    }
     if request.launch {
         run(launch_command(
             &bundle_identifier(&app)?,
@@ -146,6 +182,7 @@ mod tests {
             entitlements: None,
             launch,
             legacy_device: false,
+            native_device: false,
         }
     }
 
@@ -211,12 +248,82 @@ mod tests {
                 ));
                 Ok(())
             },
+            native_install,
         )
         .expect("install flow");
 
         assert_eq!(commands.len(), 2);
         assert!(commands[0].1.contains(&"device-id".into()));
         assert!(commands[1].1.contains(&"com.example.app".into()));
+    }
+
+    #[test]
+    fn native_install_needs_no_external_tools_and_rejects_launch() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let ipa = dir.path().join("app.ipa");
+        let request = InstallRequest {
+            native_device: true,
+            ..install_request(&ipa, false)
+        };
+        let mut tools = Vec::new();
+        require_install_tools(&request, |tool| {
+            tools.push(tool.to_string());
+            Ok(())
+        })
+        .expect("no tools needed");
+        assert_eq!(tools, Vec::<String>::new());
+
+        let launch = InstallRequest {
+            launch: true,
+            ..request
+        };
+        let error = require_install_tools(&launch, |_| Ok(())).unwrap_err();
+        assert!(error.contains("--run is not supported"), "{error}");
+    }
+
+    #[test]
+    fn workdir_native_install_uploads_the_signed_app_without_device_commands() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let ipa = dir.path().join("app.ipa");
+        fs::write(&ipa, app_ipa()).expect("write IPA");
+        let workdir = dir.path().join("work");
+        fs::create_dir(&workdir).expect("work directory");
+        let request = InstallRequest {
+            native_device: true,
+            ..install_request(&ipa, false)
+        };
+        let mut installed = Vec::new();
+
+        install_in_workdir_with(
+            &request,
+            &workdir,
+            |_, _, _| Ok(()),
+            |command| Err(format!("unexpected command {command:?}")),
+            |app, device| {
+                installed.push((app.join("Info.plist").is_file(), device.to_string()));
+                Ok(())
+            },
+        )
+        .expect("native install flow");
+
+        assert_eq!(installed, [(true, "device-id".to_string())]);
+        assert!(
+            install_in_workdir_with(
+                &request,
+                &workdir,
+                |_, _, _| Ok(()),
+                |_| Ok(()),
+                |_, _| Err("device gone".to_string()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn native_install_reports_unknown_devices() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        // Whatever usbmuxd this host has (or none), this UDID is never attached.
+        assert!(native_install(dir.path(), "ipakeep-test-no-such-udid").is_err());
     }
 
     #[test]
@@ -325,6 +432,7 @@ mod tests {
             entitlements: None,
             launch: false,
             legacy_device: false,
+            native_device: false,
         };
 
         assert!(
@@ -349,6 +457,7 @@ mod tests {
             entitlements: None,
             launch: false,
             legacy_device: false,
+            native_device: false,
         };
         assert!(install_in_workdir(&request, &workdir).is_err());
 
@@ -385,6 +494,7 @@ mod tests {
             entitlements: None,
             launch: false,
             legacy_device: false,
+            native_device: false,
         };
 
         assert!(install_ipa(&request).is_err());
