@@ -198,6 +198,18 @@ fn run_builtin_with(
         (Some(ipa), _) => (python_with_frida()?, ipa.to_path_buf()),
         (None, DumpDevice::Usb) => {
             let python = python_with_frida()?;
+            if req.spawn {
+                // ponytail: warn, don't reorder. Pulling the installed bundle takes
+                // ~60 s, long enough for the iPhone to auto-lock; the later --spawn
+                // then fails with "device was not, or could not be, unlocked".
+                // Launch-before-pull would fix it but needs a device to validate.
+                eprintln!(
+                    "ipakeep: pulling the installed app can take ~60 s. Disable Auto-Lock \
+                     (Settings > Display & Brightness > Auto-Lock > Never) and keep the \
+                     iPhone unlocked, or --spawn may fail with \"device was not, or could \
+                     not be, unlocked\"."
+                );
+            }
             let ipa = pull_installed_bundle(&python, req.bundle_id, work)?;
             (python, ipa)
         }
