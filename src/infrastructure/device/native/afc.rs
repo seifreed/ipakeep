@@ -288,16 +288,19 @@ mod tests {
     }
 
     /// A device stream that accepts writes and replays canned replies.
+    #[cfg(unix)]
     struct ScriptedStream {
         replies: Cursor<Vec<u8>>,
     }
 
+    #[cfg(unix)]
     impl Read for ScriptedStream {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             self.replies.read(buffer)
         }
     }
 
+    #[cfg(unix)]
     impl Write for ScriptedStream {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             Ok(bytes.len())
